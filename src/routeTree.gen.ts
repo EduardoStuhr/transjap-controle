@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as RelatoriosRouteImport } from './routes/relatorios'
 import { Route as PerfilRouteImport } from './routes/perfil'
 import { Route as ManutencaoRouteImport } from './routes/manutencao'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as EstoqueRouteImport } from './routes/estoque'
 import { Route as EquipamentosRouteImport } from './routes/equipamentos'
 import { Route as AgendaRouteImport } from './routes/agenda'
@@ -30,6 +31,11 @@ const PerfilRoute = PerfilRouteImport.update({
 const ManutencaoRoute = ManutencaoRouteImport.update({
   id: '/manutencao',
   path: '/manutencao',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EstoqueRoute = EstoqueRouteImport.update({
@@ -58,6 +64,7 @@ export interface FileRoutesByFullPath {
   '/agenda': typeof AgendaRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
   '/relatorios': typeof RelatoriosRoute
@@ -67,6 +74,7 @@ export interface FileRoutesByTo {
   '/agenda': typeof AgendaRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
   '/relatorios': typeof RelatoriosRoute
@@ -77,6 +85,7 @@ export interface FileRoutesById {
   '/agenda': typeof AgendaRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
   '/relatorios': typeof RelatoriosRoute
@@ -88,6 +97,7 @@ export interface FileRouteTypes {
     | '/agenda'
     | '/equipamentos'
     | '/estoque'
+    | '/login'
     | '/manutencao'
     | '/perfil'
     | '/relatorios'
@@ -97,6 +107,7 @@ export interface FileRouteTypes {
     | '/agenda'
     | '/equipamentos'
     | '/estoque'
+    | '/login'
     | '/manutencao'
     | '/perfil'
     | '/relatorios'
@@ -106,6 +117,7 @@ export interface FileRouteTypes {
     | '/agenda'
     | '/equipamentos'
     | '/estoque'
+    | '/login'
     | '/manutencao'
     | '/perfil'
     | '/relatorios'
@@ -116,6 +128,7 @@ export interface RootRouteChildren {
   AgendaRoute: typeof AgendaRoute
   EquipamentosRoute: typeof EquipamentosRoute
   EstoqueRoute: typeof EstoqueRoute
+  LoginRoute: typeof LoginRoute
   ManutencaoRoute: typeof ManutencaoRoute
   PerfilRoute: typeof PerfilRoute
   RelatoriosRoute: typeof RelatoriosRoute
@@ -142,6 +155,13 @@ declare module '@tanstack/react-router' {
       path: '/manutencao'
       fullPath: '/manutencao'
       preLoaderRoute: typeof ManutencaoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/estoque': {
@@ -180,6 +200,7 @@ const rootRouteChildren: RootRouteChildren = {
   AgendaRoute: AgendaRoute,
   EquipamentosRoute: EquipamentosRoute,
   EstoqueRoute: EstoqueRoute,
+  LoginRoute: LoginRoute,
   ManutencaoRoute: ManutencaoRoute,
   PerfilRoute: PerfilRoute,
   RelatoriosRoute: RelatoriosRoute,

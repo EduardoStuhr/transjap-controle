@@ -1,15 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useEffect, type ReactNode } from "react";
 import {
   Outlet,
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
+  useNavigate,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
 
 import appCss from "../styles.css?url";
+import { LoginPanel } from "@/components/LoginPanel";
 import { Toaster } from "@/components/ui/sonner";
+import { useAuthStore } from "@/lib/auth-store";
 
 function NotFoundComponent() {
   return (
@@ -73,8 +78,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#ffd700" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-title", content: "TransJap" },
       { title: "TransJap Manager — Sistema Operacional" },
-      { name: "description", content: "Sistema operacional e controle de manutenção da frota TransJap." },
+      {
+        name: "description",
+        content: "Sistema operacional e controle de manutenção da frota TransJap.",
+      },
       { name: "author", content: "TransJap" },
       { property: "og:title", content: "TransJap Manager" },
       { property: "og:description", content: "Sistema operacional e controle de manutenção." },
@@ -86,8 +97,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "stylesheet", href: appCss },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+      },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap",
+      },
+      { rel: "manifest", href: "/manifest.webmanifest" },
+      { rel: "icon", href: "/pwa-icon.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/pwa-icon.svg" },
     ],
   }),
   shellComponent: RootShell,
@@ -113,10 +133,45 @@ function RootShell({ children }: { children: React.ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || import.meta.env.DEV) return;
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
-      <Outlet />
+      <AuthGate>
+        <Outlet />
+      </AuthGate>
       <Toaster position="top-right" theme="dark" richColors />
     </QueryClientProvider>
   );
+}
+
+function AuthGate({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const user = useAuthStore((state) => state.user);
+  const isLogin = pathname === "/login";
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!user && !isLogin) {
+      navigate({ to: "/login", search: { redirect: pathname } });
+    }
+    if (user && isLogin) {
+      navigate({ to: "/" });
+    }
+  }, [hydrated, isLogin, navigate, pathname, user]);
+
+  if (!hydrated && !isLogin) {
+    return <LoginPanel onSuccess={() => navigate({ to: pathname || "/" })} />;
+  }
+
+  if (!user && !isLogin) {
+    return <LoginPanel onSuccess={() => navigate({ to: pathname || "/" })} />;
+  }
+
+  return children;
 }

@@ -1,0 +1,33 @@
+{
+  "name": "TransJap Fleet Command",
+  "short_name": "TransJap",
+  "description": "Gestão operacional, manutenção e estoque inteligente.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#10110f",
+  "theme_color": "#ffd700",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Estoque",
+      "short_name": "Estoque",
+      "url": "/estoque",
+      "icons": [{ "src": "/pwa-icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Manutenção",
+      "short_name": "Manutenção",
+      "url": "/manutencao",
+      "icons": [{ "src": "/pwa-icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ]
+}

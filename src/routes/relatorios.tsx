@@ -5,10 +5,22 @@ import { AppLayout, Icon } from "@/components/AppLayout";
 export const Route = createFileRoute("/relatorios")({ component: Relatorios });
 
 const REPORTS = [
-  { title: "Desempenho Operacional", desc: "Horas de operação x parada por equipamento.", icon: "monitoring" },
-  { title: "Manutenções por Tipo", desc: "Distribuição entre preventivas e corretivas.", icon: "donut_small" },
+  {
+    title: "Desempenho Operacional",
+    desc: "Horas de operação x parada por equipamento.",
+    icon: "monitoring",
+  },
+  {
+    title: "Manutenções por Tipo",
+    desc: "Distribuição entre preventivas e corretivas.",
+    icon: "donut_small",
+  },
   { title: "Consumo de Peças", desc: "Peças mais utilizadas no almoxarifado.", icon: "inventory" },
-  { title: "Tarefas por Responsável", desc: "Produtividade da equipe por período.", icon: "groups" },
+  {
+    title: "Tarefas por Responsável",
+    desc: "Produtividade da equipe por período.",
+    icon: "groups",
+  },
 ];
 
 function Relatorios() {

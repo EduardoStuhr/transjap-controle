@@ -4,87 +4,37 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/AppLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AttachedFile } from "@/components/AttachmentUpload";
-
-export interface TaskDetail {
-  id: string;
-  title: string;
-  description: string;
-  sector: string;
-  priority: string;
-  assignedTo: string;
-  deadline: string;
-  equipment: string;
-  status: string;
-  createdAt: string;
-  attachments?: AttachedFile[];
-  comments?: TaskComment[];
-  timeline?: TimelineEvent[];
-}
-
-export interface TaskComment {
-  id: string;
-  author: string;
-  text: string;
-  timestamp: string;
-  avatar?: string;
-}
-
-export interface TimelineEvent {
-  timestamp: string;
-  action: string;
-  actor: string;
-  status?: string;
-}
+import { TASK_STATUS_CONFIG, type TaskRecord } from "@/lib/task-types";
 
 interface TaskDetailsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  task: TaskDetail | null;
+  task: TaskRecord | null;
+  onAddComment: (taskId: string, comment: { author: string; text: string }) => void;
+  onEdit: (task: TaskRecord) => void;
 }
 
-const STATUS_COLORS: Record<string, { color: string; icon: string; bg: string }> = {
-  "Não visualizado": {
-    color: "text-on-surface-variant",
-    icon: "visibility_off",
-    bg: "bg-surface-variant/20",
-  },
-  Visualizado: { color: "text-status-info", icon: "visibility", bg: "bg-status-info/10" },
-  "Em andamento": {
-    color: "text-primary",
-    icon: "pending",
-    bg: "bg-primary/10",
-  },
-  "Aguardando peças": {
-    color: "text-status-warning",
-    icon: "settings_suggest",
-    bg: "bg-status-warning/10",
-  },
-  "Aguardando aprovação": {
-    color: "text-status-warning",
-    icon: "hourglass_empty",
-    bg: "bg-status-warning/10",
-  },
-  Concluído: { color: "text-status-success", icon: "check_circle", bg: "bg-status-success/10" },
-  Atrasado: { color: "text-status-error", icon: "warning", bg: "bg-status-error/10" },
-};
-
-export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalProps) {
+export function TaskDetailsModal({
+  open,
+  onOpenChange,
+  task,
+  onAddComment,
+  onEdit,
+}: TaskDetailsModalProps) {
+  const [commentAuthor, setCommentAuthor] = useState("");
   const [newComment, setNewComment] = useState("");
-  const [isAddingComment, setIsAddingComment] = useState(false);
 
   if (!task) return null;
 
-  const statusConfig = STATUS_COLORS[task.status] || STATUS_COLORS["Não visualizado"];
+  const statusConfig = TASK_STATUS_CONFIG[task.status];
+  const statusTextColor = statusConfig.color.split(" ")[1] || "text-on-surface-variant";
+  const statusBgColor = statusConfig.color.split(" ")[0] || "bg-surface-variant";
 
-  const handleAddComment = async (e: FormEvent<HTMLFormElement>) => {
+  const handleAddComment = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!newComment.trim()) return;
+    if (!newComment.trim() || !commentAuthor.trim()) return;
 
-    setIsAddingComment(true);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    setIsAddingComment(false);
-
+    onAddComment(task.id, { author: commentAuthor, text: newComment });
     toast.success("Comentário adicionado", { description: "Sua resposta foi registrada." });
     setNewComment("");
   };
@@ -99,17 +49,17 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                 <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
                   #{task.id}
                 </span>
-                <div className={`px-2 py-1 rounded text-xs font-bold flex items-center gap-1 ${statusConfig.bg} ${statusConfig.color}`}>
+                <div
+                  className={`px-2 py-1 rounded text-xs font-bold flex items-center gap-1 ${statusBgColor} ${statusTextColor}`}
+                >
                   <Icon name={statusConfig.icon} className="text-sm" />
-                  {task.status}
+                  {statusConfig.label}
                 </div>
               </div>
-              <DialogTitle className="text-2xl font-black tracking-tight">
-                {task.title}
-              </DialogTitle>
+              <DialogTitle className="text-2xl font-black tracking-tight">{task.title}</DialogTitle>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => toast("Editando tarefa...")}>
+              <Button size="sm" variant="outline" onClick={() => onEdit(task)}>
                 <Icon name="edit" />
               </Button>
               <Button size="sm" variant="outline" onClick={() => toast("Compartilhando...")}>
@@ -148,14 +98,16 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                 </p>
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-black">
-                    {task.assignedTo
+                    {(task.assignedTo || "S")
                       .split(" ")
                       .map((n) => n[0])
                       .join("")}
                   </div>
                   <div>
-                    <p className="font-bold text-on-surface">{task.assignedTo}</p>
-                    <p className="text-xs text-on-surface-variant">{task.sector}</p>
+                    <p className="font-bold text-on-surface">
+                      {task.assignedTo || "Sem responsável"}
+                    </p>
+                    <p className="text-xs text-on-surface-variant">{task.sector || "Sem setor"}</p>
                   </div>
                 </div>
               </div>
@@ -186,7 +138,7 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                 </p>
                 <div className="flex items-center gap-2">
                   <Icon name="precision_manufacturing" className="text-primary text-lg" />
-                  <p className="font-bold text-on-surface">{task.equipment}</p>
+                  <p className="font-bold text-on-surface">{task.equipment || "Sem equipamento"}</p>
                 </div>
               </div>
 
@@ -196,7 +148,7 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                 </p>
                 <div className="flex items-center gap-2">
                   <Icon name="calendar_today" className="text-on-surface-variant text-lg" />
-                  <p className="font-bold text-on-surface">{task.deadline}</p>
+                  <p className="font-bold text-on-surface">{task.deadline || "Sem prazo"}</p>
                 </div>
               </div>
 
@@ -213,7 +165,7 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                 Descrição
               </p>
               <div className="bg-surface-highest/50 border border-border-low rounded-lg p-4 text-on-surface leading-relaxed">
-                {task.description}
+                {task.description || "Sem descrição"}
               </div>
             </div>
           </TabsContent>
@@ -221,14 +173,14 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
           {/* TIMELINE TAB */}
           <TabsContent value="timeline" className="space-y-4 mt-5">
             <div className="space-y-4">
-              {task.timeline && task.timeline.length > 0 ? (
+              {task.timeline.length > 0 ? (
                 task.timeline.map((event, index) => (
-                  <div key={index} className="relative flex gap-4">
+                  <div key={event.id} className="relative flex gap-4">
                     <div className="flex flex-col items-center">
                       <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center border-2 border-primary">
                         <Icon name="event" className="text-primary" />
                       </div>
-                      {index !== task.timeline!.length - 1 && (
+                      {index !== task.timeline.length - 1 && (
                         <div className="w-0.5 h-12 bg-border-low mt-2" />
                       )}
                     </div>
@@ -249,7 +201,10 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                 ))
               ) : (
                 <div className="text-center py-8">
-                  <Icon name="history" className="text-on-surface-variant/30 text-5xl mx-auto mb-3" />
+                  <Icon
+                    name="history"
+                    className="text-on-surface-variant/30 text-5xl mx-auto mb-3"
+                  />
                   <p className="text-on-surface-variant">Sem eventos no histórico ainda</p>
                 </div>
               )}
@@ -260,9 +215,12 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
           <TabsContent value="comments" className="space-y-5 mt-5">
             {/* Comments List */}
             <div className="space-y-4 max-h-96 overflow-y-auto">
-              {task.comments && task.comments.length > 0 ? (
+              {task.comments.length > 0 ? (
                 task.comments.map((comment) => (
-                  <div key={comment.id} className="border border-border-low rounded-lg p-4 space-y-2">
+                  <div
+                    key={comment.id}
+                    className="border border-border-low rounded-lg p-4 space-y-2"
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary">
@@ -292,7 +250,18 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
             <form onSubmit={handleAddComment} className="border-t border-border-low pt-4 space-y-3">
               <div>
                 <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
-                  Adicionar Comentário
+                  Autor
+                </label>
+                <input
+                  value={commentAuthor}
+                  onChange={(e) => setCommentAuthor(e.target.value)}
+                  placeholder="Seu nome ou equipe"
+                  className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface placeholder:text-on-surface-variant/50 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial font-medium"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
+                  Comentário
                 </label>
                 <textarea
                   value={newComment}
@@ -304,27 +273,18 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
               </div>
               <Button
                 type="submit"
-                disabled={!newComment.trim() || isAddingComment}
+                disabled={!newComment.trim() || !commentAuthor.trim()}
                 className="w-full font-black"
               >
-                {isAddingComment ? (
-                  <>
-                    <div className="w-4 h-4 rounded-full border-2 border-primary-foreground/20 border-t-primary-foreground animate-spin mr-2" />
-                    Enviando...
-                  </>
-                ) : (
-                  <>
-                    <Icon name="send" />
-                    Enviar Comentário
-                  </>
-                )}
+                <Icon name="send" />
+                Enviar Comentário
               </Button>
             </form>
           </TabsContent>
 
           {/* ATTACHMENTS TAB */}
           <TabsContent value="attachments" className="space-y-4 mt-5">
-            {task.attachments && task.attachments.length > 0 ? (
+            {task.attachments.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {task.attachments.map((file) => (
                   <div
@@ -354,9 +314,7 @@ export function TaskDetailsModal({ open, onOpenChange, task }: TaskDetailsModalP
                         />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-on-surface truncate">
-                          {file.name}
-                        </p>
+                        <p className="text-xs font-bold text-on-surface truncate">{file.name}</p>
                         <p className="text-[10px] text-on-surface-variant">
                           {(file.size / 1024).toFixed(0)} KB
                         </p>

@@ -1,21 +1,39 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/AppLayout";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  TASK_PRIORITIES,
+  TASK_STATUSES,
+  type TaskInput,
+  type TaskPriority,
+  type TaskStatus,
+} from "@/lib/task-types";
+import {
+  ASSIGNMENT_OPTIONS,
+  EQUIPMENT_OPTIONS,
+  SECTOR_OPTIONS,
+  normalizeOption,
+} from "@/lib/operational-options";
 
-export interface TaskModalData {
+export interface TaskModalData extends TaskInput {
   title: string;
   description: string;
   sector: string;
-  priority: string;
+  priority: TaskPriority;
   assignedTo: string;
   deadline: string;
   equipment: string;
-  status: string;
-  comments: string;
+  status: TaskStatus;
   attachments: AttachedFile[];
 }
 
@@ -25,45 +43,50 @@ interface TaskModalProps {
   onSubmit: (data: TaskModalData) => void;
   mode?: "create" | "edit";
   initialData?: Partial<TaskModalData>;
+  draftKey?: string;
 }
 
-const SECTORS = [
-  "Operacional",
-  "Manutenção",
-  "Almoxarifado",
-  "Administrativo",
-  "Fleet Management",
-];
+const EMPTY_FORM: TaskModalData = {
+  title: "",
+  description: "",
+  sector: "Operacional",
+  priority: "Média",
+  assignedTo: "Todos",
+  deadline: "",
+  equipment: "Escavadeira CAT 320",
+  status: "Não visualizado",
+  attachments: [],
+};
 
-const PRIORITIES = ["Baixa", "Média", "Alta", "Urgente"];
+function normalizeAssignmentData(data: TaskModalData): TaskModalData {
+  return {
+    ...data,
+    assignedTo: normalizeOption(data.assignedTo, ASSIGNMENT_OPTIONS, "Todos"),
+    sector: normalizeOption(data.sector, SECTOR_OPTIONS, "Operacional"),
+    equipment: normalizeOption(data.equipment, EQUIPMENT_OPTIONS, "Escavadeira CAT 320"),
+  };
+}
 
-const STATUSES = [
-  "Não visualizado",
-  "Visualizado",
-  "Em andamento",
-  "Aguardando peças",
-  "Aguardando aprovação",
-  "Concluído",
-  "Atrasado",
-];
+function safeReadDraft(key: string | undefined): Partial<TaskModalData> | null {
+  if (!key || typeof window === "undefined") return null;
 
-const EQUIPMENT = [
-  "—",
-  "Escavadeira CAT 320",
-  "Caminhão Volvo FH-540",
-  "Trator Komatsu D61",
-  "Pá Carregadeira CAT 950",
-  "Empilhadeira Hyster H80",
-];
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
-const ASSIGNEES = [
-  "Davi",
-  "Eduardo",
-  "Workshop Team",
-  "Fleet Team",
-  "Almoxarifado",
-  "Operações",
-];
+function safeWriteDraft(key: string | undefined, data: TaskModalData) {
+  if (!key || typeof window === "undefined") return;
+  window.localStorage.setItem(key, JSON.stringify(data));
+}
+
+function safeClearDraft(key: string | undefined) {
+  if (!key || typeof window === "undefined") return;
+  window.localStorage.removeItem(key);
+}
 
 export function TaskModal({
   open,
@@ -71,26 +94,43 @@ export function TaskModal({
   onSubmit,
   mode = "create",
   initialData,
+  draftKey,
 }: TaskModalProps) {
-  const [formData, setFormData] = useState<TaskModalData>({
-    title: initialData?.title ?? "",
-    description: initialData?.description ?? "",
-    sector: initialData?.sector ?? "Operacional",
-    priority: initialData?.priority ?? "Média",
-    assignedTo: initialData?.assignedTo ?? "Davi",
-    deadline: initialData?.deadline ?? "",
-    equipment: initialData?.equipment ?? "—",
-    status: initialData?.status ?? "Não visualizado",
-    comments: initialData?.comments ?? "",
-    attachments: initialData?.attachments ?? [],
-  });
+  const initialFormData = useMemo<TaskModalData>(
+    () => ({
+      ...EMPTY_FORM,
+      ...initialData,
+      attachments: initialData?.attachments ?? [],
+    }),
+    [initialData],
+  );
+
+  const [formData, setFormData] = useState<TaskModalData>(initialFormData);
 
   const [activeTab, setActiveTab] = useState("details");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  useEffect(() => {
+    if (!open) return;
+    setFormData(normalizeAssignmentData({ ...initialFormData, ...safeReadDraft(draftKey) }));
+    setActiveTab("details");
+  }, [draftKey, initialFormData, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    safeWriteDraft(draftKey, formData);
+  }, [draftKey, formData, open]);
+
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
+  ) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleCancel = () => {
+    safeClearDraft(draftKey);
+    onOpenChange(false);
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -103,26 +143,13 @@ export function TaskModal({
 
     setIsSubmitting(true);
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1000));
       onSubmit(formData);
-      toast.success(
-        mode === "create" ? "Tarefa criada" : "Tarefa atualizada",
-        { description: formData.title }
-      );
-      onOpenChange(false);
-      setFormData({
-        title: "",
-        description: "",
-        sector: "Operacional",
-        priority: "Média",
-        assignedTo: "Davi",
-        deadline: "",
-        equipment: "—",
-        status: "Não visualizado",
-        comments: "",
-        attachments: [],
+      safeClearDraft(draftKey);
+      toast.success(mode === "create" ? "Tarefa criada" : "Tarefa atualizada", {
+        description: formData.title,
       });
+      onOpenChange(false);
+      setFormData(EMPTY_FORM);
     } finally {
       setIsSubmitting(false);
     }
@@ -134,7 +161,10 @@ export function TaskModal({
         <DialogHeader className="space-y-1">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-primary/10 rounded-lg">
-              <Icon name={mode === "create" ? "add_task" : "edit_task"} className="text-primary text-2xl" />
+              <Icon
+                name={mode === "create" ? "add_task" : "edit_task"}
+                className="text-primary text-2xl"
+              />
             </div>
             <div>
               <DialogTitle className="text-2xl font-black tracking-tight uppercase">
@@ -211,9 +241,9 @@ export function TaskModal({
                     onChange={handleChange}
                     className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                   >
-                    {EQUIPMENT.map((e) => (
-                      <option key={e} value={e}>
-                        {e}
+                    {EQUIPMENT_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
                       </option>
                     ))}
                   </select>
@@ -246,7 +276,7 @@ export function TaskModal({
                     onChange={handleChange}
                     className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                   >
-                    {PRIORITIES.map((p) => (
+                    {TASK_PRIORITIES.map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
@@ -265,28 +295,13 @@ export function TaskModal({
                     onChange={handleChange}
                     className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                   >
-                    {STATUSES.map((s) => (
+                    {TASK_STATUSES.map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
                     ))}
                   </select>
                 </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
-                  <Icon name="comment" className="inline text-base mr-1" />
-                  Comentários Adicionais
-                </label>
-                <textarea
-                  name="comments"
-                  value={formData.comments}
-                  onChange={handleChange}
-                  placeholder="Observações, restrições, ou notas importantes..."
-                  rows={3}
-                  className="w-full px-4 py-3 bg-surface-highest border border-border-low rounded-lg text-on-surface placeholder:text-on-surface-variant/50 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial font-medium resize-none"
-                />
               </div>
             </TabsContent>
 
@@ -303,9 +318,9 @@ export function TaskModal({
                   onChange={handleChange}
                   className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                 >
-                  {ASSIGNEES.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
+                  {ASSIGNMENT_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
                     </option>
                   ))}
                 </select>
@@ -322,9 +337,9 @@ export function TaskModal({
                   onChange={handleChange}
                   className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                 >
-                  {SECTORS.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
+                  {SECTOR_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
                     </option>
                   ))}
                 </select>
@@ -358,9 +373,7 @@ export function TaskModal({
             <TabsContent value="attachments" className="space-y-5">
               <AttachmentUpload
                 files={formData.attachments}
-                onFilesChange={(attachments) =>
-                  setFormData((prev) => ({ ...prev, attachments }))
-                }
+                onFilesChange={(attachments) => setFormData((prev) => ({ ...prev, attachments }))}
                 maxFiles={10}
                 maxSize={50}
               />
@@ -371,7 +384,7 @@ export function TaskModal({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={handleCancel}
                 disabled={isSubmitting}
                 className="flex-1"
               >

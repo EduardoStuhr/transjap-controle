@@ -29,7 +29,6 @@ export function AttachmentUpload({
   accept = "image/*,application/pdf,.doc,.docx",
 }: AttachmentUploadProps) {
   const [dragActive, setDragActive] = useState(false);
-  const [uploading, setUploading] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const getFileType = (file: File): "image" | "pdf" | "document" => {
@@ -49,42 +48,61 @@ export function AttachmentUpload({
     }
   };
 
-  const processFile = async (file: File) => {
+  const readImagePreview = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result?.toString() || "");
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  const processFile = async (file: File): Promise<AttachedFile | null> => {
     // Validate file size
     const sizeMB = file.size / (1024 * 1024);
     if (sizeMB > maxSize) {
       toast.error("Arquivo muito grande", {
         description: `Máximo ${maxSize}MB. O arquivo tem ${sizeMB.toFixed(1)}MB.`,
       });
-      return;
+      return null;
     }
 
     const id = `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const type = getFileType(file);
 
-    // Create preview for images
     let preview: string | undefined;
     if (type === "image") {
-      preview = URL.createObjectURL(file);
+      preview = await readImagePreview(file);
     }
 
-    // Simulate upload progress
-    setUploading(id);
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    setUploading(null);
+    toast.success("Arquivo anexado", { description: file.name });
 
-    const newFile: AttachedFile = {
+    return {
       id,
       name: file.name,
       type,
       size: file.size,
       preview,
-      file,
-      url: URL.createObjectURL(file), // For local preview
+      url: preview,
     };
+  };
 
-    onFilesChange([...files, newFile]);
-    toast.success("Arquivo enviado", { description: file.name });
+  const processFiles = async (incomingFiles: File[]) => {
+    const remainingSlots = maxFiles - files.length;
+    if (remainingSlots <= 0) {
+      toast.error("Limite de arquivos atingido", {
+        description: `Máximo ${maxFiles} arquivos.`,
+      });
+      return;
+    }
+
+    const selectedFiles = incomingFiles.slice(0, remainingSlots);
+    const nextFiles = (await Promise.all(selectedFiles.map(processFile))).filter(
+      Boolean,
+    ) as AttachedFile[];
+
+    if (nextFiles.length > 0) {
+      onFilesChange([...files, ...nextFiles]);
+    }
   };
 
   const handleDrag = (e: DragEvent<HTMLDivElement>) => {
@@ -109,33 +127,17 @@ export function AttachmentUpload({
       return;
     }
 
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    for (const file of droppedFiles) {
-      if (files.length < maxFiles) {
-        await processFile(file);
-      }
-    }
+    await processFiles(Array.from(e.dataTransfer.files));
   };
 
   const handleChange = async (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      const selectedFiles = Array.from(e.target.files);
-      for (const file of selectedFiles) {
-        if (files.length < maxFiles) {
-          await processFile(file);
-        }
-      }
+      await processFiles(Array.from(e.target.files));
+      e.target.value = "";
     }
   };
 
   const removeFile = (id: string) => {
-    const file = files.find((f) => f.id === id);
-    if (file?.preview) {
-      URL.revokeObjectURL(file.preview);
-    }
-    if (file?.url) {
-      URL.revokeObjectURL(file.url);
-    }
     onFilesChange(files.filter((f) => f.id !== id));
   };
 
@@ -178,7 +180,9 @@ export function AttachmentUpload({
             />
           </div>
           <p className="text-center text-on-surface font-bold">
-            {dragActive ? "Solte os arquivos aqui" : "Arraste arquivos aqui ou clique para selecionar"}
+            {dragActive
+              ? "Solte os arquivos aqui"
+              : "Arraste arquivos aqui ou clique para selecionar"}
           </p>
           <p className="text-xs text-on-surface-variant text-center mt-2">
             Máximo {maxFiles} arquivos, até {maxSize}MB cada
@@ -202,16 +206,6 @@ export function AttachmentUpload({
                 key={file.id}
                 className="group relative border border-border-low rounded-lg p-3 bg-surface-low hover:bg-surface-high transition-colors overflow-hidden"
               >
-                {/* Upload Progress */}
-                {uploading === file.id && (
-                  <div className="absolute inset-0 bg-primary/10 flex items-center justify-center">
-                    <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 rounded-full border-2 border-primary/20 border-t-primary animate-spin mb-2" />
-                      <span className="text-[10px] text-on-surface font-bold">Enviando...</span>
-                    </div>
-                  </div>
-                )}
-
                 {/* Image Preview */}
                 {file.type === "image" && file.preview && (
                   <div className="mb-3 h-20 w-full bg-surface-lowest rounded overflow-hidden">
@@ -226,15 +220,10 @@ export function AttachmentUpload({
                 {/* File Info */}
                 <div className="flex items-start gap-2">
                   <div className="p-2 bg-surface-lowest rounded flex-shrink-0">
-                    <Icon
-                      name={getFileIcon(file.type)}
-                      className="text-primary text-lg"
-                    />
+                    <Icon name={getFileIcon(file.type)} className="text-primary text-lg" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-on-surface truncate">
-                      {file.name}
-                    </p>
+                    <p className="text-xs font-bold text-on-surface truncate">{file.name}</p>
                     <p className="text-[10px] text-on-surface-variant">
                       {(file.size / 1024).toFixed(0)} KB
                     </p>

@@ -3,7 +3,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { EquipmentDetailsPanel, type EquipmentDetail, type MaintenanceRecord } from "@/components/EquipmentDetailsPanel";
+import {
+  EquipmentDetailsPanel,
+  type EquipmentDetail,
+  type MaintenanceRecord,
+} from "@/components/EquipmentDetailsPanel";
 
 export const Route = createFileRoute("/equipamentos")({ component: Equipamentos });
 
@@ -21,8 +25,24 @@ const FLEET_DATA = [
     acquisitionDate: "01/03/2019",
     manufacturer: "Caterpillar",
     maintenanceRecords: [
-      { id: "1", type: "Preventiva", date: "12/05/2026", technician: "Davi", status: "Concluída" as const, deadline: "12/05/2026", description: "Troca de óleo e filtros" },
-      { id: "2", type: "Sistema Hidráulico", date: "05/05/2026", technician: "Eduardo", status: "Concluída" as const, deadline: "05/05/2026", description: "Revisão completa" },
+      {
+        id: "1",
+        type: "Preventiva",
+        date: "12/05/2026",
+        technician: "Equipe técnica",
+        status: "Concluída" as const,
+        deadline: "12/05/2026",
+        description: "Troca de óleo e filtros",
+      },
+      {
+        id: "2",
+        type: "Sistema Hidráulico",
+        date: "05/05/2026",
+        technician: "Equipe técnica",
+        status: "Concluída" as const,
+        deadline: "05/05/2026",
+        description: "Revisão completa",
+      },
     ] as MaintenanceRecord[],
   },
   {
@@ -38,7 +58,15 @@ const FLEET_DATA = [
     acquisitionDate: "15/08/2018",
     manufacturer: "Volvo",
     maintenanceRecords: [
-      { id: "3", type: "Revisão 50k", date: "10/05/2026", technician: "Workshop Team", status: "Em andamento" as const, deadline: "15/05/2026", description: "Manutenção programada de 50 mil km" },
+      {
+        id: "3",
+        type: "Revisão 50k",
+        date: "10/05/2026",
+        technician: "Workshop Team",
+        status: "Em andamento" as const,
+        deadline: "15/05/2026",
+        description: "Manutenção programada de 50 mil km",
+      },
     ] as MaintenanceRecord[],
   },
   {
@@ -97,7 +125,7 @@ function Equipamentos() {
     (e) =>
       e.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
       e.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      e.location.toLowerCase().includes(searchTerm.toLowerCase())
+      e.location.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   const openEquipmentDetails = (equipment: (typeof FLEET_DATA)[0]) => {
@@ -119,10 +147,19 @@ function Equipamentos() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-2xl font-black tracking-tight text-on-surface uppercase">Frota de Equipamentos</h1>
-          <p className="text-sm text-on-surface-variant mt-1 font-medium">{FLEET_DATA.length} máquinas cadastradas</p>
+          <h1 className="text-2xl font-black tracking-tight text-on-surface uppercase">
+            Frota de Equipamentos
+          </h1>
+          <p className="text-sm text-on-surface-variant mt-1 font-medium">
+            {FLEET_DATA.length} máquinas cadastradas
+          </p>
         </div>
-        <Button onClick={() => toast("Novo equipamento...", { description: "Abrindo formulário de cadastro" })} className="font-black gap-2 shadow-industrial">
+        <Button
+          onClick={() =>
+            toast("Novo equipamento...", { description: "Abrindo formulário de cadastro" })
+          }
+          className="font-black gap-2 shadow-industrial"
+        >
           <Icon name="add" />
           Cadastrar Equipamento
         </Button>
@@ -133,21 +170,27 @@ function Equipamentos() {
         <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
             <Icon name="check_circle" className="text-status-success text-2xl" />
-            <p className="text-[10px] font-black text-status-success uppercase tracking-widest">Em Operação</p>
+            <p className="text-[10px] font-black text-status-success uppercase tracking-widest">
+              Em Operação
+            </p>
           </div>
           <p className="text-3xl font-black text-status-success">{statusCounts.operacao}</p>
         </div>
         <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
             <Icon name="build" className="text-status-warning text-2xl" />
-            <p className="text-[10px] font-black text-status-warning uppercase tracking-widest">Manutenção</p>
+            <p className="text-[10px] font-black text-status-warning uppercase tracking-widest">
+              Manutenção
+            </p>
           </div>
           <p className="text-3xl font-black text-status-warning">{statusCounts.manutencao}</p>
         </div>
         <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
             <Icon name="pause_circle" className="text-status-error text-2xl" />
-            <p className="text-[10px] font-black text-status-error uppercase tracking-widest">Parado</p>
+            <p className="text-[10px] font-black text-status-error uppercase tracking-widest">
+              Parado
+            </p>
           </div>
           <p className="text-3xl font-black text-status-error">{statusCounts.parado}</p>
         </div>
@@ -155,7 +198,10 @@ function Equipamentos() {
 
       {/* Search Bar */}
       <div className="relative mb-8">
-        <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none" />
+        <Icon
+          name="search"
+          className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+        />
         <input
           type="text"
           placeholder="Buscar por modelo, série ou localização..."
@@ -227,7 +273,10 @@ function Equipamentos() {
 
       {filtered.length === 0 && (
         <div className="text-center py-12">
-          <Icon name="precision_manufacturing" className="text-5xl text-on-surface-variant/30 mx-auto mb-3" />
+          <Icon
+            name="precision_manufacturing"
+            className="text-5xl text-on-surface-variant/30 mx-auto mb-3"
+          />
           <p className="text-on-surface-variant">Nenhum equipamento encontrado</p>
         </div>
       )}

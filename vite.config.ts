@@ -12,4 +12,16 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
+  vite: {
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            router: ["@tanstack/react-router", "@tanstack/react-query"],
+            ui: ["@radix-ui/react-dialog", "@radix-ui/react-tabs", "lucide-react"],
+          },
+        },
+      },
+    },
+  },
 });

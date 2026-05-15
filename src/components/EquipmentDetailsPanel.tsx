@@ -62,7 +62,10 @@ export function EquipmentDetailsPanel({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:w-[500px] md:w-[600px] max-h-screen overflow-y-auto">
+      <SheetContent
+        side="right"
+        className="w-full sm:w-[500px] md:w-[600px] max-h-screen overflow-y-auto"
+      >
         <SheetHeader className="space-y-3 pb-4 border-b border-border-low">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-4">
@@ -74,7 +77,9 @@ export function EquipmentDetailsPanel({
                   {equipment.model}
                 </SheetTitle>
                 <div className="flex items-center gap-2 mt-2">
-                  <div className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1 ${TONE_COLORS[equipment.tone]}`}>
+                  <div
+                    className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1 ${TONE_COLORS[equipment.tone]}`}
+                  >
                     <Icon name={statusIcon[equipment.status]} className="text-sm" />
                     {equipment.status}
                   </div>
@@ -85,11 +90,7 @@ export function EquipmentDetailsPanel({
               </div>
             </div>
             <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => toast("Editando equipamento...")}
-              >
+              <Button size="sm" variant="outline" onClick={() => toast("Editando equipamento...")}>
                 <Icon name="edit" />
               </Button>
             </div>
@@ -148,9 +149,7 @@ export function EquipmentDetailsPanel({
                   <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest mb-2">
                     Última Manutenção
                   </p>
-                  <p className="text-sm font-bold text-on-surface">
-                    {equipment.lastMaintenance}
-                  </p>
+                  <p className="text-sm font-bold text-on-surface">{equipment.lastMaintenance}</p>
                 </div>
 
                 <div className="bg-surface-highest/50 border border-border-low rounded-lg p-4">
@@ -195,7 +194,10 @@ export function EquipmentDetailsPanel({
 
             {/* Action Buttons */}
             <div className="space-y-2 pt-4 border-t border-border-low">
-              <Button className="w-full font-black" onClick={() => toast("Agendando manutenção...")}>
+              <Button
+                className="w-full font-black"
+                onClick={() => toast("Agendando manutenção...")}
+              >
                 <Icon name="calendar_today" />
                 Agendar Manutenção
               </Button>
@@ -230,9 +232,7 @@ export function EquipmentDetailsPanel({
                         <Icon name="build" className="text-primary text-lg" />
                         <div>
                           <p className="font-bold text-on-surface">{record.type}</p>
-                          <p className="text-xs text-on-surface-variant">
-                            {record.technician}
-                          </p>
+                          <p className="text-xs text-on-surface-variant">{record.technician}</p>
                         </div>
                       </div>
                       <div
@@ -247,9 +247,7 @@ export function EquipmentDetailsPanel({
                         {record.status}
                       </div>
                     </div>
-                    <p className="text-sm text-on-surface-variant mb-2">
-                      {record.description}
-                    </p>
+                    <p className="text-sm text-on-surface-variant mb-2">{record.description}</p>
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-on-surface-variant">Realizado: {record.date}</span>
                       <span className="text-on-surface-variant">Prazo: {record.deadline}</span>
@@ -289,20 +287,24 @@ export function EquipmentDetailsPanel({
                       />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-on-surface truncate">
-                        {file.name}
-                      </p>
+                      <p className="text-sm font-bold text-on-surface truncate">{file.name}</p>
                       <p className="text-xs text-on-surface-variant">
                         {(file.size / 1024).toFixed(0)} KB
                       </p>
                     </div>
-                    <Icon name="download" className="text-on-surface-variant text-lg opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Icon
+                      name="download"
+                      className="text-on-surface-variant text-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                    />
                   </button>
                 ))}
               </div>
             ) : (
               <div className="text-center py-12">
-                <Icon name="folder_open" className="text-5xl text-on-surface-variant/30 mx-auto mb-3" />
+                <Icon
+                  name="folder_open"
+                  className="text-5xl text-on-surface-variant/30 mx-auto mb-3"
+                />
                 <p className="text-on-surface-variant">Nenhum documento anexado</p>
               </div>
             )}
