@@ -22,7 +22,11 @@ function Estoque() {
       <div className="bg-surface-container border border-border-low overflow-hidden">
         <div className="p-6 border-b border-border-low flex justify-between bg-surface-low gap-2 flex-wrap">
           <h3 className="text-2xl font-semibold">Peças Cadastradas</h3>
-          <button className="bg-primary-container text-on-primary px-4 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-90">
+          <button
+            type="button"
+            onClick={() => toast("Nova Peça", { description: "Abrindo cadastro de peça." })}
+            className="bg-primary-container text-on-primary px-4 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-90 active:scale-95 transition"
+          >
             <Icon name="add" className="text-base" /> Nova Peça
           </button>
         </div>
