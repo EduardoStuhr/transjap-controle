@@ -29,11 +29,16 @@ function Manutencao() {
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-10">
         {TYPES.map((t) => (
-          <div key={t.name} className="bg-surface-low border border-border-low p-5 hover:border-primary-container/50 transition-colors group">
+          <button
+            type="button"
+            key={t.name}
+            onClick={() => toast(t.name, { description: `${t.count} manutenções ativas deste tipo.` })}
+            className="text-left bg-surface-low border border-border-low p-5 hover:border-primary-container/50 transition-colors group"
+          >
             <Icon name={t.icon} className="text-primary-container text-3xl" />
             <h3 className="text-sm font-semibold text-on-surface mt-3">{t.name}</h3>
             <p className="text-xs text-on-surface-variant">{t.count} ativas</p>
-          </div>
+          </button>
         ))}
       </div>
 
