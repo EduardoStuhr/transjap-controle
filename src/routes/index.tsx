@@ -1,15 +1,16 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { toast } from "sonner";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import heroImg from "@/assets/industrial-hero.jpg";
 
 export const Route = createFileRoute("/")({ component: Dashboard });
 
-const STATS = [
+const STATS: { icon: string; title: string; value: string; status: string; statusTone: string; iconFilled?: boolean }[] = [
   { icon: "precision_manufacturing", title: "Equipamentos Ativos", value: "48", status: "+3 este mês", statusTone: "success" },
   { icon: "assignment", title: "Solicitações em Aberto", value: "12", status: "4 urgentes", statusTone: "muted" },
   { icon: "report", iconFilled: true, title: "Manutenções Pendentes", value: "05", status: "Atenção necessária", statusTone: "error" },
   { icon: "health_and_safety", title: "Operacional da Frota", value: "92%", status: "Funcionamento estável", statusTone: "success" },
-] as const;
+];
 
 const ALERTS = [
   { type: "CRÍTICO", tone: "error", text: "Escavadeira EX-320 necessita troca imediata do sistema hidráulico.", time: "Há 1 hora" },
@@ -119,7 +120,13 @@ function Dashboard() {
               </div>
             ))}
           </div>
-          <a className="block text-center mt-6 text-sm font-semibold text-primary-container hover:underline" href="#">Ver todos os alertas</a>
+          <button
+            type="button"
+            onClick={() => toast("Alertas", { description: "Abrindo lista completa de alertas." })}
+            className="block w-full text-center mt-6 text-sm font-semibold text-primary-container hover:underline"
+          >
+            Ver todos os alertas
+          </button>
         </div>
       </div>
 
@@ -128,12 +135,19 @@ function Dashboard() {
         <div className="p-6 border-b border-border-low flex justify-between items-center bg-surface-low gap-2 flex-wrap">
           <h3 className="text-2xl font-semibold text-on-surface">Tarefas Recentes</h3>
           <div className="flex gap-2">
-            <button className="flex items-center gap-2 border border-border-low px-4 py-2 text-sm font-semibold hover:bg-surface-light transition-all">
+            <button
+              type="button"
+              onClick={() => toast("Filtros", { description: "Painel de filtros em breve." })}
+              className="flex items-center gap-2 border border-border-low px-4 py-2 text-sm font-semibold hover:bg-surface-light transition-all"
+            >
               <Icon name="filter_list" className="text-base" /> Filtrar
             </button>
-            <button className="bg-primary-container text-on-primary px-4 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all">
+            <Link
+              to="/agenda"
+              className="bg-primary-container text-on-primary px-4 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all"
+            >
               <Icon name="add" className="text-base" /> Nova Tarefa
-            </button>
+            </Link>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -163,7 +177,13 @@ function Dashboard() {
                     <span className={`px-3 py-1 text-xs font-semibold rounded-full border ${toneBg[t.tone]}`}>{t.status}</span>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button className="text-on-surface-variant hover:text-primary-container"><Icon name="more_vert" /></button>
+                    <button
+                      type="button"
+                      onClick={() => toast(t.equipment, { description: `${t.id} · Status: ${t.status}` })}
+                      className="text-on-surface-variant hover:text-primary-container"
+                    >
+                      <Icon name="more_vert" />
+                    </button>
                   </td>
                 </tr>
               ))}

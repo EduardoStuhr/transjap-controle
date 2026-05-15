@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 
@@ -43,6 +44,22 @@ function Perfil() {
                 </dd>
               </div>
             </dl>
+            <div className="mt-6 flex gap-2">
+              <button
+                type="button"
+                onClick={() => toast("Editar usuário", { description: u.name })}
+                className="flex-1 bg-primary-container text-on-primary px-3 py-2 text-sm font-bold flex items-center justify-center gap-2 hover:opacity-90"
+              >
+                <Icon name="edit" className="text-base" /> Editar
+              </button>
+              <button
+                type="button"
+                onClick={() => toast("Senha", { description: "Link de redefinição enviado." })}
+                className="border border-border-low px-3 py-2 text-sm font-semibold flex items-center gap-2 hover:bg-surface-high"
+              >
+                <Icon name="lock_reset" className="text-base" /> Redefinir senha
+              </button>
+            </div>
           </div>
         ))}
       </div>

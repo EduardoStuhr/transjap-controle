@@ -1,5 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: "dashboard" },
@@ -23,12 +24,10 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
 
   return (
     <div className="min-h-screen bg-background text-on-surface">
-      {/* Sidebar desktop */}
       <aside className="hidden md:flex flex-col fixed left-0 top-0 h-full border-r border-border-low bg-surface-low w-64 z-50">
         <SidebarInner pathname={pathname} />
       </aside>
 
-      {/* Sidebar mobile drawer */}
       {open && (
         <div className="md:hidden fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
@@ -38,34 +37,58 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
         </div>
       )}
 
-      {/* Top bar */}
       <header className="flex justify-between items-center w-full h-16 px-6 fixed top-0 bg-surface-container border-b border-border-low shadow-sm z-40 md:pl-72">
         <div className="flex items-center gap-4 flex-1">
           <button
+            type="button"
             className="md:hidden w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded"
             onClick={() => setOpen(true)}
             aria-label="Abrir menu"
           >
             <Icon name="menu" />
           </button>
-          <div className="relative w-full max-w-md hidden md:block">
+          <form
+            className="relative w-full max-w-md hidden md:block"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const v = (new FormData(e.currentTarget).get("q") || "").toString();
+              toast.message("Busca", { description: v ? `Procurando por "${v}"…` : "Digite algo para buscar." });
+            }}
+          >
             <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
             <input
+              name="q"
               className="w-full bg-surface-highest border-none rounded text-base py-2 pl-10 pr-4 outline-none focus:ring-1 focus:ring-primary-container text-on-surface placeholder:text-on-surface-variant/50"
               placeholder="Buscar equipamentos, tarefas, séries..."
               type="text"
             />
-          </div>
+          </form>
           <h2 className="md:hidden text-xl font-bold text-primary-container">TransJap</h2>
         </div>
         <div className="flex items-center gap-2">
-          <button className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded">
+          <button
+            type="button"
+            className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded relative"
+            onClick={() => toast("3 novas notificações", { description: "Escavadeira EX-320, Volvo FH-540 e CAT 950." })}
+          >
             <Icon name="notifications" />
+            <span className="absolute top-2 right-2 w-2 h-2 bg-status-error rounded-full" />
           </button>
-          <button className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded">
+          <button
+            type="button"
+            className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded"
+            onClick={() => toast("Configurações", { description: "Painel de configurações em breve." })}
+          >
             <Icon name="settings" />
           </button>
-          <div className="h-8 w-8 rounded-full bg-primary-container text-on-primary flex items-center justify-center font-bold ml-2">D</div>
+          <button
+            type="button"
+            className="h-8 w-8 rounded-full bg-primary-container text-on-primary flex items-center justify-center font-bold ml-2 hover:opacity-90"
+            onClick={() => toast("Sessão", { description: "Logado como Davi (Administrador)" })}
+            aria-label="Perfil"
+          >
+            D
+          </button>
         </div>
       </header>
 
@@ -90,9 +113,7 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
             <Icon name="construction" className="text-on-primary" filled />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-primary-container tracking-tight leading-tight">
-              TransJap Manager
-            </h1>
+            <h1 className="text-lg font-bold text-primary-container tracking-tight leading-tight">TransJap Manager</h1>
             <p className="text-[11px] text-on-surface-variant opacity-70 leading-tight">
               Sistema Operacional e<br />Controle de Manutenção
             </p>
@@ -119,9 +140,7 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
             </Link>
           );
         })}
-        <div className="mt-auto p-4 text-[11px] text-on-surface-variant/60">
-          v1.0 · TransJap © 2026
-        </div>
+        <div className="mt-auto p-4 text-[11px] text-on-surface-variant/60">v1.0 · TransJap © 2026</div>
       </nav>
     </>
   );
