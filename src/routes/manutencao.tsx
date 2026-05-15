@@ -40,7 +40,11 @@ function Manutencao() {
       <div className="bg-surface-container border border-border-low overflow-hidden">
         <div className="p-6 border-b border-border-low flex justify-between bg-surface-low">
           <h3 className="text-2xl font-semibold">Histórico de Manutenções</h3>
-          <button className="bg-primary-container text-on-primary px-4 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-90">
+          <button
+            type="button"
+            onClick={() => toast("Nova Manutenção", { description: "Abrindo formulário de manutenção." })}
+            className="bg-primary-container text-on-primary px-4 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-90 active:scale-95 transition"
+          >
             <Icon name="add" className="text-base" /> Nova Manutenção
           </button>
         </div>
