@@ -54,6 +54,43 @@
     50% { opacity: 0.7; transform: scale(1.05); }
   }
   --animate-pulse-urgent: pulse-urgent 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+
+  /* New smooth animations */
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  --animate-fade-in: fade-in 0.3s ease-out;
+
+  @keyframes fade-in-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  --animate-fade-in-up: fade-in-up 0.4s ease-out;
+
+  @keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(12px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  --animate-slide-in-right: slide-in-right 0.3s ease-out;
+
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  --animate-spin-slow: spin-slow 3s linear infinite;
+
+  @keyframes bounce-gentle {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-2px); }
+  }
+  --animate-bounce-gentle: bounce-gentle 1s ease-in-out infinite;
+
+  @keyframes shimmer {
+    0% { background-position: -1000px 0; }
+    100% { background-position: 1000px 0; }
+  }
+  --animate-shimmer: shimmer 2s infinite;
 }
 
 :root {
@@ -109,6 +146,68 @@
   }
   .transition-industrial {
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Smooth animations */
+  .animate-fade-in {
+    animation: var(--animate-fade-in);
+  }
+  .animate-fade-in-up {
+    animation: var(--animate-fade-in-up);
+  }
+  .animate-slide-in-right {
+    animation: var(--animate-slide-in-right);
+  }
+  .animate-spin-slow {
+    animation: var(--animate-spin-slow);
+  }
+  .animate-bounce-gentle {
+    animation: var(--animate-bounce-gentle);
+  }
+  .animate-shimmer {
+    animation: var(--animate-shimmer);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.1),
+      transparent
+    );
+    background-size: 1000px 100%;
+  }
+
+  /* Transition variants */
+  .transition-fast {
+    transition: all 0.15s ease-out;
+  }
+  .transition-normal {
+    transition: all 0.3s ease-out;
+  }
+  .transition-slow {
+    transition: all 0.5s ease-out;
+  }
+
+  /* Transform utilities */
+  .scale-hover:hover {
+    transform: scale(1.02);
+  }
+  .scale-hover-lg:hover {
+    transform: scale(1.05);
+  }
+  .translate-y-hover:hover {
+    transform: translateY(-2px);
+  }
+
+  /* Smooth shadow transitions */
+  .shadow-hover {
+    transition: box-shadow 0.3s ease-out;
+  }
+  .shadow-hover:hover {
+    box-shadow: var(--shadow-industrial-lg);
+  }
+
+  /* Pulse variations */
+  .pulse-gentle {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 }
 
