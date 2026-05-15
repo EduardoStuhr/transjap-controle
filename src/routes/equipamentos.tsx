@@ -27,7 +27,12 @@ function Equipamentos() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {FLEET.map((e) => (
-          <div key={e.id} className="bg-surface-container border border-border-low p-6 hover:border-primary-container/40 transition-colors">
+          <button
+            type="button"
+            key={e.id}
+            onClick={() => toast(e.model, { description: `Frota ${e.id} · ${e.status} · ${e.location}` })}
+            className="text-left bg-surface-container border border-border-low p-6 hover:border-primary-container/40 transition-colors"
+          >
             <div className="flex justify-between items-start mb-4">
               <div className="w-14 h-14 bg-surface-variant rounded flex items-center justify-center">
                 <Icon name={e.icon} className="text-primary-container text-3xl" />
@@ -50,7 +55,7 @@ function Equipamentos() {
                 <dd className="text-on-surface font-semibold mt-0.5">{e.last}</dd>
               </div>
             </dl>
-          </div>
+          </button>
         ))}
       </div>
     </AppLayout>
