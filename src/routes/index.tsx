@@ -4,12 +4,12 @@ import heroImg from "@/assets/industrial-hero.jpg";
 
 export const Route = createFileRoute("/")({ component: Dashboard });
 
-const STATS = [
+const STATS: { icon: string; title: string; value: string; status: string; statusTone: string; iconFilled?: boolean }[] = [
   { icon: "precision_manufacturing", title: "Equipamentos Ativos", value: "48", status: "+3 este mês", statusTone: "success" },
   { icon: "assignment", title: "Solicitações em Aberto", value: "12", status: "4 urgentes", statusTone: "muted" },
   { icon: "report", iconFilled: true, title: "Manutenções Pendentes", value: "05", status: "Atenção necessária", statusTone: "error" },
   { icon: "health_and_safety", title: "Operacional da Frota", value: "92%", status: "Funcionamento estável", statusTone: "success" },
-] as const;
+];
 
 const ALERTS = [
   { type: "CRÍTICO", tone: "error", text: "Escavadeira EX-320 necessita troca imediata do sistema hidráulico.", time: "Há 1 hora" },
