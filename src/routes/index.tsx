@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import heroImg from "@/assets/industrial-hero.jpg";
 
