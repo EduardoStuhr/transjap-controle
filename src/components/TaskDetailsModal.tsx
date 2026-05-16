@@ -1,17 +1,46 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/AppLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  AttachmentUpload,
+  type AttachedFile,
+} from "@/components/AttachmentUpload";
 import { TASK_STATUS_CONFIG, type TaskRecord } from "@/lib/task-types";
+import { useAuthStore } from "@/lib/auth-store";
+import { resolveRecipients } from "@/lib/operational-options";
+import {
+  downloadAttachment,
+  exportTaskAsCsv,
+  exportTaskAsPdf,
+} from "@/lib/task-export";
 
 interface TaskDetailsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   task: TaskRecord | null;
   onAddComment: (taskId: string, comment: { author: string; text: string }) => void;
+  onAddResponse: (
+    taskId: string,
+    response: { text: string; attachments: AttachedFile[] },
+  ) => void;
   onEdit: (task: TaskRecord) => void;
+}
+
+function formatViewedAt(iso?: string) {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 export function TaskDetailsModal({
@@ -19,10 +48,20 @@ export function TaskDetailsModal({
   onOpenChange,
   task,
   onAddComment,
+  onAddResponse,
   onEdit,
 }: TaskDetailsModalProps) {
+  const user = useAuthStore((snapshot) => snapshot.user);
   const [commentAuthor, setCommentAuthor] = useState("");
   const [newComment, setNewComment] = useState("");
+  const [responseText, setResponseText] = useState("");
+  const [responseAttachments, setResponseAttachments] = useState<AttachedFile[]>([]);
+
+  const recipients = useMemo(
+    () => (task ? resolveRecipients(task.assignedTo) : []),
+    [task],
+  );
+  const isRecipient = Boolean(user && recipients.includes(user.name));
 
   if (!task) return null;
 
@@ -35,8 +74,22 @@ export function TaskDetailsModal({
     if (!newComment.trim() || !commentAuthor.trim()) return;
 
     onAddComment(task.id, { author: commentAuthor, text: newComment });
-    toast.success("Comentário adicionado", { description: "Sua resposta foi registrada." });
+    toast.success("Comentário adicionado", { description: "Sua mensagem foi registrada." });
     setNewComment("");
+  };
+
+  const handleSendResponse = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!responseText.trim()) return;
+    onAddResponse(task.id, { text: responseText, attachments: responseAttachments });
+    toast.success("Resposta enviada", { description: `Como ${user?.name}` });
+    setResponseText("");
+    setResponseAttachments([]);
+  };
+
+  const handleDownload = (file: AttachedFile) => {
+    const ok = downloadAttachment(file);
+    if (!ok) toast.error("Arquivo indisponível", { description: file.name });
   };
 
   return (
@@ -45,7 +98,7 @@ export function TaskDetailsModal({
         <DialogHeader className="space-y-1 pb-4 border-b border-border-low">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
                   #{task.id}
                 </span>
@@ -58,26 +111,43 @@ export function TaskDetailsModal({
               </div>
               <DialogTitle className="text-2xl font-black tracking-tight">{task.title}</DialogTitle>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap justify-end">
               <Button size="sm" variant="outline" onClick={() => onEdit(task)}>
                 <Icon name="edit" />
               </Button>
-              <Button size="sm" variant="outline" onClick={() => toast("Compartilhando...")}>
-                <Icon name="share" />
+              <Button
+                size="sm"
+                variant="outline"
+                title="Exportar PDF"
+                onClick={() => exportTaskAsPdf(task)}
+              >
+                <Icon name="picture_as_pdf" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                title="Exportar planilha (.csv)"
+                onClick={() => exportTaskAsCsv(task)}
+              >
+                <Icon name="table_view" />
               </Button>
             </div>
           </div>
         </DialogHeader>
 
         <Tabs defaultValue="details" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="details" className="flex items-center gap-1.5">
               <Icon name="info" className="text-base" />
-              <span className="hidden sm:inline">Detalhes</span>
+              <span className="hidden sm:inline text-xs">Detalhes</span>
+            </TabsTrigger>
+            <TabsTrigger value="responses" className="flex items-center gap-1.5">
+              <Icon name="reply" className="text-base" />
+              <span className="hidden sm:inline text-xs">Respostas</span>
             </TabsTrigger>
             <TabsTrigger value="timeline" className="flex items-center gap-1.5">
               <Icon name="timeline" className="text-base" />
-              <span className="hidden sm:inline">Timeline</span>
+              <span className="hidden sm:inline text-xs">Timeline</span>
             </TabsTrigger>
             <TabsTrigger value="comments" className="flex items-center gap-1.5">
               <Icon name="chat" className="text-base" />
@@ -85,33 +155,52 @@ export function TaskDetailsModal({
             </TabsTrigger>
             <TabsTrigger value="attachments" className="flex items-center gap-1.5">
               <Icon name="attach_file" className="text-base" />
-              <span className="hidden sm:inline">Anexos</span>
+              <span className="hidden sm:inline text-xs">Anexos</span>
             </TabsTrigger>
           </TabsList>
 
           {/* DETAILS TAB */}
           <TabsContent value="details" className="space-y-5 mt-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div>
-                <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2">
-                  Responsável
-                </p>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-black">
-                    {(task.assignedTo || "S")
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")}
-                  </div>
-                  <div>
-                    <p className="font-bold text-on-surface">
-                      {task.assignedTo || "Sem responsável"}
-                    </p>
-                    <p className="text-xs text-on-surface-variant">{task.sector || "Sem setor"}</p>
-                  </div>
-                </div>
-              </div>
+            <div>
+              <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-3">
+                Destinatários ({recipients.length})
+              </p>
+              {recipients.length === 0 ? (
+                <p className="text-sm text-on-surface-variant">Sem destinatários.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {recipients.map((name) => {
+                    const viewedAt = formatViewedAt(task.viewedBy[name]);
+                    return (
+                      <li
+                        key={name}
+                        className="flex items-center justify-between gap-3 bg-surface-highest/50 border border-border-low rounded-lg px-3 py-2"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-black text-sm">
+                            {name[0]?.toUpperCase() ?? "?"}
+                          </div>
+                          <span className="font-bold text-on-surface truncate">{name}</span>
+                        </div>
+                        {viewedAt ? (
+                          <span className="flex items-center gap-1 text-xs font-bold text-status-info">
+                            <Icon name="visibility" className="text-base" />
+                            Visto em {viewedAt}
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-xs font-bold text-on-surface-variant">
+                            <Icon name="visibility_off" className="text-base" />
+                            Não visualizado
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               <div>
                 <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2">
                   Prioridade
@@ -130,6 +219,13 @@ export function TaskDetailsModal({
                   />
                   <p className="font-bold text-on-surface">{task.priority}</p>
                 </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2">
+                  Setor
+                </p>
+                <p className="font-bold text-on-surface">{task.sector || "Sem setor"}</p>
               </div>
 
               <div>
@@ -168,6 +264,108 @@ export function TaskDetailsModal({
                 {task.description || "Sem descrição"}
               </div>
             </div>
+          </TabsContent>
+
+          {/* RESPONSES TAB */}
+          <TabsContent value="responses" className="space-y-5 mt-5">
+            <div className="space-y-3">
+              {task.responses.length === 0 ? (
+                <div className="text-center py-6 text-on-surface-variant">
+                  <Icon name="forum" className="text-4xl mx-auto mb-2 opacity-30" />
+                  <p>Nenhuma resposta ainda</p>
+                </div>
+              ) : (
+                task.responses.map((response) => (
+                  <article
+                    key={response.id}
+                    className="border border-border-low rounded-lg p-4 bg-surface-highest/40"
+                  >
+                    <header className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-black">
+                          {response.author[0]?.toUpperCase() ?? "?"}
+                        </div>
+                        <div>
+                          <p className="font-bold text-sm text-on-surface">{response.author}</p>
+                          <p className="text-[10px] text-on-surface-variant">{response.timestamp}</p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-status-info bg-status-info/10 px-2 py-1 rounded">
+                        Destinatário
+                      </span>
+                    </header>
+                    <p className="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">
+                      {response.text}
+                    </p>
+                    {response.attachments.length > 0 && (
+                      <ul className="mt-3 space-y-1">
+                        {response.attachments.map((file) => (
+                          <li key={file.id}>
+                            <button
+                              type="button"
+                              onClick={() => handleDownload(file)}
+                              className="w-full text-left flex items-center gap-2 px-2 py-1 rounded bg-surface-low hover:bg-surface-high transition-colors"
+                            >
+                              <Icon
+                                name={
+                                  file.type === "image"
+                                    ? "image"
+                                    : file.type === "pdf"
+                                      ? "picture_as_pdf"
+                                      : "description"
+                                }
+                                className="text-primary text-base"
+                              />
+                              <span className="text-xs text-on-surface truncate flex-1">
+                                {file.name}
+                              </span>
+                              <span className="text-[10px] text-on-surface-variant">
+                                {(file.size / 1024).toFixed(0)} KB
+                              </span>
+                              <Icon name="download" className="text-on-surface-variant text-base" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </article>
+                ))
+              )}
+            </div>
+
+            {isRecipient ? (
+              <form
+                onSubmit={handleSendResponse}
+                className="border-t border-border-low pt-4 space-y-3"
+              >
+                <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest">
+                  Responder como {user?.name}
+                </p>
+                <textarea
+                  value={responseText}
+                  onChange={(e) => setResponseText(e.target.value)}
+                  placeholder="Sua resposta para esta solicitação..."
+                  rows={3}
+                  className="w-full px-4 py-3 bg-surface-highest border border-border-low rounded-lg text-on-surface placeholder:text-on-surface-variant/50 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial font-medium resize-none"
+                />
+                <AttachmentUpload
+                  files={responseAttachments}
+                  onFilesChange={setResponseAttachments}
+                  maxFiles={5}
+                  maxSize={20}
+                />
+                <Button type="submit" disabled={!responseText.trim()} className="w-full font-black">
+                  <Icon name="send" />
+                  Enviar Resposta
+                </Button>
+              </form>
+            ) : (
+              <div className="border-t border-border-low pt-4 text-xs text-on-surface-variant">
+                {user
+                  ? "Apenas destinatários da tarefa podem responder."
+                  : "Faça login como destinatário para responder."}
+              </div>
+            )}
           </TabsContent>
 
           {/* TIMELINE TAB */}
@@ -213,7 +411,6 @@ export function TaskDetailsModal({
 
           {/* COMMENTS TAB */}
           <TabsContent value="comments" className="space-y-5 mt-5">
-            {/* Comments List */}
             <div className="space-y-4 max-h-96 overflow-y-auto">
               {task.comments.length > 0 ? (
                 task.comments.map((comment) => (
@@ -231,9 +428,6 @@ export function TaskDetailsModal({
                           <p className="text-[10px] text-on-surface-variant">{comment.timestamp}</p>
                         </div>
                       </div>
-                      <button className="text-on-surface-variant hover:text-primary transition-colors">
-                        <Icon name="more_vert" />
-                      </button>
                     </div>
                     <p className="text-sm text-on-surface leading-relaxed">{comment.text}</p>
                   </div>
@@ -246,8 +440,11 @@ export function TaskDetailsModal({
               )}
             </div>
 
-            {/* Add Comment Form */}
             <form onSubmit={handleAddComment} className="border-t border-border-low pt-4 space-y-3">
+              <p className="text-xs text-on-surface-variant">
+                Comentários são públicos e podem ser feitos por qualquer pessoa. Para respostas
+                oficiais, use a aba <strong>Respostas</strong>.
+              </p>
               <div>
                 <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
                   Autor
@@ -266,7 +463,7 @@ export function TaskDetailsModal({
                 <textarea
                   value={newComment}
                   onChange={(e) => setNewComment(e.target.value)}
-                  placeholder="Digite sua resposta ou atualização..."
+                  placeholder="Digite seu comentário..."
                   rows={3}
                   className="w-full px-4 py-3 bg-surface-highest border border-border-low rounded-lg text-on-surface placeholder:text-on-surface-variant/50 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial font-medium resize-none"
                 />
@@ -320,6 +517,8 @@ export function TaskDetailsModal({
                         </p>
                       </div>
                       <button
+                        type="button"
+                        onClick={() => handleDownload(file)}
                         className="p-1 text-on-surface-variant hover:text-primary transition-colors"
                         title="Baixar"
                       >

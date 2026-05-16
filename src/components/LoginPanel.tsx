@@ -50,7 +50,7 @@ export function LoginPanel({ onSuccess }: LoginPanelProps) {
               onChange={(event) => setUsername(event.target.value)}
               autoComplete="username"
               className="mt-2 w-full px-4 py-3 bg-surface-highest border border-border-low rounded-lg text-on-surface outline-none focus:ring-2 focus:ring-primary"
-              placeholder="Eduardo ou Davi"
+              placeholder="Informe seu usuário"
               required
             />
           </label>
@@ -62,7 +62,7 @@ export function LoginPanel({ onSuccess }: LoginPanelProps) {
               type="password"
               autoComplete="current-password"
               className="mt-2 w-full px-4 py-3 bg-surface-highest border border-border-low rounded-lg text-on-surface outline-none focus:ring-2 focus:ring-primary"
-              placeholder="123"
+              placeholder="Informe sua senha"
               required
             />
           </label>

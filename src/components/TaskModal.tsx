@@ -13,7 +13,7 @@ import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUplo
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   TASK_PRIORITIES,
-  TASK_STATUSES,
+  TASK_SELECTABLE_STATUSES,
   type TaskInput,
   type TaskPriority,
   type TaskStatus,
@@ -30,7 +30,7 @@ export interface TaskModalData extends TaskInput {
   description: string;
   sector: string;
   priority: TaskPriority;
-  assignedTo: string;
+  assignedTo: string[];
   deadline: string;
   equipment: string;
   status: TaskStatus;
@@ -51,19 +51,35 @@ const EMPTY_FORM: TaskModalData = {
   description: "",
   sector: "Operacional",
   priority: "Média",
-  assignedTo: "Todos",
+  assignedTo: ["Todos"],
   deadline: "",
-  equipment: "Escavadeira CAT 320",
+  equipment: "",
   status: "Não visualizado",
   attachments: [],
 };
 
+function normalizeEquipmentOptional(value: string | undefined): string {
+  if (!value) return "";
+  return EQUIPMENT_OPTIONS.includes(value as (typeof EQUIPMENT_OPTIONS)[number]) ? value : "";
+}
+
+function normalizeAssignedToList(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value.filter((name): name is string => typeof name === "string")
+    : typeof value === "string" && value
+      ? [value]
+      : [];
+
+  const filtered = raw.filter((name) => ASSIGNMENT_OPTIONS.includes(name as never));
+  return filtered.length > 0 ? Array.from(new Set(filtered)) : ["Todos"];
+}
+
 function normalizeAssignmentData(data: TaskModalData): TaskModalData {
   return {
     ...data,
-    assignedTo: normalizeOption(data.assignedTo, ASSIGNMENT_OPTIONS, "Todos"),
+    assignedTo: normalizeAssignedToList(data.assignedTo),
     sector: normalizeOption(data.sector, SECTOR_OPTIONS, "Operacional"),
-    equipment: normalizeOption(data.equipment, EQUIPMENT_OPTIONS, "Escavadeira CAT 320"),
+    equipment: normalizeEquipmentOptional(data.equipment),
   };
 }
 
@@ -138,6 +154,13 @@ export function TaskModal({
 
     if (!formData.title.trim()) {
       toast.error("Erro", { description: "Título da tarefa é obrigatório." });
+      return;
+    }
+
+    if (formData.assignedTo.length === 0) {
+      toast.error("Selecione ao menos um destinatário", {
+        description: "A tarefa precisa de pelo menos um destinatário.",
+      });
       return;
     }
 
@@ -233,7 +256,7 @@ export function TaskModal({
                 <div>
                   <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
                     <Icon name="precision_manufacturing" className="inline text-base mr-1" />
-                    Equipamento
+                    Equipamento <span className="text-on-surface-variant/70">(opcional)</span>
                   </label>
                   <select
                     name="equipment"
@@ -241,12 +264,16 @@ export function TaskModal({
                     onChange={handleChange}
                     className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                   >
+                    <option value="">— Sem equipamento —</option>
                     {EQUIPMENT_OPTIONS.map((option) => (
                       <option key={option} value={option}>
                         {option}
                       </option>
                     ))}
                   </select>
+                  <p className="text-[10px] text-on-surface-variant mt-1">
+                    Informe apenas se a tarefa for de manutenção ou específica de um equipamento.
+                  </p>
                 </div>
 
                 <div>
@@ -295,12 +322,15 @@ export function TaskModal({
                     onChange={handleChange}
                     className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                   >
-                    {TASK_STATUSES.map((s) => (
+                    {TASK_SELECTABLE_STATUSES.map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
                     ))}
                   </select>
+                  <p className="text-[10px] text-on-surface-variant mt-1">
+                    “Visualizado” é marcado automaticamente quando um destinatário abre.
+                  </p>
                 </div>
               </div>
             </TabsContent>
@@ -310,20 +340,50 @@ export function TaskModal({
               <div>
                 <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
                   <Icon name="group" className="inline text-base mr-1" />
-                  Atribuir a
+                  Destinatários
                 </label>
-                <select
-                  name="assignedTo"
-                  value={formData.assignedTo}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
-                >
-                  {ASSIGNMENT_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-surface-highest border border-border-low rounded-lg p-3">
+                  {ASSIGNMENT_OPTIONS.map((option) => {
+                    const isAll = option === "Todos";
+                    const allSelected = formData.assignedTo.includes("Todos");
+                    const checked = isAll
+                      ? allSelected
+                      : allSelected || formData.assignedTo.includes(option);
+                    return (
+                      <label
+                        key={option}
+                        className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm font-medium ${
+                          checked ? "bg-primary/10 text-on-surface" : "text-on-surface-variant"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            setFormData((prev) => {
+                              if (isAll) {
+                                return {
+                                  ...prev,
+                                  assignedTo: event.target.checked ? ["Todos"] : [],
+                                };
+                              }
+                              const withoutAll = prev.assignedTo.filter((name) => name !== "Todos");
+                              const next = event.target.checked
+                                ? Array.from(new Set([...withoutAll, option]))
+                                : withoutAll.filter((name) => name !== option);
+                              return { ...prev, assignedTo: next };
+                            });
+                          }}
+                          className="accent-primary"
+                        />
+                        <span>{option}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-on-surface-variant mt-1">
+                  Marque “Todos” para envio em broadcast, ou selecione um ou mais usuários.
+                </p>
               </div>
 
               <div>
@@ -352,8 +412,12 @@ export function TaskModal({
                 </div>
                 <dl className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <dt className="text-on-surface-variant font-semibold">Responsável:</dt>
-                    <dd className="text-on-surface font-bold">{formData.assignedTo}</dd>
+                    <dt className="text-on-surface-variant font-semibold">Destinatários:</dt>
+                    <dd className="text-on-surface font-bold text-right">
+                      {formData.assignedTo.length > 0
+                        ? formData.assignedTo.join(", ")
+                        : "Nenhum"}
+                    </dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-on-surface-variant font-semibold">Setor:</dt>

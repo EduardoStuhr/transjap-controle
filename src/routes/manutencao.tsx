@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
@@ -152,6 +152,15 @@ function Manutencao() {
     });
     setShowMaintenanceModal(true);
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const prefill = window.sessionStorage.getItem("transjap:prefill:equipment");
+    if (!prefill) return;
+    window.sessionStorage.removeItem("transjap:prefill:equipment");
+    setDraft((current) => ({ ...current, equipment: prefill }));
+    setShowMaintenanceModal(true);
+  }, []);
 
   const saveMaintenance = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -547,7 +556,16 @@ function MaintenanceTableRow({
 
   return (
     <tr
+      role="button"
+      tabIndex={0}
+      aria-label={`Abrir manutenção: ${record.equipment}`}
       onClick={() => onOpen(record)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(record);
+        }
+      }}
       className="hover:bg-surface-high transition-colors group cursor-pointer"
     >
       <td className="px-6 py-4">
@@ -764,6 +782,7 @@ function MaintenanceDetailsDialog({
   const [completionComments, setCompletionComments] = useState<Record<string, string>>({});
   const [stepAttachments, setStepAttachments] = useState<Record<string, AttachedFile[]>>({});
   const [waitingPart, setWaitingPart] = useState("");
+  const activeStepIndex = record ? getActiveStepIndex(record.steps) : -1;
 
   return (
     <Dialog open={Boolean(record)} onOpenChange={onOpenChange}>
@@ -797,6 +816,7 @@ function MaintenanceDetailsDialog({
                 <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">
                   Pipeline da manutenção
                 </p>
+                <MaintenanceProgressSummary record={record} activeStepIndex={activeStepIndex} />
                 <div className="space-y-3">
                   {record.steps.map((step, index) => (
                     <MaintenanceStepCard
@@ -804,7 +824,8 @@ function MaintenanceDetailsDialog({
                       index={index}
                       recordId={record.id}
                       step={step}
-                      active={record.currentStepId === step.id}
+                      active={index === activeStepIndex && step.status !== "concluida"}
+                      blocked={index > activeStepIndex && step.status === "pendente"}
                       note={stepNotes[step.id] || ""}
                       comment={completionComments[step.id] || ""}
                       attachments={stepAttachments[step.id] || []}
@@ -934,11 +955,186 @@ function MaintenanceDetailsDialog({
   );
 }
 
+function getActiveStepIndex(steps: MaintenanceStep[]) {
+  const nextIndex = steps.findIndex((step) => step.status !== "concluida");
+  return nextIndex >= 0 ? nextIndex : Math.max(steps.length - 1, 0);
+}
+
+function getStepMeta(step: MaintenanceStep, active: boolean, blocked: boolean) {
+  if (step.status === "concluida") {
+    return {
+      label: "Concluída",
+      shortLabel: "Feita",
+      icon: "check",
+      badgeClass: "bg-status-success/10 text-status-success border-status-success/30",
+      dotClass: "bg-status-success/20 text-status-success border-status-success/30",
+      cardClass: "border-status-success/30 bg-status-success/10",
+    };
+  }
+
+  if (blocked) {
+    return {
+      label: "Aguardando etapa anterior",
+      shortLabel: "Aguarda",
+      icon: "lock",
+      badgeClass: "bg-surface-container text-on-surface-variant border-border-low",
+      dotClass: "bg-surface-container text-on-surface-variant border-border-low",
+      cardClass: "border-border-low bg-surface-highest/60",
+    };
+  }
+
+  if (active && step.status === "em_andamento") {
+    return {
+      label: "Em andamento",
+      shortLabel: "Agora",
+      icon: "play_arrow",
+      badgeClass: "bg-primary/10 text-primary border-primary/30",
+      dotClass: "bg-primary/20 text-primary border-primary/40",
+      cardClass: "border-primary bg-primary/10",
+    };
+  }
+
+  if (active) {
+    return {
+      label: "Pronta para iniciar",
+      shortLabel: "Próxima",
+      icon: "flag",
+      badgeClass: "bg-status-warning/10 text-status-warning border-status-warning/30",
+      dotClass: "bg-status-warning/20 text-status-warning border-status-warning/30",
+      cardClass: "border-status-warning/30 bg-status-warning/10",
+    };
+  }
+
+  return {
+    label: "Pendente",
+    shortLabel: "Pendente",
+    icon: "radio_button_unchecked",
+    badgeClass: "bg-surface-container text-on-surface-variant border-border-low",
+    dotClass: "bg-surface-container text-on-surface-variant border-border-low",
+    cardClass: "border-border-low bg-surface-highest",
+  };
+}
+
+function formatStepDate(value: string) {
+  if (!value) return "Não registrado";
+
+  return new Date(value).toLocaleString("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+function formatStepDuration(minutes: number) {
+  if (!minutes) return "Menos de 1 min";
+  if (minutes < 60) return `${minutes} min`;
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`;
+}
+
+function MaintenanceProgressSummary({
+  record,
+  activeStepIndex,
+}: {
+  record: MaintenanceRecord;
+  activeStepIndex: number;
+}) {
+  const totalSteps = record.steps.length || 1;
+  const completedSteps = record.steps.filter((step) => step.status === "concluida").length;
+  const progress = Math.round((completedSteps / totalSteps) * 100);
+  const activeStep = record.steps[activeStepIndex];
+  const done = completedSteps === totalSteps;
+
+  return (
+    <div className="bg-surface-highest border border-border-low rounded-lg p-4 mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+            Status do fluxo
+          </p>
+          <h3 className="text-lg font-black text-on-surface mt-1">
+            {done ? "Manutenção concluída" : activeStep?.label || "Sem etapa ativa"}
+          </h3>
+          <p className="text-xs text-on-surface-variant mt-1">
+            {completedSteps} de {totalSteps} etapas concluídas
+            {!done && activeStep ? ` · ${getStepMeta(activeStep, true, false).label}` : ""}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border-low bg-surface-container px-4 py-3 text-right">
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+            Progresso
+          </p>
+          <p className="text-2xl font-black text-primary">{progress}%</p>
+        </div>
+      </div>
+
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-surface-container">
+        <div
+          className="h-full rounded-full bg-primary transition-all duration-500"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+        {record.steps.map((step, index) => (
+          <MaintenanceProgressNode
+            key={step.id}
+            step={step}
+            index={index}
+            active={index === activeStepIndex && step.status !== "concluida"}
+            blocked={index > activeStepIndex && step.status === "pendente"}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MaintenanceProgressNode({
+  step,
+  index,
+  active,
+  blocked,
+}: {
+  step: MaintenanceStep;
+  index: number;
+  active: boolean;
+  blocked: boolean;
+}) {
+  const meta = getStepMeta(step, active, blocked);
+
+  return (
+    <div className={`rounded-lg border p-3 min-h-28 ${meta.cardClass}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span
+          className={`h-7 w-7 shrink-0 rounded-full border flex items-center justify-center ${meta.dotClass}`}
+        >
+          <Icon name={meta.icon} className="text-sm" />
+        </span>
+        <span
+          className={`border rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest ${meta.badgeClass}`}
+        >
+          {meta.shortLabel}
+        </span>
+      </div>
+      <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+        Etapa {index + 1}
+      </p>
+      <p className="mt-1 text-xs font-bold leading-snug text-on-surface break-words">
+        {step.label}
+      </p>
+      <p className="mt-2 text-[11px] text-on-surface-variant">Prazo: {step.slaHours}h</p>
+    </div>
+  );
+}
+
 function MaintenanceStepCard({
   index,
   recordId,
   step,
   active,
+  blocked,
   note,
   comment,
   attachments,
@@ -950,6 +1146,7 @@ function MaintenanceStepCard({
   recordId: string;
   step: MaintenanceStep;
   active: boolean;
+  blocked: boolean;
   note: string;
   comment: string;
   attachments: AttachedFile[];
@@ -959,89 +1156,174 @@ function MaintenanceStepCard({
 }) {
   const delayedHours = getStepDelay(step);
   const isDelayed = delayedHours > 0;
+  const meta = getStepMeta(step, active, blocked);
+  const canStart = active && step.status === "pendente";
+  const canComplete = active && step.status === "em_andamento";
+  const isCompleted = step.status === "concluida";
 
   return (
-    <article
-      className={`border rounded-lg p-4 ${
-        active ? "border-primary bg-primary/10" : "border-border-low bg-surface-highest"
-      }`}
-    >
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div>
-          <p className="font-black text-on-surface">
-            {index + 1}. {step.label}
-          </p>
-          <p className="text-xs text-on-surface-variant mt-1">
-            SLA: {step.slaHours}h · Status: {step.status.replace("_", " ")}
-            {step.durationMinutes > 0 ? ` · Duração: ${step.durationMinutes} min` : ""}
-          </p>
-          {isDelayed && (
-            <p className="text-xs font-bold text-status-error mt-1">
-              Gargalo: {delayedHours.toFixed(1)}h acima do SLA
+    <article className={`border rounded-lg p-4 transition-colors ${meta.cardClass}`}>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <span
+            className={`h-10 w-10 shrink-0 rounded-lg border flex items-center justify-center ${meta.dotClass}`}
+          >
+            <Icon name={meta.icon} />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-black text-on-surface break-words">{step.label}</p>
+              <span
+                className={`border rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest ${meta.badgeClass}`}
+              >
+                {meta.label}
+              </span>
+            </div>
+            <p className="text-xs text-on-surface-variant mt-1">
+              Etapa {index + 1} do fluxo · prazo máximo: {step.slaHours}h
+              {step.durationMinutes > 0
+                ? ` · duração: ${formatStepDuration(step.durationMinutes)}`
+                : ""}
             </p>
-          )}
+          </div>
         </div>
-        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
-          SLA h
-          <input
-            type="number"
-            min="1"
-            value={step.slaHours}
-            onChange={(event) =>
-              maintenanceActions.updateStepSla(recordId, step.id, Number(event.target.value))
-            }
-            className="mt-1 w-20 px-2 py-1 bg-surface-container border border-border-low rounded text-sm"
-          />
+        <label className="w-full sm:w-52 text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+          Prazo da etapa
+          <span className="mt-2 flex items-center rounded-lg border border-border-low bg-surface-container focus-within:ring-2 focus-within:ring-primary">
+            <input
+              type="number"
+              min="1"
+              value={step.slaHours}
+              aria-label={`Prazo em horas para ${step.label}`}
+              onChange={(event) =>
+                maintenanceActions.updateStepSla(recordId, step.id, Number(event.target.value))
+              }
+              className="w-full min-w-0 bg-transparent px-3 py-2 text-sm text-on-surface outline-none"
+            />
+            <span className="pr-3 text-xs font-bold normal-case tracking-normal text-on-surface-variant">
+              horas
+            </span>
+          </span>
+          <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-on-surface-variant/80">
+            Tempo máximo antes de virar atraso.
+          </span>
         </label>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-        <textarea
-          value={note}
-          onChange={(event) => onNoteChange(event.target.value)}
-          placeholder="Observação para iniciar etapa"
-          rows={2}
-          className="px-3 py-2 bg-surface-container border border-border-low rounded text-sm resize-none"
-        />
-        <textarea
-          value={comment}
-          onChange={(event) => onCommentChange(event.target.value)}
-          placeholder="Comentário ao concluir etapa"
-          rows={2}
-          className="px-3 py-2 bg-surface-container border border-border-low rounded text-sm resize-none"
-        />
-      </div>
+      {isDelayed && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs font-bold text-status-error">
+          <Icon name="warning" className="text-base" />
+          <span>{delayedHours.toFixed(1)}h acima do prazo desta etapa.</span>
+        </div>
+      )}
 
-      <div className="mt-3">
-        <AttachmentUpload
-          files={attachments}
-          onFilesChange={onAttachmentsChange}
-          maxFiles={4}
-          maxSize={20}
-        />
-      </div>
+      {canStart && (
+        <div className="mt-4 space-y-3">
+          <label className="block text-xs font-black uppercase tracking-widest text-on-surface-variant">
+            Observação de abertura
+            <textarea
+              value={note}
+              onChange={(event) => onNoteChange(event.target.value)}
+              placeholder="Ex.: equipamento recebido, sintoma percebido ou prioridade"
+              rows={2}
+              className="mt-2 w-full px-3 py-2 bg-surface-container border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => maintenanceActions.startStep(recordId, step.id, note)}
+            className="w-full sm:w-auto gap-2"
+          >
+            <Icon name="play_arrow" />
+            Iniciar etapa
+          </Button>
+        </div>
+      )}
 
-      <div className="flex flex-col sm:flex-row gap-2 mt-3">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={step.status === "concluida"}
-          onClick={() => maintenanceActions.startStep(recordId, step.id, note)}
-          className="gap-2"
-        >
-          <Icon name="play_arrow" />
-          Iniciar etapa
-        </Button>
-        <Button
-          type="button"
-          disabled={step.status === "concluida" || !comment.trim()}
-          onClick={() => maintenanceActions.completeStep(recordId, step.id, comment, attachments)}
-          className="gap-2"
-        >
-          <Icon name="check" />
-          Concluir etapa
-        </Button>
-      </div>
+      {canComplete && (
+        <div className="mt-4 space-y-3">
+          {step.startNote && (
+            <p className="rounded-lg bg-surface-container px-3 py-2 text-sm text-on-surface-variant">
+              <span className="font-bold text-on-surface">Abertura:</span> {step.startNote}
+            </p>
+          )}
+          <label className="block text-xs font-black uppercase tracking-widest text-on-surface-variant">
+            Comentário de conclusão
+            <textarea
+              value={comment}
+              onChange={(event) => onCommentChange(event.target.value)}
+              placeholder="Resumo do que foi feito nesta etapa"
+              rows={3}
+              className="mt-2 w-full px-3 py-2 bg-surface-container border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+          </label>
+          <AttachmentUpload
+            files={attachments}
+            onFilesChange={onAttachmentsChange}
+            maxFiles={4}
+            maxSize={20}
+          />
+          <Button
+            type="button"
+            disabled={!canComplete}
+            onClick={() => {
+              maintenanceActions.completeStep(recordId, step.id, comment, attachments);
+              onCommentChange("");
+              onAttachmentsChange([]);
+            }}
+            className="w-full sm:w-auto gap-2"
+          >
+            <Icon name="check" />
+            Concluir etapa
+          </Button>
+        </div>
+      )}
+
+      {isCompleted && (
+        <div className="mt-4 space-y-2 text-sm text-on-surface-variant">
+          <p>
+            <span className="font-bold text-on-surface">Início:</span>{" "}
+            {formatStepDate(step.startedAt)}
+            {step.startedBy ? ` por ${step.startedBy}` : ""}
+          </p>
+          <p>
+            <span className="font-bold text-on-surface">Conclusão:</span>{" "}
+            {formatStepDate(step.completedAt)}
+            {step.completedBy ? ` por ${step.completedBy}` : ""}
+          </p>
+          {step.startNote && (
+            <p>
+              <span className="font-bold text-on-surface">Abertura:</span> {step.startNote}
+            </p>
+          )}
+          {step.completionComment && (
+            <p>
+              <span className="font-bold text-on-surface">Conclusão:</span> {step.completionComment}
+            </p>
+          )}
+          {step.attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {step.attachments.map((file) => (
+                <span
+                  key={file.id}
+                  className="inline-flex items-center gap-1 rounded-full bg-surface-container px-2 py-1 text-xs font-bold text-on-surface"
+                >
+                  <Icon name="attach_file" className="text-sm" />
+                  {file.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {blocked && (
+        <div className="mt-4 flex items-start gap-2 rounded-lg bg-surface-container px-3 py-2 text-sm text-on-surface-variant">
+          <Icon name="lock" className="text-base" />
+          <span>Aguardando a etapa atual terminar.</span>
+        </div>
+      )}
     </article>
   );
 }

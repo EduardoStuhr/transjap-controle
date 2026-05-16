@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AttachedFile } from "@/components/AttachmentUpload";
 import { toast } from "sonner";
+import type { Equipment } from "@/lib/equipment-store";
 
 export interface MaintenanceRecord {
   id: string;
@@ -16,27 +17,19 @@ export interface MaintenanceRecord {
   description: string;
 }
 
-export interface EquipmentDetail {
-  id: string;
-  model: string;
-  icon: string;
-  hours: number;
-  status: "Operação" | "Manutenção" | "Parado";
-  tone: "success" | "warning" | "error";
-  location: string;
-  lastMaintenance: string;
-  seriesNumber?: string;
-  acquisitionDate?: string;
-  manufacturer?: string;
+export type EquipmentDetail = Equipment & {
   maintenanceRecords?: MaintenanceRecord[];
   attachments?: AttachedFile[];
   photos?: string[];
-}
+};
 
 interface EquipmentDetailsPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   equipment: EquipmentDetail | null;
+  onEdit?: (equipment: Equipment) => void;
+  onScheduleMaintenance?: (equipmentName: string) => void;
+  onCreateTask?: (equipmentName: string) => void;
 }
 
 const TONE_COLORS = {
@@ -49,6 +42,9 @@ export function EquipmentDetailsPanel({
   open,
   onOpenChange,
   equipment,
+  onEdit,
+  onScheduleMaintenance,
+  onCreateTask,
 }: EquipmentDetailsPanelProps) {
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -90,7 +86,14 @@ export function EquipmentDetailsPanel({
               </div>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => toast("Editando equipamento...")}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (onEdit) onEdit(equipment);
+                  else toast("Editando equipamento...");
+                }}
+              >
                 <Icon name="edit" />
               </Button>
             </div>
@@ -196,7 +199,10 @@ export function EquipmentDetailsPanel({
             <div className="space-y-2 pt-4 border-t border-border-low">
               <Button
                 className="w-full font-black"
-                onClick={() => toast("Agendando manutenção...")}
+                onClick={() => {
+                  if (onScheduleMaintenance) onScheduleMaintenance(equipment.model);
+                  else toast("Agendando manutenção...");
+                }}
               >
                 <Icon name="calendar_today" />
                 Agendar Manutenção
@@ -204,7 +210,10 @@ export function EquipmentDetailsPanel({
               <Button
                 variant="outline"
                 className="w-full font-black"
-                onClick={() => toast("Criando tarefa para este equipamento...")}
+                onClick={() => {
+                  if (onCreateTask) onCreateTask(equipment.model);
+                  else toast("Criando tarefa para este equipamento...");
+                }}
               >
                 <Icon name="add_task" />
                 Criar Tarefa

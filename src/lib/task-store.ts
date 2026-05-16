@@ -5,9 +5,13 @@ import {
   type TaskComment,
   type TaskInput,
   type TaskRecord,
+  type TaskResponse,
   type TaskStatus,
   type TimelineEvent,
 } from "@/lib/task-types";
+import { getCurrentUser } from "@/lib/auth-store";
+import { resolveRecipients } from "@/lib/operational-options";
+import type { AttachedFile } from "@/components/AttachmentUpload";
 
 type TaskState = {
   tasks: TaskRecord[];
@@ -45,19 +49,50 @@ function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
 }
 
-function sanitizeAttachments(attachments: TaskInput["attachments"]) {
-  return attachments.map(({ file, ...attachment }) => attachment);
+function sanitizeAttachments(attachments: AttachedFile[]) {
+  return attachments.map(({ file: _file, ...attachment }) => attachment);
 }
 
-function normalizeTask(task: Partial<TaskRecord> & { equip?: string; resp?: string }): TaskRecord {
+function normalizeAssignedTo(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((name): name is string => typeof name === "string");
+  if (typeof value === "string" && value.trim()) return [value];
+  return [];
+}
+
+function normalizeViewedBy(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") return {};
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, timestamp]) => typeof timestamp === "string",
+  ) as Array<[string, string]>;
+  return Object.fromEntries(entries);
+}
+
+function normalizeResponses(value: unknown): TaskResponse[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => {
+    const r = (entry || {}) as Partial<TaskResponse>;
+    return {
+      id: r.id || newId("RS"),
+      author: r.author || "",
+      text: r.text || "",
+      attachments: sanitizeAttachments(Array.isArray(r.attachments) ? r.attachments : []),
+      timestamp: r.timestamp || displayDate(),
+    };
+  });
+}
+
+function normalizeTask(
+  task: Partial<TaskRecord> & { equip?: string; resp?: string; assignedTo?: unknown },
+): TaskRecord {
   const createdAt = task.createdAt || displayDate();
+  const assignedTo = normalizeAssignedTo(task.assignedTo ?? task.resp);
 
   return {
     id: task.id || newId("TK"),
     title: task.title || "",
     description: task.description || "",
     equipment: task.equipment || task.equip || "",
-    assignedTo: task.assignedTo || task.resp || "",
+    assignedTo,
     sector: task.sector || "",
     priority: normalizeTaskPriority(task.priority),
     deadline: task.deadline || "",
@@ -69,6 +104,8 @@ function normalizeTask(task: Partial<TaskRecord> & { equip?: string; resp?: stri
       text: comment.text || "",
       timestamp: comment.timestamp || createdAt,
     })),
+    responses: normalizeResponses(task.responses),
+    viewedBy: normalizeViewedBy(task.viewedBy),
     timeline: (task.timeline || []).map((event) => ({
       id: event.id || newId("EV"),
       timestamp: event.timestamp || createdAt,
@@ -127,6 +164,11 @@ function ensureHydrated() {
   state = readStorage();
 }
 
+function sanitizeAssignedTo(value: string[]): string[] {
+  const cleaned = value.map((name) => name.trim()).filter(Boolean);
+  return Array.from(new Set(cleaned));
+}
+
 function taskFromInput(input: TaskInput): TaskRecord {
   const now = nowIso();
 
@@ -135,13 +177,15 @@ function taskFromInput(input: TaskInput): TaskRecord {
     title: input.title.trim(),
     description: input.description.trim(),
     equipment: input.equipment.trim(),
-    assignedTo: input.assignedTo.trim(),
+    assignedTo: sanitizeAssignedTo(input.assignedTo),
     sector: input.sector.trim(),
     priority: input.priority,
     deadline: input.deadline,
     status: input.status,
     attachments: sanitizeAttachments(input.attachments),
     comments: [],
+    responses: [],
+    viewedBy: {},
     timeline: [],
     createdAt: displayDate(),
     updatedAt: now,
@@ -180,7 +224,7 @@ export const taskActions = {
           title: input.title.trim(),
           description: input.description.trim(),
           equipment: input.equipment.trim(),
-          assignedTo: input.assignedTo.trim(),
+          assignedTo: sanitizeAssignedTo(input.assignedTo),
           sector: input.sector.trim(),
           priority: input.priority,
           deadline: input.deadline,
@@ -197,19 +241,89 @@ export const taskActions = {
   },
 
   markTaskViewed(id: string) {
+    const user = getCurrentUser();
     setState((current) => ({
       ...current,
-      tasks: current.tasks.map((task) =>
-        task.id === id
-          ? {
-              ...task,
-              status: task.status === "Não visualizado" ? "Visualizado" : task.status,
-              viewed: true,
-              updatedAt: nowIso(),
-            }
-          : task,
-      ),
+      tasks: current.tasks.map((task) => {
+        if (task.id !== id) return task;
+
+        const recipients = resolveRecipients(task.assignedTo);
+        const isRecipient = user ? recipients.includes(user.name) : false;
+        if (!isRecipient) return task;
+
+        if (task.viewedBy[user!.name]) {
+          return { ...task, viewed: true };
+        }
+
+        const nextViewedBy = { ...task.viewedBy, [user!.name]: nowIso() };
+        const shouldFlipStatus = task.status === "Não visualizado";
+        const nextStatus: TaskStatus = shouldFlipStatus ? "Visualizado" : task.status;
+
+        return {
+          ...task,
+          status: nextStatus,
+          viewedBy: nextViewedBy,
+          viewed: true,
+          timeline: shouldFlipStatus
+            ? [
+                {
+                  id: newId("EV"),
+                  timestamp: displayDate(),
+                  action: `Visualizado por ${user!.name}`,
+                  actor: user!.name,
+                  status: nextStatus,
+                },
+                ...task.timeline,
+              ]
+            : task.timeline,
+          updatedAt: nowIso(),
+        };
+      }),
     }));
+  },
+
+  addResponse(
+    taskId: string,
+    response: { text: string; attachments: AttachedFile[] },
+  ): TaskResponse | null {
+    const user = getCurrentUser();
+    const text = response.text.trim();
+    if (!user || !text) return null;
+
+    const created: TaskResponse = {
+      id: newId("RS"),
+      author: user.name,
+      text,
+      attachments: sanitizeAttachments(response.attachments),
+      timestamp: displayDate(),
+    };
+
+    setState((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => {
+        if (task.id !== taskId) return task;
+
+        const recipients = resolveRecipients(task.assignedTo);
+        if (!recipients.includes(user.name)) return task;
+
+        return {
+          ...task,
+          responses: [created, ...task.responses],
+          timeline: [
+            {
+              id: newId("EV"),
+              timestamp: displayDate(),
+              action: `Resposta enviada por ${user.name}`,
+              actor: user.name,
+            },
+            ...task.timeline,
+          ],
+          updatedAt: nowIso(),
+        };
+      }),
+    }));
+
+    return created;
   },
 
   addComment(taskId: string, comment: Pick<TaskComment, "author" | "text">) {

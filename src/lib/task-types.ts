@@ -12,6 +12,12 @@ export const TASK_STATUSES = [
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
+// Statuses that the user can pick in the create/edit form.
+// "Visualizado" is computed automatically when a recipient opens the task.
+export const TASK_SELECTABLE_STATUSES = TASK_STATUSES.filter(
+  (status) => status !== "Visualizado",
+) as readonly TaskStatus[];
+
 export const TASK_PRIORITIES = ["Baixa", "Média", "Alta", "Urgente"] as const;
 
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
@@ -31,18 +37,28 @@ export type TimelineEvent = {
   status?: TaskStatus;
 };
 
+export type TaskResponse = {
+  id: string;
+  author: string;
+  text: string;
+  attachments: AttachedFile[];
+  timestamp: string;
+};
+
 export type TaskRecord = {
   id: string;
   title: string;
   description: string;
   equipment: string;
-  assignedTo: string;
+  assignedTo: string[];
   sector: string;
   priority: TaskPriority;
   deadline: string;
   status: TaskStatus;
   attachments: AttachedFile[];
   comments: TaskComment[];
+  responses: TaskResponse[];
+  viewedBy: Record<string, string>;
   timeline: TimelineEvent[];
   createdAt: string;
   updatedAt: string;
@@ -54,7 +70,7 @@ export type TaskInput = {
   description: string;
   sector: string;
   priority: TaskPriority;
-  assignedTo: string;
+  assignedTo: string[];
   deadline: string;
   equipment: string;
   status: TaskStatus;

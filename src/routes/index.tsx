@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { getUrgencyLevel } from "@/lib/urgency";
@@ -10,6 +10,7 @@ import { useInventoryStore } from "@/lib/inventory-store";
 export const Route = createFileRoute("/")({ component: Dashboard });
 
 function Dashboard() {
+  const navigate = useNavigate();
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
   const pendingRequests = useTaskStore((snapshot) => snapshot.pendingRequests);
   const maintenances = useMaintenanceStore((snapshot) => snapshot.records);
@@ -38,6 +39,24 @@ function Dashboard() {
       acc[movement.equipment] = (acc[movement.equipment] || 0) + movement.costImpact;
       return acc;
     }, {});
+  const weekDays = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
+  const today = new Date();
+  const fleetData = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - i));
+    const dayLabel = weekDays[date.getDay()];
+    const dateStr = date.toLocaleDateString("pt-BR");
+
+    const activeOnDay = maintenances.filter(
+      (m) => m.status !== "Concluída" && m.createdAt <= dateStr,
+    ).length;
+    const total = Math.max(5, maintenances.length);
+    const downPct = Math.min(100, Math.round((activeOnDay / total) * 100));
+    const upPct = 100 - downPct;
+
+    return { d: dayLabel, up: upPct, down: downPct };
+  });
+
   const stats = [
     {
       icon: "assignment",
@@ -169,15 +188,7 @@ function Dashboard() {
             <p className="text-xs text-on-surface-variant mt-1 font-medium">Últimos 7 dias</p>
           </div>
           <div className="flex items-end gap-2 h-48 w-full">
-            {[
-              { d: "SEG", up: 90, down: 10 },
-              { d: "TER", up: 84, down: 16 },
-              { d: "QUA", up: 96, down: 4 },
-              { d: "QUI", up: 78, down: 22 },
-              { d: "SEX", up: 88, down: 12 },
-              { d: "SÁB", up: 95, down: 5 },
-              { d: "DOM", up: 98, down: 2 },
-            ].map((b) => (
+            {fleetData.map((b) => (
               <div key={b.d} className="flex-1 flex flex-col gap-1 items-center group">
                 <div
                   className="w-full bg-surface-highest group-hover:bg-status-error/40 transition-colors"
@@ -225,7 +236,7 @@ function Dashboard() {
                     type="button"
                     onClick={() =>
                       toast(task.title, {
-                        description: `${task.assignedTo || "Sem responsável"} · ${urgency.timeRemaining}`,
+                        description: `${task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"} · ${urgency.timeRemaining}`,
                       })
                     }
                     className="w-full p-3 bg-surface-highest border-l-4 border-status-error shadow-sm transition-industrial hover:shadow-md hover:translate-x-0.5 text-left group rounded"
@@ -242,7 +253,9 @@ function Dashboard() {
                       {task.title}
                     </p>
                     <p className="text-[10px] text-on-surface-variant mt-1">
-                      {task.assignedTo || "Sem responsável"}
+                      {task.assignedTo.length > 0
+                        ? task.assignedTo.join(", ")
+                        : "Sem destinatário"}
                     </p>
                   </button>
                 );
@@ -257,7 +270,7 @@ function Dashboard() {
           <Button
             variant="outline"
             className="w-full mt-4 border-status-error/30 text-status-error hover:bg-status-error hover:text-white font-black text-xs py-2"
-            onClick={() => toast("Alertas", { description: "Abrindo dashboard completo..." })}
+            onClick={() => navigate({ to: "/agenda" })}
           >
             Ver Todos
           </Button>

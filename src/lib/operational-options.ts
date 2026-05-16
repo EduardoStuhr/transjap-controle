@@ -2,6 +2,17 @@ import { AUTH_USER_OPTIONS } from "@/lib/auth-store";
 
 export const ASSIGNMENT_OPTIONS = ["Todos", ...AUTH_USER_OPTIONS.map((user) => user.name)] as const;
 
+const ALL_USER_NAMES = AUTH_USER_OPTIONS.map((user) => user.name);
+
+/**
+ * Resolve a tasks's assignedTo list into the actual recipient names.
+ * "Todos" expands to every registered auth user.
+ */
+export function resolveRecipients(assignedTo: readonly string[]): string[] {
+  if (assignedTo.includes("Todos")) return ALL_USER_NAMES;
+  return assignedTo.filter((name) => name && name !== "Todos");
+}
+
 export const SECTOR_OPTIONS = [
   "Operacional",
   "Manutenção",

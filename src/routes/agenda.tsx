@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { lazy, memo, Suspense, useCallback, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,17 @@ function Agenda() {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [filter, setFilter] = useState<TaskFilter>("Todas");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [prefillEquipment, setPrefillEquipment] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const equipment = window.sessionStorage.getItem("transjap:prefill:task-equipment");
+    if (!equipment) return;
+    window.sessionStorage.removeItem("transjap:prefill:task-equipment");
+    window.localStorage.removeItem("transjap:fleet-command:task-draft:create");
+    setPrefillEquipment(equipment);
+    setShowCreateModal(true);
+  }, []);
 
   const filteredTasks = useMemo(
     () => tasks.filter((task) => filter === "Todas" || task.status === filter),
@@ -199,10 +210,17 @@ function Agenda() {
         {showCreateModal && (
           <LazyTaskModal
             open={showCreateModal}
-            onOpenChange={setShowCreateModal}
-            onSubmit={handleCreateTask}
+            onOpenChange={(open) => {
+              setShowCreateModal(open);
+              if (!open) setPrefillEquipment(null);
+            }}
+            onSubmit={(data) => {
+              handleCreateTask(data);
+              setPrefillEquipment(null);
+            }}
             mode="create"
             draftKey="transjap:fleet-command:task-draft:create"
+            initialData={prefillEquipment ? { equipment: prefillEquipment } : undefined}
           />
         )}
         {editingTask && (
@@ -223,6 +241,7 @@ function Agenda() {
             onOpenChange={setShowDetailsModal}
             task={selectedTask}
             onAddComment={taskActions.addComment}
+            onAddResponse={taskActions.addResponse}
             onEdit={handleEditFromDetails}
           />
         )}
@@ -247,7 +266,7 @@ const PendingRequestCard = memo(function PendingRequestCard({
         <p className="text-xs text-on-surface-variant">{request.description}</p>
         <div className="flex gap-2 mt-2 text-xs">
           <span className="text-on-surface-variant font-medium">
-            {request.assignedTo || "Sem responsável"}
+            {request.assignedTo.length > 0 ? request.assignedTo.join(", ") : "Sem destinatário"}
           </span>
           <span className="text-on-surface-variant font-medium">•</span>
           <span className="text-on-surface-variant font-medium">
@@ -343,7 +362,7 @@ const TaskListItem = memo(function TaskListItem({
           <div className="flex flex-wrap gap-3 mt-2 text-xs text-on-surface-variant">
             <span className="flex items-center gap-1">
               <Icon name="person" className="text-base" />
-              {task.assignedTo || "Sem responsável"}
+              {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}
             </span>
             <span className="flex items-center gap-1">
               <Icon name="domain" className="text-base" />
@@ -387,7 +406,8 @@ const TaskGridCard = memo(function TaskGridCard({
       </h3>
       <div className="space-y-2 text-xs text-on-surface-variant mb-4">
         <p className="truncate">
-          <strong>Atribuído a:</strong> {task.assignedTo || "Sem responsável"}
+          <strong>Destinatários:</strong>{" "}
+          {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}
         </p>
         <p className="truncate">
           <strong>Setor:</strong> {task.sector || "Sem setor"}

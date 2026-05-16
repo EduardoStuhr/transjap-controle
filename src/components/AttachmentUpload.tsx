@@ -8,6 +8,7 @@ export type AttachedFile = {
   name: string;
   type: "image" | "pdf" | "document";
   size: number;
+  mimeType?: string;
   url?: string;
   preview?: string;
   file?: File;
@@ -21,12 +22,15 @@ interface AttachmentUploadProps {
   accept?: string;
 }
 
+export const DEFAULT_ATTACHMENT_ACCEPT =
+  "image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt";
+
 export function AttachmentUpload({
   files,
   onFilesChange,
   maxFiles = 10,
   maxSize = 50,
-  accept = "image/*,application/pdf,.doc,.docx",
+  accept = DEFAULT_ATTACHMENT_ACCEPT,
 }: AttachmentUploadProps) {
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,7 +52,7 @@ export function AttachmentUpload({
     }
   };
 
-  const readImagePreview = (file: File) =>
+  const readAsDataURL = (file: File) =>
     new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result?.toString() || "");
@@ -68,11 +72,7 @@ export function AttachmentUpload({
 
     const id = `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const type = getFileType(file);
-
-    let preview: string | undefined;
-    if (type === "image") {
-      preview = await readImagePreview(file);
-    }
+    const dataUrl = await readAsDataURL(file);
 
     toast.success("Arquivo anexado", { description: file.name });
 
@@ -81,8 +81,9 @@ export function AttachmentUpload({
       name: file.name,
       type,
       size: file.size,
-      preview,
-      url: preview,
+      mimeType: file.type,
+      preview: type === "image" ? dataUrl : undefined,
+      url: dataUrl,
     };
   };
 

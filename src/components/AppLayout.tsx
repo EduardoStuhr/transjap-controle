@@ -1,12 +1,21 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useNavigate } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { authActions, useAuthStore } from "@/lib/auth-store";
 import { getInventoryAlerts, useInventoryStore } from "@/lib/inventory-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
+import { useMaintenanceStore } from "@/lib/maintenance-store";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: "dashboard" },
@@ -37,6 +46,35 @@ export function Icon({
 export function AppLayout({ children, title }: { children: ReactNode; title?: string }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const tasks = useTaskStore((s) => s.tasks);
+  const maintenances = useMaintenanceStore((s) => s.records);
+  const results = useMemo(() => {
+    if (query.length < 2) return [];
+    const needle = query.toLowerCase();
+    return [
+      ...tasks
+        .filter((t) => t.title.toLowerCase().includes(needle))
+        .slice(0, 4)
+        .map((t) => ({
+          key: `task-${t.id}`,
+          type: "Tarefa",
+          label: t.title,
+          to: "/agenda" as const,
+        })),
+      ...maintenances
+        .filter((m) => m.equipment.toLowerCase().includes(needle))
+        .slice(0, 3)
+        .map((m) => ({
+          key: `maint-${m.id}`,
+          type: "Manutenção",
+          label: m.equipment,
+          to: "/manutencao" as const,
+        })),
+    ];
+  }, [maintenances, query, tasks]);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const user = useAuthStore((snapshot) => snapshot.user);
   const criticalCount = useTaskStore(
@@ -89,27 +127,58 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 </span>
               </div>
             )}
-            <form
-              className="relative w-full max-w-md hidden md:block"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const v = (new FormData(e.currentTarget).get("q") || "").toString();
-                toast.message("Busca", {
-                  description: v ? `Procurando por "${v}"…` : "Digite algo para buscar.",
-                });
-              }}
-            >
+            <div className="relative w-full max-w-md hidden md:block">
               <Icon
                 name="search"
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
               />
               <input
                 name="q"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setSearchOpen(true);
+                }}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
                 className="w-full bg-surface-highest/50 border border-border-low rounded text-sm py-2 pl-10 pr-4 outline-none focus:ring-1 focus:ring-primary focus:border-primary text-on-surface placeholder:text-on-surface-variant/40 transition-industrial"
                 placeholder="Buscar equipamentos, tarefas, séries..."
                 type="text"
               />
-            </form>
+              {searchOpen && query.length >= 2 && (
+                <div className="absolute left-0 right-0 top-full mt-2 bg-surface-container border border-border-low rounded shadow-industrial-lg z-50 overflow-hidden">
+                  {results.length === 0 ? (
+                    <p className="px-4 py-3 text-xs text-on-surface-variant font-medium">
+                      Nenhum resultado encontrado
+                    </p>
+                  ) : (
+                    <ul>
+                      {results.map((r) => (
+                        <li key={r.key}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              navigate({ to: r.to });
+                              setSearchOpen(false);
+                              setQuery("");
+                            }}
+                            className="w-full text-left px-4 py-2 hover:bg-surface-highest flex items-center justify-between gap-3 transition-colors"
+                          >
+                            <span className="text-sm font-medium text-on-surface truncate">
+                              {r.label}
+                            </span>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant flex-shrink-0">
+                              {r.type}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
             <h2 className="md:hidden text-xl font-black text-primary tracking-tighter uppercase">
               TransJap
             </h2>
@@ -133,7 +202,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
             <button
               type="button"
               className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full transition-industrial"
-              onClick={() => toast("Configurações", { description: "Preferências do sistema." })}
+              onClick={() => setShowConfig(true)}
             >
               <Icon name="settings" />
             </button>
@@ -168,14 +237,14 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           {children}
         </main>
       </div>
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 grid grid-cols-4 border-t border-border-low bg-surface-low/95 backdrop-blur px-2 py-2">
-        {NAV.slice(0, 4).map((item) => {
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex overflow-x-auto scrollbar-hide border-t border-border-low bg-surface-low/95 backdrop-blur px-2 py-2 gap-1">
+        {NAV.map((item) => {
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link
               key={item.to}
               to={item.to}
-              className={`flex flex-col items-center gap-1 rounded py-1 text-[10px] font-black uppercase ${
+              className={`flex flex-col items-center gap-1 rounded px-3 py-1 text-[10px] font-black uppercase min-w-fit ${
                 active ? "text-primary" : "text-on-surface-variant"
               }`}
             >
@@ -185,11 +254,44 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           );
         })}
       </nav>
+
+      <Dialog open={showConfig} onOpenChange={setShowConfig}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Configurações do Sistema</DialogTitle>
+            <DialogDescription>Configurações avançadas em breve.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Tema
+              <select
+                defaultValue="system"
+                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="system">Sistema</option>
+                <option value="light">Claro</option>
+                <option value="dark">Escuro</option>
+              </select>
+            </label>
+            <p className="text-[11px] text-on-surface-variant">
+              Seleção visual — a troca de tema entrará no ar em uma próxima atualização.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConfig(false)}>
+              Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+  const navigate = useNavigate();
   return (
     <>
       <div className="p-8">

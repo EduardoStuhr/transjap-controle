@@ -1,114 +1,37 @@
 import { toast } from "sonner";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
-import { useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   EquipmentDetailsPanel,
   type EquipmentDetail,
-  type MaintenanceRecord,
 } from "@/components/EquipmentDetailsPanel";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  equipmentActions,
+  useEquipmentStore,
+  type Equipment,
+  type EquipmentDraft,
+  type EquipmentStatus,
+  type EquipmentTone,
+} from "@/lib/equipment-store";
 
 export const Route = createFileRoute("/equipamentos")({ component: Equipamentos });
-
-const FLEET_DATA = [
-  {
-    id: "FR-001",
-    model: "Escavadeira CAT 320",
-    icon: "snowmobile",
-    hours: 8420,
-    status: "Operação" as const,
-    tone: "success" as const,
-    location: "Obra Norte",
-    lastMaintenance: "12/05/2026",
-    seriesNumber: "CAT320-2019-001",
-    acquisitionDate: "01/03/2019",
-    manufacturer: "Caterpillar",
-    maintenanceRecords: [
-      {
-        id: "1",
-        type: "Preventiva",
-        date: "12/05/2026",
-        technician: "Equipe técnica",
-        status: "Concluída" as const,
-        deadline: "12/05/2026",
-        description: "Troca de óleo e filtros",
-      },
-      {
-        id: "2",
-        type: "Sistema Hidráulico",
-        date: "05/05/2026",
-        technician: "Equipe técnica",
-        status: "Concluída" as const,
-        deadline: "05/05/2026",
-        description: "Revisão completa",
-      },
-    ] as MaintenanceRecord[],
-  },
-  {
-    id: "FR-002",
-    model: "Caminhão Volvo FH-540",
-    icon: "local_shipping",
-    hours: 12345,
-    status: "Manutenção" as const,
-    tone: "warning" as const,
-    location: "Oficina",
-    lastMaintenance: "10/05/2026",
-    seriesNumber: "VOLVO-FH540-2018-002",
-    acquisitionDate: "15/08/2018",
-    manufacturer: "Volvo",
-    maintenanceRecords: [
-      {
-        id: "3",
-        type: "Revisão 50k",
-        date: "10/05/2026",
-        technician: "Workshop Team",
-        status: "Em andamento" as const,
-        deadline: "15/05/2026",
-        description: "Manutenção programada de 50 mil km",
-      },
-    ] as MaintenanceRecord[],
-  },
-  {
-    id: "FR-003",
-    model: "Trator Komatsu D61",
-    icon: "agriculture",
-    hours: 5210,
-    status: "Operação" as const,
-    tone: "success" as const,
-    location: "Obra Sul",
-    lastMaintenance: "08/05/2026",
-    seriesNumber: "KOMATSU-D61-2020-003",
-    acquisitionDate: "22/11/2020",
-    manufacturer: "Komatsu",
-  },
-  {
-    id: "FR-004",
-    model: "Pá Carregadeira CAT 950",
-    icon: "construction",
-    hours: 9876,
-    status: "Parado" as const,
-    tone: "error" as const,
-    location: "Pátio",
-    lastMaintenance: "05/05/2026",
-    seriesNumber: "CAT950-2017-004",
-    acquisitionDate: "10/07/2017",
-    manufacturer: "Caterpillar",
-  },
-  {
-    id: "FR-005",
-    model: "Empilhadeira Hyster H80",
-    icon: "forklift",
-    hours: 3210,
-    status: "Operação" as const,
-    tone: "success" as const,
-    location: "Almoxarifado",
-    lastMaintenance: "04/05/2026",
-    seriesNumber: "HYSTER-H80-2021-005",
-    acquisitionDate: "14/02/2021",
-    manufacturer: "Hyster",
-  },
-];
 
 const toneBg: Record<string, string> = {
   success: "bg-status-success/10 text-status-success border-status-success/30",
@@ -116,30 +39,153 @@ const toneBg: Record<string, string> = {
   error: "bg-status-error/10 text-status-error border-status-error/30",
 };
 
+const STATUS_OPTIONS: EquipmentStatus[] = ["Operação", "Manutenção", "Parado"];
+
+const ICON_OPTIONS = [
+  "snowmobile",
+  "local_shipping",
+  "agriculture",
+  "construction",
+  "forklift",
+  "directions_bus",
+  "airport_shuttle",
+  "fire_truck",
+  "excavator",
+  "cable_car",
+] as const;
+
+const STATUS_TONE: Record<EquipmentStatus, EquipmentTone> = {
+  Operação: "success",
+  Manutenção: "warning",
+  Parado: "error",
+};
+
+type FormState = {
+  model: string;
+  manufacturer: string;
+  seriesNumber: string;
+  acquisitionDate: string;
+  location: string;
+  hours: string;
+  status: EquipmentStatus;
+  icon: string;
+  lastMaintenance: string;
+};
+
+const EMPTY_FORM: FormState = {
+  model: "",
+  manufacturer: "",
+  seriesNumber: "",
+  acquisitionDate: "",
+  location: "",
+  hours: "",
+  status: "Operação",
+  icon: ICON_OPTIONS[0],
+  lastMaintenance: "",
+};
+
+function equipmentToForm(equipment: Equipment): FormState {
+  return {
+    model: equipment.model,
+    manufacturer: equipment.manufacturer ?? "",
+    seriesNumber: equipment.seriesNumber ?? "",
+    acquisitionDate: equipment.acquisitionDate ?? "",
+    location: equipment.location,
+    hours: String(equipment.hours),
+    status: equipment.status,
+    icon: equipment.icon,
+    lastMaintenance: equipment.lastMaintenance,
+  };
+}
+
+function formToDraft(form: FormState): EquipmentDraft {
+  const status = form.status;
+  return {
+    model: form.model,
+    manufacturer: form.manufacturer,
+    seriesNumber: form.seriesNumber,
+    acquisitionDate: form.acquisitionDate,
+    location: form.location,
+    hours: Number.parseInt(form.hours, 10) || 0,
+    status,
+    tone: STATUS_TONE[status],
+    icon: form.icon,
+    lastMaintenance: form.lastMaintenance,
+  };
+}
+
 function Equipamentos() {
+  const navigate = useNavigate();
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const [selectedEquipment, setSelectedEquipment] = useState<EquipmentDetail | null>(null);
   const [showDetailsPanel, setShowDetailsPanel] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
-  const filtered = FLEET_DATA.filter(
-    (e) =>
-      e.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      e.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      e.location.toLowerCase().includes(searchTerm.toLowerCase()),
+  const filtered = useMemo(
+    () =>
+      equipments.filter(
+        (e) =>
+          e.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          e.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          e.location.toLowerCase().includes(searchTerm.toLowerCase()),
+      ),
+    [equipments, searchTerm],
   );
 
-  const openEquipmentDetails = (equipment: (typeof FLEET_DATA)[0]) => {
-    const detail: EquipmentDetail = {
-      ...equipment,
-    };
-    setSelectedEquipment(detail);
+  const statusCounts = useMemo(
+    () => ({
+      operacao: equipments.filter((e) => e.status === "Operação").length,
+      manutencao: equipments.filter((e) => e.status === "Manutenção").length,
+      parado: equipments.filter((e) => e.status === "Parado").length,
+    }),
+    [equipments],
+  );
+
+  const openEquipmentDetails = (equipment: Equipment) => {
+    setSelectedEquipment(equipment);
     setShowDetailsPanel(true);
   };
 
-  const statusCounts = {
-    operacao: FLEET_DATA.filter((e) => e.status === "Operação").length,
-    manutencao: FLEET_DATA.filter((e) => e.status === "Manutenção").length,
-    parado: FLEET_DATA.filter((e) => e.status === "Parado").length,
+  const openCreateDialog = () => {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setFormOpen(true);
+  };
+
+  const openEditDialog = (equipment: Equipment) => {
+    setEditingId(equipment.id);
+    setForm(equipmentToForm(equipment));
+    setShowDetailsPanel(false);
+    setFormOpen(true);
+  };
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!form.model.trim() || !form.location.trim()) {
+      toast.error("Campos obrigatórios", {
+        description: "Informe ao menos modelo e localização.",
+      });
+      return;
+    }
+
+    const draft = formToDraft(form);
+
+    if (editingId) {
+      equipmentActions.update(editingId, draft);
+      toast.success("Equipamento atualizado", { description: form.model });
+    } else {
+      const created = equipmentActions.add(draft);
+      toast.success("Equipamento cadastrado", {
+        description: `${created.id} · ${created.model}`,
+      });
+    }
+
+    setFormOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_FORM);
   };
 
   return (
@@ -151,15 +197,10 @@ function Equipamentos() {
             Frota de Equipamentos
           </h1>
           <p className="text-sm text-on-surface-variant mt-1 font-medium">
-            {FLEET_DATA.length} máquinas cadastradas
+            {equipments.length} máquinas cadastradas
           </p>
         </div>
-        <Button
-          onClick={() =>
-            toast("Novo equipamento...", { description: "Abrindo formulário de cadastro" })
-          }
-          className="font-black gap-2 shadow-industrial"
-        >
+        <Button onClick={openCreateDialog} className="font-black gap-2 shadow-industrial">
           <Icon name="add" />
           Cadastrar Equipamento
         </Button>
@@ -286,7 +327,162 @@ function Equipamentos() {
         open={showDetailsPanel}
         onOpenChange={setShowDetailsPanel}
         equipment={selectedEquipment}
+        onEdit={openEditDialog}
+        onScheduleMaintenance={(equipmentName) => {
+          if (typeof window !== "undefined") {
+            window.sessionStorage.setItem("transjap:prefill:equipment", equipmentName);
+          }
+          setShowDetailsPanel(false);
+          navigate({ to: "/manutencao" });
+        }}
+        onCreateTask={(equipmentName) => {
+          if (typeof window !== "undefined") {
+            window.sessionStorage.setItem("transjap:prefill:task-equipment", equipmentName);
+          }
+          setShowDetailsPanel(false);
+          navigate({ to: "/agenda" });
+        }}
       />
+
+      {/* Create / Edit Dialog */}
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {editingId ? `Editar equipamento ${editingId}` : "Cadastrar equipamento"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingId
+                ? "Atualize os dados do equipamento selecionado."
+                : "Informe os dados do novo equipamento."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant sm:col-span-2">
+              Modelo
+              <input
+                value={form.model}
+                onChange={(e) => setForm((s) => ({ ...s, model: e.target.value }))}
+                required
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Fabricante
+              <input
+                value={form.manufacturer}
+                onChange={(e) => setForm((s) => ({ ...s, manufacturer: e.target.value }))}
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Número de série
+              <input
+                value={form.seriesNumber}
+                onChange={(e) => setForm((s) => ({ ...s, seriesNumber: e.target.value }))}
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Data de aquisição
+              <input
+                value={form.acquisitionDate}
+                onChange={(e) => setForm((s) => ({ ...s, acquisitionDate: e.target.value }))}
+                placeholder="DD/MM/AAAA"
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Localização
+              <input
+                value={form.location}
+                onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))}
+                required
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Horímetro
+              <input
+                value={form.hours}
+                onChange={(e) => setForm((s) => ({ ...s, hours: e.target.value }))}
+                type="number"
+                min={0}
+                step={1}
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Última manutenção
+              <input
+                value={form.lastMaintenance}
+                onChange={(e) => setForm((s) => ({ ...s, lastMaintenance: e.target.value }))}
+                placeholder="DD/MM/AAAA"
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
+            <div className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Status
+              <Select
+                value={form.status}
+                onValueChange={(value) =>
+                  setForm((s) => ({ ...s, status: value as EquipmentStatus }))
+                }
+              >
+                <SelectTrigger className="bg-surface-highest border-border-low">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Ícone
+              <Select
+                value={form.icon}
+                onValueChange={(value) => setForm((s) => ({ ...s, icon: value }))}
+              >
+                <SelectTrigger className="bg-surface-highest border-border-low">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ICON_OPTIONS.map((icon) => (
+                    <SelectItem key={icon} value={icon}>
+                      <span className="flex items-center gap-2">
+                        <Icon name={icon} className="text-primary text-lg" />
+                        <span>{icon}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <DialogFooter className="sm:col-span-2 gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" className="font-black">
+                {editingId ? "Salvar alterações" : "Cadastrar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }
