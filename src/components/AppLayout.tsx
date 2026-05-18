@@ -142,7 +142,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
               <Icon name="menu" />
             </button>
             {criticalCount > 0 && (
-              <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-status-error/10 border border-status-error/20 rounded-full animate-pulse-urgent">
+              <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-status-error/10 border border-status-error/20 rounded-full animate-pulse-urgent animate-pulse">
                 <Icon name="report" className="text-status-error text-sm" />
                 <span className="text-[10px] font-black uppercase tracking-widest text-status-error">
                   {criticalCount} {criticalCount === 1 ? "Prazo Crítico" : "Prazos Críticos"}

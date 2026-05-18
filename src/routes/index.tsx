@@ -113,6 +113,27 @@ function Dashboard() {
 
   return (
     <AppLayout>
+      {criticalTasks.length > 0 && (
+        <div className="mb-6 p-4 rounded-lg border border-status-error/40 bg-status-error/10 flex items-center gap-3 animate-pulse">
+          <Icon name="warning" className="text-status-error text-2xl" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-status-error uppercase tracking-wider">
+              {criticalTasks.length} tarefa{criticalTasks.length > 1 ? "s" : ""} em prazo crítico
+            </p>
+            <p className="text-xs text-on-surface-variant mt-0.5">
+              Clique em "Prazos Críticos" no painel direito para revisar.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate({ to: "/agenda" })}
+            className="text-xs font-bold uppercase tracking-wider text-status-error hover:underline"
+          >
+            Ver agenda →
+          </button>
+        </div>
+      )}
+
       {/* Key Metrics - Simplified */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {stats.map((s) => (

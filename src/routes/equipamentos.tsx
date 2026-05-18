@@ -30,6 +30,7 @@ import {
   type EquipmentStatus,
   type EquipmentTone,
 } from "@/lib/equipment-store";
+import { useMaintenanceStore } from "@/lib/maintenance-store";
 
 export const Route = createFileRoute("/equipamentos")({ component: Equipamentos });
 
@@ -117,12 +118,23 @@ function formToDraft(form: FormState): EquipmentDraft {
 function Equipamentos() {
   const navigate = useNavigate();
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
+  const maintenanceRecords = useMaintenanceStore((s) => s.records);
   const [selectedEquipment, setSelectedEquipment] = useState<EquipmentDetail | null>(null);
   const [showDetailsPanel, setShowDetailsPanel] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [deleteTarget, setDeleteTarget] = useState<Equipment | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+
+  const maintenancesForEquipment = useMemo(
+    () =>
+      deleteTarget
+        ? maintenanceRecords.filter((r) => r.equipment === deleteTarget.model)
+        : [],
+    [deleteTarget, maintenanceRecords],
+  );
 
   const filtered = useMemo(
     () =>
@@ -328,6 +340,10 @@ function Equipamentos() {
         onOpenChange={setShowDetailsPanel}
         equipment={selectedEquipment}
         onEdit={openEditDialog}
+        onDelete={(eq) => {
+          setDeleteTarget(eq);
+          setDeleteConfirmText("");
+        }}
         onScheduleMaintenance={(equipmentName) => {
           if (typeof window !== "undefined") {
             window.sessionStorage.setItem("transjap:prefill:equipment", equipmentName);
@@ -481,6 +497,78 @@ function Equipamentos() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteTarget(null);
+            setDeleteConfirmText("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-status-error">Excluir equipamento</DialogTitle>
+            <DialogDescription>
+              Você está prestes a excluir{" "}
+              <strong className="text-on-surface">{deleteTarget?.model}</strong>. Esta ação não
+              pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+
+          {maintenancesForEquipment.length > 0 && (
+            <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 px-4 py-3 text-sm text-status-warning">
+              ⚠ Existem {maintenancesForEquipment.length} manutenção
+              {maintenancesForEquipment.length > 1 ? "ões" : ""} vinculada
+              {maintenancesForEquipment.length > 1 ? "s" : ""}. O histórico será mantido mas o
+              equipamento sumirá da frota.
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+              Digite o nome do equipamento para confirmar
+            </label>
+            <input
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder={deleteTarget?.model}
+              className="w-full px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm outline-none focus:ring-2 focus:ring-status-error"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteConfirmText("");
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              disabled={deleteConfirmText.trim() !== deleteTarget?.model}
+              className="bg-status-error text-white hover:bg-status-error/90 font-black"
+              onClick={() => {
+                if (!deleteTarget) return;
+                equipmentActions.remove(deleteTarget.id);
+                toast.success("Equipamento excluído", { description: deleteTarget.model });
+                if (selectedEquipment?.id === deleteTarget.id) {
+                  setSelectedEquipment(null);
+                  setShowDetailsPanel(false);
+                }
+                setDeleteTarget(null);
+                setDeleteConfirmText("");
+              }}
+            >
+              Excluir
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </AppLayout>

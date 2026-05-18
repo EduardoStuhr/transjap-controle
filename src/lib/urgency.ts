@@ -1,4 +1,4 @@
-export type UrgencyLevel = "GREEN" | "YELLOW" | "ORANGE" | "RED";
+export type UrgencyLevel = "GREEN" | "BLUE" | "YELLOW" | "ORANGE" | "RED";
 
 export interface UrgencyInfo {
   level: UrgencyLevel;
@@ -74,6 +74,18 @@ export function getUrgencyLevel(deadlineStr: string): UrgencyInfo {
     };
   }
 
+  if (diffHours < 72) {
+    return {
+      level: "BLUE",
+      label: "Aproximando",
+      colorClass: "text-status-info",
+      bgClass: "bg-status-info/10",
+      borderClass: "border-status-info",
+      timeRemaining: "Expira em 3 dias",
+      isOverdue: false,
+    };
+  }
+
   return {
     level: "GREEN",
     label: "Normal",
@@ -83,4 +95,12 @@ export function getUrgencyLevel(deadlineStr: string): UrgencyInfo {
     timeRemaining: `Faltam ${diffDays} dias`,
     isOverdue: false,
   };
+}
+
+export function daysSinceBrDate(brDate: string): number {
+  if (!brDate) return 0;
+  const [d, m, y] = brDate.split("/").map(Number);
+  if (!d || !m || !y) return 0;
+  const diff = Date.now() - new Date(y, m - 1, d).getTime();
+  return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 }

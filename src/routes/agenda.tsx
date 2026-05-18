@@ -378,7 +378,11 @@ const TaskListItem = memo(function TaskListItem({
               {task.sector || "Sem setor"}
             </span>
             {urgency && (
-              <span className={`${urgency.colorClass} font-bold`}>{urgency.timeRemaining}</span>
+              <span
+                className={`${urgency.colorClass} font-bold ${urgency.level === "RED" || urgency.level === "ORANGE" ? "animate-pulse" : ""}`}
+              >
+                {urgency.timeRemaining}
+              </span>
             )}
           </div>
         </div>
@@ -427,7 +431,11 @@ const TaskGridCard = memo(function TaskGridCard({
         {urgency && (
           <p>
             <strong>Prazo:</strong>{" "}
-            <span className={urgency.colorClass}>{urgency.timeRemaining}</span>
+            <span
+              className={`${urgency.colorClass} ${urgency.level === "RED" || urgency.level === "ORANGE" ? "animate-pulse" : ""}`}
+            >
+              {urgency.timeRemaining}
+            </span>
           </p>
         )}
       </div>

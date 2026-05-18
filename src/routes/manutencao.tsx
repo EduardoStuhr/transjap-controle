@@ -22,6 +22,7 @@ import {
   EQUIPMENT_OPTIONS,
   MAINTENANCE_TYPE_OPTIONS,
 } from "@/lib/operational-options";
+import { daysSinceBrDate } from "@/lib/urgency";
 
 export const Route = createFileRoute("/manutencao")({ component: Manutencao });
 
@@ -566,7 +567,21 @@ function MaintenanceTableRow({
         {record.submittedBy || "—"}
       </td>
       <td className="px-6 py-4">
-        <StatusBadge status={record.status} />
+        <div className="flex flex-col gap-1">
+          <StatusBadge status={record.status} />
+          {(() => {
+            if (!record.createdAt || record.status === "Concluída") return null;
+            const days = daysSinceBrDate(record.createdAt);
+            if (days < 3) return null;
+            const tone = days > 14 ? "text-status-warning" : "text-on-surface-variant";
+            return (
+              <span className={`text-xs font-medium ${tone}`}>
+                <Icon name="schedule" className="inline text-sm mr-1" />
+                Aberta há {days} dias
+              </span>
+            );
+          })()}
+        </div>
       </td>
     </tr>
   );
@@ -587,7 +602,21 @@ function MaintenanceCard({
     >
       <div className="flex items-start justify-between mb-3">
         <Icon name="build" className="text-primary text-2xl" />
-        <StatusBadge status={record.status} />
+        <div className="flex flex-col items-end gap-1">
+          <StatusBadge status={record.status} />
+          {(() => {
+            if (!record.createdAt || record.status === "Concluída") return null;
+            const days = daysSinceBrDate(record.createdAt);
+            if (days < 3) return null;
+            const tone = days > 14 ? "text-status-warning" : "text-on-surface-variant";
+            return (
+              <span className={`text-xs font-medium ${tone}`}>
+                <Icon name="schedule" className="inline text-sm mr-1" />
+                Aberta há {days} dias
+              </span>
+            );
+          })()}
+        </div>
       </div>
       <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-1">
         {record.equipment}

@@ -28,6 +28,7 @@ interface EquipmentDetailsPanelProps {
   onOpenChange: (open: boolean) => void;
   equipment: EquipmentDetail | null;
   onEdit?: (equipment: Equipment) => void;
+  onDelete?: (equipment: Equipment) => void;
   onScheduleMaintenance?: (equipmentName: string) => void;
   onCreateTask?: (equipmentName: string) => void;
 }
@@ -43,6 +44,7 @@ export function EquipmentDetailsPanel({
   onOpenChange,
   equipment,
   onEdit,
+  onDelete,
   onScheduleMaintenance,
   onCreateTask,
 }: EquipmentDetailsPanelProps) {
@@ -217,6 +219,14 @@ export function EquipmentDetailsPanel({
               >
                 <Icon name="add_task" />
                 Criar Tarefa
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full font-black text-status-error border-status-error/40 hover:bg-status-error/10"
+                onClick={() => onDelete?.(equipment)}
+              >
+                <Icon name="delete_forever" />
+                Excluir equipamento
               </Button>
             </div>
           </TabsContent>
