@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  equipmentActions,
+  useEquipmentActions,
   useEquipmentStore,
   type Equipment,
   type EquipmentDraft,
@@ -117,6 +117,7 @@ function formToDraft(form: FormState): EquipmentDraft {
 
 function Equipamentos() {
   const navigate = useNavigate();
+  const { add, update, remove } = useEquipmentActions();
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const maintenanceRecords = useMaintenanceStore((s) => s.records);
   const [selectedEquipment, setSelectedEquipment] = useState<EquipmentDetail | null>(null);
@@ -174,7 +175,7 @@ function Equipamentos() {
     setFormOpen(true);
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!form.model.trim() || !form.location.trim()) {
       toast.error("Campos obrigatórios", {
@@ -185,14 +186,19 @@ function Equipamentos() {
 
     const draft = formToDraft(form);
 
-    if (editingId) {
-      equipmentActions.update(editingId, draft);
-      toast.success("Equipamento atualizado", { description: form.model });
-    } else {
-      const created = equipmentActions.add(draft);
-      toast.success("Equipamento cadastrado", {
-        description: `${created.id} · ${created.model}`,
-      });
+    try {
+      if (editingId) {
+        await update(editingId, draft);
+        toast.success("Equipamento atualizado", { description: form.model });
+      } else {
+        const created = await add(draft);
+        toast.success("Equipamento cadastrado", {
+          description: `${created.id} · ${created.model}`,
+        });
+      }
+    } catch {
+      toast.error("Erro ao salvar", { description: "Tente novamente." });
+      return;
     }
 
     setFormOpen(false);
@@ -554,16 +560,20 @@ function Equipamentos() {
             <Button
               disabled={deleteConfirmText.trim() !== deleteTarget?.model}
               className="bg-status-error text-white hover:bg-status-error/90 font-black"
-              onClick={() => {
+              onClick={async () => {
                 if (!deleteTarget) return;
-                equipmentActions.remove(deleteTarget.id);
-                toast.success("Equipamento excluído", { description: deleteTarget.model });
-                if (selectedEquipment?.id === deleteTarget.id) {
-                  setSelectedEquipment(null);
-                  setShowDetailsPanel(false);
+                try {
+                  await remove(deleteTarget.id);
+                  toast.success("Equipamento excluído", { description: deleteTarget.model });
+                  if (selectedEquipment?.id === deleteTarget.id) {
+                    setSelectedEquipment(null);
+                    setShowDetailsPanel(false);
+                  }
+                  setDeleteTarget(null);
+                  setDeleteConfirmText("");
+                } catch {
+                  toast.error("Erro ao excluir", { description: "Tente novamente." });
                 }
-                setDeleteTarget(null);
-                setDeleteConfirmText("");
               }}
             >
               Excluir

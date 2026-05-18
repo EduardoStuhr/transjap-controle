@@ -1,4 +1,12 @@
-import { useSyncExternalStore } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  listEquipment,
+  createEquipment,
+  updateEquipment,
+  deleteEquipment,
+} from "@/lib/api/equipment";
+
+// ─── Public types (unchanged) ────────────────────────────────────────────────
 
 export type EquipmentStatus = "Operação" | "Manutenção" | "Parado";
 export type EquipmentTone = "success" | "warning" | "error";
@@ -19,13 +27,8 @@ export type Equipment = {
 
 export type EquipmentDraft = Omit<Equipment, "id">;
 
-type EquipmentState = {
-  equipments: Equipment[];
-};
-
-const STORAGE_KEY = "transjap:fleet-command:equipamentos:v1";
-
-const SEED_EQUIPMENTS: Equipment[] = [
+// Seed data exported for reference / other modules
+export const SEED_EQUIPMENTS: Equipment[] = [
   {
     id: "FR-001",
     model: "Escavadeira CAT 320",
@@ -93,163 +96,85 @@ const SEED_EQUIPMENTS: Equipment[] = [
   },
 ];
 
-const EMPTY_STATE: EquipmentState = { equipments: [] };
-const SEED_STATE: EquipmentState = { equipments: SEED_EQUIPMENTS };
+// ─── React Query internals ────────────────────────────────────────────────────
 
-let state: EquipmentState = EMPTY_STATE;
-let hydrated = false;
-const listeners = new Set<() => void>();
+const QK = ["equipment"] as const;
 
-function isBrowser() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
+type EquipmentState = { equipments: Equipment[] };
+type Selector<T> = (state: EquipmentState) => T;
 
-function normalizeState(value: unknown): EquipmentState {
-  if (!value || typeof value !== "object") return SEED_STATE;
-  const stored = value as Partial<EquipmentState>;
-  return {
-    equipments: Array.isArray(stored.equipments) ? stored.equipments : [],
-  };
-}
-
-function readStorage(): EquipmentState {
-  if (!isBrowser()) return SEED_STATE;
-
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? normalizeState(JSON.parse(raw)) : SEED_STATE;
-  } catch {
-    return SEED_STATE;
-  }
-}
-
-function writeStorage(nextState: EquipmentState) {
-  if (!isBrowser()) return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-}
-
-function ensureHydrated() {
-  if (hydrated || !isBrowser()) return;
-  hydrated = true;
-  state = readStorage();
-}
-
-function emit() {
-  listeners.forEach((listener) => listener());
-}
-
-function setState(updater: (current: EquipmentState) => EquipmentState) {
-  ensureHydrated();
-  state = updater(state);
-  writeStorage(state);
-  emit();
-}
-
-function nextEquipmentId(equipments: Equipment[]) {
-  const maxSuffix = equipments.reduce((acc, equipment) => {
-    const match = /^FR-(\d+)$/.exec(equipment.id);
-    if (!match) return acc;
-    return Math.max(acc, parseInt(match[1], 10));
-  }, 0);
-
-  return `FR-${String(maxSuffix + 1).padStart(3, "0")}`;
-}
-
-function trim(value?: string) {
-  return value?.trim() || undefined;
-}
-
-function normalizeDraft(draft: EquipmentDraft): EquipmentDraft {
-  return {
-    model: draft.model.trim(),
-    icon: draft.icon.trim(),
-    hours: Number.isFinite(draft.hours) ? Math.max(0, draft.hours) : 0,
-    status: draft.status,
-    tone: draft.tone,
-    location: draft.location.trim(),
-    lastMaintenance: draft.lastMaintenance.trim(),
-    seriesNumber: trim(draft.seriesNumber),
-    acquisitionDate: trim(draft.acquisitionDate),
-    manufacturer: trim(draft.manufacturer),
-  };
-}
-
-export const equipmentActions = {
-  add(draft: EquipmentDraft): Equipment {
-    ensureHydrated();
-    const equipment: Equipment = {
-      id: nextEquipmentId(state.equipments),
-      ...normalizeDraft(draft),
-    };
-
-    setState((current) => ({
-      ...current,
-      equipments: [equipment, ...current.equipments],
-    }));
-
-    return equipment;
-  },
-
-  update(id: string, draft: Partial<EquipmentDraft>): void {
-    setState((current) => ({
-      ...current,
-      equipments: current.equipments.map((equipment) => {
-        if (equipment.id !== id) return equipment;
-        const merged: EquipmentDraft = {
-          model: draft.model ?? equipment.model,
-          icon: draft.icon ?? equipment.icon,
-          hours: draft.hours ?? equipment.hours,
-          status: draft.status ?? equipment.status,
-          tone: draft.tone ?? equipment.tone,
-          location: draft.location ?? equipment.location,
-          lastMaintenance: draft.lastMaintenance ?? equipment.lastMaintenance,
-          seriesNumber: draft.seriesNumber ?? equipment.seriesNumber,
-          acquisitionDate: draft.acquisitionDate ?? equipment.acquisitionDate,
-          manufacturer: draft.manufacturer ?? equipment.manufacturer,
-        };
-        return { id: equipment.id, ...normalizeDraft(merged) };
-      }),
-    }));
-  },
-
-  remove(id: string): void {
-    setState((current) => ({
-      ...current,
-      equipments: current.equipments.filter((equipment) => equipment.id !== id),
-    }));
-  },
-};
-
-export function useEquipmentStore<T>(selector: (state: EquipmentState) => T): T {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-
-      if (!hydrated && isBrowser()) {
-        queueMicrotask(() => {
-          ensureHydrated();
-          emit();
-        });
-      }
-
-      if (isBrowser()) {
-        window.addEventListener("storage", handleStorageEvent);
-      }
-
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0 && isBrowser()) {
-          window.removeEventListener("storage", handleStorageEvent);
-        }
-      };
+/**
+ * Drop-in replacement for the old useSyncExternalStore-based hook.
+ * Selector signature is identical — no component changes needed.
+ */
+export function useEquipmentStore<T>(selector: Selector<T>): T {
+  const { data } = useQuery({
+    queryKey: QK,
+    queryFn: async () => {
+      const rows = await listEquipment();
+      // Drizzle returns DB rows; cast to the app-level Equipment type.
+      // Field names already match (lastMaintenance, seriesNumber, etc.)
+      // because the schema uses JS camelCase keys mapped to snake_case columns.
+      return rows as unknown as Equipment[];
     },
-    () => selector(state),
-    () => selector(SEED_STATE),
-  );
+    staleTime: 30_000,
+    // Show seed data immediately on the first SSR/CSR render; replaced once
+    // the real query resolves.
+    initialData: SEED_EQUIPMENTS,
+  });
+
+  return selector({ equipments: data ?? SEED_EQUIPMENTS });
 }
 
-function handleStorageEvent(event: StorageEvent) {
-  if (event.key !== STORAGE_KEY) return;
-  state = readStorage();
-  emit();
+/**
+ * Mutation actions. Call this hook in a component, then use the returned
+ * add/update/remove functions in event handlers.
+ */
+export function useEquipmentActions() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: QK });
+
+  const addMut = useMutation({
+    mutationFn: (draft: EquipmentDraft) =>
+      createEquipment({ data: draft as Parameters<typeof createEquipment>[0]["data"] }),
+    onSuccess: invalidate,
+  });
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Partial<EquipmentDraft> }) =>
+      updateEquipment({
+        data: { id, patch: patch as Parameters<typeof updateEquipment>[0]["data"]["patch"] },
+      }),
+    onSuccess: invalidate,
+  });
+
+  const removeMut = useMutation({
+    mutationFn: (id: string) => deleteEquipment({ data: id }),
+    onSuccess: invalidate,
+  });
+
+  return {
+    add: (draft: EquipmentDraft) => addMut.mutateAsync(draft),
+    update: (id: string, patch: Partial<EquipmentDraft>) =>
+      updateMut.mutateAsync({ id, patch }),
+    remove: (id: string) => removeMut.mutateAsync(id),
+  };
 }
+
+/**
+ * Shim kept for backwards-compatibility.
+ * Any remaining direct call to equipmentActions.* will throw at runtime
+ * with a clear message pointing to the hook-based replacement.
+ * Migrate callers to useEquipmentActions() inside their component.
+ */
+export const equipmentActions = {
+  add: (): never => {
+    throw new Error("equipmentActions.add() foi removido. Use useEquipmentActions().add() dentro de um componente React.");
+  },
+  update: (): never => {
+    throw new Error("equipmentActions.update() foi removido. Use useEquipmentActions().update() dentro de um componente React.");
+  },
+  remove: (): never => {
+    throw new Error("equipmentActions.remove() foi removido. Use useEquipmentActions().remove() dentro de um componente React.");
+  },
+} as const;
