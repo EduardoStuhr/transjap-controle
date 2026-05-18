@@ -254,6 +254,16 @@ export function TaskDetailsModal({
                 </p>
                 <p className="font-bold text-on-surface">{task.createdAt}</p>
               </div>
+
+              <div>
+                <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2">
+                  Enviado por
+                </p>
+                <div className="flex items-center gap-2">
+                  <Icon name="outgoing_mail" className="text-on-surface-variant text-lg" />
+                  <p className="font-bold text-on-surface">{task.createdBy || "Sistema"}</p>
+                </div>
+              </div>
             </div>
 
             <div>

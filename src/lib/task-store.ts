@@ -86,9 +86,11 @@ function normalizeTask(
 ): TaskRecord {
   const createdAt = task.createdAt || displayDate();
   const assignedTo = normalizeAssignedTo(task.assignedTo ?? task.resp);
+  const createdBy = typeof task.createdBy === "string" ? task.createdBy : "";
 
   return {
     id: task.id || newId("TK"),
+    createdBy,
     title: task.title || "",
     description: task.description || "",
     equipment: task.equipment || task.equip || "",
@@ -171,9 +173,11 @@ function sanitizeAssignedTo(value: string[]): string[] {
 
 function taskFromInput(input: TaskInput): TaskRecord {
   const now = nowIso();
+  const createdBy = getCurrentUser()?.name || "";
 
   return {
     id: newId("TK"),
+    createdBy,
     title: input.title.trim(),
     description: input.description.trim(),
     equipment: input.equipment.trim(),
@@ -186,7 +190,15 @@ function taskFromInput(input: TaskInput): TaskRecord {
     comments: [],
     responses: [],
     viewedBy: {},
-    timeline: [],
+    timeline: [
+      {
+        id: newId("EV"),
+        timestamp: displayDate(),
+        action: `Tarefa enviada por ${createdBy || "Sistema"}`,
+        actor: createdBy || "Sistema",
+        status: input.status,
+      },
+    ],
     createdAt: displayDate(),
     updatedAt: now,
     viewed: input.status !== "Não visualizado",
@@ -355,6 +367,7 @@ export const taskActions = {
 
   approveRequest(id: string) {
     let approved: TaskRecord | undefined;
+    const createdBy = getCurrentUser()?.name || "";
 
     setState((current) => {
       approved = current.pendingRequests.find((request) => request.id === id);
@@ -365,6 +378,7 @@ export const taskActions = {
           {
             ...approved,
             id: newId("TK"),
+            createdBy: approved.createdBy || createdBy,
             status: "Não visualizado",
             viewed: false,
             updatedAt: nowIso(),

@@ -15,6 +15,7 @@ import { authActions, useAuthStore } from "@/lib/auth-store";
 import { getInventoryAlerts, useInventoryStore } from "@/lib/inventory-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
+import { filterVisibleTasks } from "@/lib/task-visibility";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
 
 const NAV = [
@@ -49,13 +50,35 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   const [showConfig, setShowConfig] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
+  const user = useAuthStore((snapshot) => snapshot.user);
   const tasks = useTaskStore((s) => s.tasks);
   const maintenances = useMaintenanceStore((s) => s.records);
+  const inventoryItems = useInventoryStore((s) => s.items);
+  const inventoryOfflineQueue = useInventoryStore((s) => s.offlineQueue);
+  const stockAlerts = useMemo(
+    () =>
+      getInventoryAlerts({
+        items: inventoryItems,
+        offlineQueue: inventoryOfflineQueue,
+      } as Parameters<typeof getInventoryAlerts>[0]),
+    [inventoryItems, inventoryOfflineQueue],
+  );
+  const criticalTasks = useMemo(
+    () =>
+      filterVisibleTasks(tasks, user).filter(
+        (task) =>
+          task.status !== "Concluído" && task.deadline && getUrgencyLevel(task.deadline).isOverdue,
+      ),
+    [tasks, user],
+  );
   const results = useMemo(() => {
     if (query.length < 2) return [];
     const needle = query.toLowerCase();
+    const visibleTasks = filterVisibleTasks(tasks, user);
     return [
-      ...tasks
+      ...visibleTasks
         .filter((t) => t.title.toLowerCase().includes(needle))
         .slice(0, 4)
         .map((t) => ({
@@ -74,17 +97,16 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           to: "/manutencao" as const,
         })),
     ];
-  }, [maintenances, query, tasks]);
+  }, [maintenances, query, tasks, user]);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const user = useAuthStore((snapshot) => snapshot.user);
   const criticalCount = useTaskStore(
     (snapshot) =>
-      snapshot.tasks.filter(
+      filterVisibleTasks(snapshot.tasks, user).filter(
         (task) =>
           task.status !== "Concluído" && task.deadline && getUrgencyLevel(task.deadline).isOverdue,
       ).length,
   );
-  const stockAlertCount = useInventoryStore((snapshot) => getInventoryAlerts(snapshot).length);
+  const stockAlertCount = stockAlerts.length;
   const totalAlertCount = criticalCount + stockAlertCount;
 
   return (
@@ -179,26 +201,117 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 </div>
               )}
             </div>
-            <h2 className="md:hidden text-xl font-black text-primary tracking-tighter uppercase">
-              TransJap
-            </h2>
+            <img
+              src="/logo.png"
+              alt="TransJap"
+              className="md:hidden h-8 w-auto object-contain"
+            />
           </div>
 
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full relative transition-industrial"
-              onClick={() =>
-                toast("Central de Alertas", {
-                  description: `${criticalCount} prazo(s) crítico(s) e ${stockAlertCount} alerta(s) de estoque.`,
-                })
-              }
+            <div
+              className="relative"
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setTimeout(() => setNotifOpen(false), 200);
+                }
+              }}
             >
-              <Icon name="notifications" />
-              {totalAlertCount > 0 && (
-                <span className="absolute top-2 right-2 w-2 h-2 bg-status-error rounded-full ring-2 ring-surface-container animate-pulse" />
+              <button
+                type="button"
+                className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full relative transition-industrial"
+                onClick={() => setNotifOpen((v) => !v)}
+                aria-label="Central de alertas"
+              >
+                <Icon name="notifications" />
+                {totalAlertCount > 0 && (
+                  <span className="absolute top-2 right-2 w-2 h-2 bg-status-error rounded-full ring-2 ring-surface-container animate-pulse" />
+                )}
+              </button>
+              {notifOpen && (
+                <div className="absolute right-0 top-12 w-80 max-h-96 overflow-y-auto bg-surface-container border border-border-low rounded-lg shadow-industrial-lg z-50 animate-fade-in">
+                  <div className="p-3 border-b border-border-low flex items-center justify-between">
+                    <span className="text-xs font-black uppercase tracking-widest">Alertas</span>
+                    <button
+                      type="button"
+                      onClick={() => setNotifOpen(false)}
+                      aria-label="Fechar"
+                    >
+                      <Icon name="close" className="text-on-surface-variant text-base" />
+                    </button>
+                  </div>
+                  {totalAlertCount === 0 ? (
+                    <div className="px-4 py-8 text-center">
+                      <Icon
+                        name="check_circle"
+                        className="text-3xl text-on-surface-variant/30"
+                      />
+                      <p className="text-xs text-on-surface-variant font-medium mt-2">
+                        Nenhum alerta no momento
+                      </p>
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-border-low">
+                      {criticalTasks.map((task) => {
+                        const urgency = getUrgencyLevel(task.deadline);
+                        return (
+                          <li key={`task-${task.id}`}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setNotifOpen(false);
+                                navigate({ to: "/agenda" });
+                              }}
+                              className="w-full text-left px-4 py-3 hover:bg-surface-highest transition-colors flex items-start gap-3"
+                            >
+                              <Icon
+                                name="report"
+                                className="text-status-error text-base mt-0.5"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold text-on-surface truncate">
+                                  {task.title}
+                                </p>
+                                <p className="text-[10px] text-status-error font-bold uppercase tracking-widest mt-0.5">
+                                  {urgency.timeRemaining}
+                                </p>
+                              </div>
+                            </button>
+                          </li>
+                        );
+                      })}
+                      {stockAlerts.map((alert) => (
+                        <li key={`stock-${alert.id}`}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setNotifOpen(false);
+                              navigate({ to: "/estoque" });
+                            }}
+                            className="w-full text-left px-4 py-3 hover:bg-surface-highest transition-colors flex items-start gap-3"
+                          >
+                            <Icon
+                              name="inventory_2"
+                              className={`text-base mt-0.5 ${alert.tone === "error" ? "text-status-error" : "text-status-warning"}`}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-on-surface truncate">
+                                {alert.title}
+                              </p>
+                              <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">
+                                {alert.description}
+                              </p>
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
-            </button>
+            </div>
             <button
               type="button"
               className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full transition-industrial"
@@ -207,18 +320,60 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
               <Icon name="settings" />
             </button>
             <div className="w-px h-6 bg-border-low mx-2" />
-            <div className="flex items-center gap-3 pl-2 group">
-              <div className="text-right hidden sm:block">
-                <p className="text-xs font-black text-on-surface uppercase tracking-widest leading-none">
-                  {user?.name || "Usuário"}
-                </p>
-                <p className="text-[9px] font-bold text-on-surface-variant uppercase tracking-widest mt-1">
-                  {user?.role || "Sessão local"}
-                </p>
-              </div>
-              <div className="h-9 w-9 rounded bg-primary text-on-primary flex items-center justify-center font-black shadow-industrial group-hover:scale-105 transition-transform">
-                {user?.name?.[0] || "U"}
-              </div>
+            <div
+              className="relative"
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setTimeout(() => setAvatarOpen(false), 200);
+                }
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setAvatarOpen((v) => !v)}
+                className="flex items-center gap-3 pl-2 hover:bg-surface-bright/40 rounded transition-colors py-1 group"
+                aria-label="Menu do usuário"
+              >
+                <div className="text-right hidden sm:block">
+                  <p className="text-xs font-black text-on-surface uppercase tracking-widest leading-none">
+                    {user?.name || "Usuário"}
+                  </p>
+                  <p className="text-[9px] font-bold text-on-surface-variant uppercase tracking-widest mt-1">
+                    {user?.role || "Sessão local"}
+                  </p>
+                </div>
+                <div className="h-9 w-9 rounded bg-primary text-on-primary flex items-center justify-center font-black shadow-industrial group-hover:scale-105 transition-transform">
+                  {user?.name?.[0] || "U"}
+                </div>
+              </button>
+              {avatarOpen && (
+                <div className="absolute right-0 top-12 w-48 bg-surface-container border border-border-low rounded-lg shadow-industrial-lg z-50 animate-fade-in py-1">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      navigate({ to: "/perfil" });
+                      setAvatarOpen(false);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-surface-highest flex items-center gap-2"
+                  >
+                    <Icon name="account_circle" className="text-base" /> Meu perfil
+                  </button>
+                  <div className="border-t border-border-low my-1" />
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      authActions.logout();
+                      setAvatarOpen(false);
+                      navigate({ to: "/login" });
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-status-error/10 text-status-error flex items-center gap-2"
+                  >
+                    <Icon name="logout" className="text-base" /> Sair do sistema
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -294,20 +449,12 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
   const navigate = useNavigate();
   return (
     <>
-      <div className="p-8">
-        <div className="flex flex-col gap-4">
-          <div className="w-12 h-12 bg-primary flex items-center justify-center rounded shadow-industrial">
-            <Icon name="construction" className="text-on-primary text-2xl" filled />
-          </div>
-          <div>
-            <h1 className="text-xl font-black text-primary tracking-tighter leading-none uppercase">
-              TransJap
-            </h1>
-            <p className="text-[10px] text-on-surface-variant font-black uppercase tracking-widest mt-2 opacity-60">
-              Fleet & Ops Management
-            </p>
-          </div>
-        </div>
+      <div className="p-6 flex items-center justify-center">
+        <img
+          src="/logo.png"
+          alt="TransJap — Terraplenagem e Construções"
+          className="w-full max-w-[180px] h-auto object-contain"
+        />
       </div>
       <nav className="mt-6 flex flex-col flex-1 px-4 gap-1">
         {NAV.map((item) => {
@@ -337,6 +484,7 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
             variant="ghost"
             className="w-full justify-start gap-3 text-on-surface-variant hover:text-status-error py-6"
             onClick={() => {
+              if (!window.confirm("Deseja realmente sair do sistema?")) return;
               authActions.logout();
               toast("Sair", { description: "Sessão encerrada." });
               navigate({ to: "/login" });

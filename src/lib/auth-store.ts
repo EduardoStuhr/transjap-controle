@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 export type AuthUser = {
   id: string;
-  name: "Eduardo" | "Davi";
+  name: "Eduardo" | "Davi" | "Luiz" | "Jean";
   role: "administrador" | "gestor";
 };
 
@@ -16,6 +16,8 @@ const STORAGE_KEY = "transjap:fleet-command:auth:v1";
 const LOCAL_USERS: Array<AuthUser & { password: string }> = [
   { id: "usr-eduardo", name: "Eduardo", role: "gestor", password: "123" },
   { id: "usr-davi", name: "Davi", role: "administrador", password: "123" },
+  { id: "usr-luiz", name: "Luiz", role: "gestor", password: "123" },
+  { id: "usr-jean", name: "Jean", role: "gestor", password: "123" },
 ];
 
 export const AUTH_USER_OPTIONS = LOCAL_USERS.map(({ password: _password, ...user }) => user);
@@ -99,10 +101,7 @@ export function useAuthStore<T>(selector: (state: AuthState) => T): T {
       listeners.add(listener);
 
       if (!state.hydrated && isBrowser()) {
-        queueMicrotask(() => {
-          ensureHydrated();
-          emit();
-        });
+        ensureHydrated();
       }
 
       if (isBrowser()) window.addEventListener("storage", handleStorageEvent);
@@ -115,7 +114,7 @@ export function useAuthStore<T>(selector: (state: AuthState) => T): T {
       };
     },
     () => selector(state),
-    () => selector({ user: null, hydrated: true }),
+    () => selector({ user: null, hydrated: false }),
   );
 }
 

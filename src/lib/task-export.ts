@@ -1,6 +1,12 @@
 import type { AttachedFile } from "@/components/AttachmentUpload";
 import type { TaskRecord } from "@/lib/task-types";
 import { resolveRecipients } from "@/lib/operational-options";
+import {
+  buildPdfDocument,
+  escapeHtml,
+  openPdfWindow,
+  triggerCsvDownload,
+} from "@/lib/pdf-template";
 
 function triggerDownload(href: string, filename: string) {
   if (typeof document === "undefined") return;
@@ -48,6 +54,7 @@ export function exportTaskAsCsv(task: TaskRecord) {
     ["Título", task.title],
     ["Status", task.status],
     ["Prioridade", task.priority],
+    ["Enviado por", task.createdBy || "Sistema"],
     ["Equipamento", task.equipment],
     ["Setor", task.sector],
     ["Prazo", task.deadline],
@@ -64,20 +71,7 @@ export function exportTaskAsCsv(task: TaskRecord) {
     ...responseLines,
   ];
 
-  const csv = "﻿" + rowsToCsv(rows); // BOM so Excel detects UTF-8
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  triggerDownload(url, `tarefa-${task.id}.csv`);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  triggerCsvDownload(rowsToCsv(rows), `tarefa-${task.id}.csv`);
 }
 
 export function exportTaskAsPdf(task: TaskRecord) {
@@ -92,76 +86,50 @@ export function exportTaskAsPdf(task: TaskRecord) {
     })
     .join("");
 
-  const responsesHtml = task.responses.length
+  const responseRows = task.responses.length
     ? task.responses
         .map(
-          (r) => `
-        <article style="border-top:1px solid #ccc;padding:8px 0;">
-          <header style="font-size:12px;color:#555;">${escapeHtml(r.timestamp)} — <strong>${escapeHtml(r.author)}</strong></header>
-          <p style="margin:6px 0 0;">${escapeHtml(r.text)}</p>
-        </article>`,
+          (r) => `<tr>
+            <td>${escapeHtml(r.timestamp)}</td>
+            <td>${escapeHtml(r.author)}</td>
+            <td>${escapeHtml(r.text)}</td>
+          </tr>`,
         )
         .join("")
-    : "<p><em>Nenhuma resposta registrada.</em></p>";
+    : `<tr><td colspan="3"><em>Nenhuma resposta registrada.</em></td></tr>`;
 
-  const html = `<!doctype html>
-<html lang="pt-BR">
-  <head>
-    <meta charset="utf-8" />
-    <title>Tarefa ${escapeHtml(task.id)}</title>
-    <style>
-      body { font-family: Inter, system-ui, sans-serif; color: #111; padding: 24px; max-width: 760px; margin: 0 auto; }
-      h1 { font-size: 22px; margin: 0 0 4px; }
-      .meta { color: #555; font-size: 12px; margin-bottom: 16px; }
-      dl { display: grid; grid-template-columns: 160px 1fr; gap: 6px 12px; font-size: 13px; }
-      dt { color: #555; }
-      dd { margin: 0; font-weight: 600; }
-      section { margin-top: 20px; }
-      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #333; margin: 0 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-      ul { padding-left: 18px; }
-      @media print {
-        body { padding: 0; }
-      }
-    </style>
-  </head>
-  <body>
-    <h1>${escapeHtml(task.title || "Tarefa")}</h1>
-    <p class="meta">#${escapeHtml(task.id)} · Criada em ${escapeHtml(task.createdAt)}</p>
-
-    <dl>
+  const bodyHtml = `
+    <h2>Detalhes</h2>
+    <dl class="pdf-dl">
       <dt>Status</dt><dd>${escapeHtml(task.status)}</dd>
       <dt>Prioridade</dt><dd>${escapeHtml(task.priority)}</dd>
+      <dt>Enviado por</dt><dd>${escapeHtml(task.createdBy || "Sistema")}</dd>
       <dt>Equipamento</dt><dd>${escapeHtml(task.equipment || "—")}</dd>
       <dt>Setor</dt><dd>${escapeHtml(task.sector || "—")}</dd>
       <dt>Prazo</dt><dd>${escapeHtml(task.deadline || "Sem prazo")}</dd>
     </dl>
 
-    <section>
-      <h2>Destinatários</h2>
-      <ul>${recipientHtml || "<li>Sem destinatários</li>"}</ul>
-    </section>
+    <h2>Destinatários</h2>
+    <ul>${recipientHtml || "<li>Sem destinatários</li>"}</ul>
 
-    <section>
-      <h2>Descrição</h2>
-      <p>${escapeHtml(task.description || "Sem descrição.")}</p>
-    </section>
+    <h2>Descrição</h2>
+    <p>${escapeHtml(task.description || "Sem descrição.")}</p>
 
-    <section>
-      <h2>Respostas</h2>
-      ${responsesHtml}
-    </section>
+    <h2>Respostas</h2>
+    <table>
+      <thead><tr><th>Quando</th><th>Autor</th><th>Mensagem</th></tr></thead>
+      <tbody>${responseRows}</tbody>
+    </table>
+  `;
 
-    <script>
-      window.addEventListener("load", () => {
-        setTimeout(() => window.print(), 100);
-      });
-    </script>
-  </body>
-</html>`;
-
-  const popup = window.open("", "_blank", "noopener,noreferrer,width=800,height=900");
-  if (!popup) return;
-  popup.document.open();
-  popup.document.write(html);
-  popup.document.close();
+  openPdfWindow(
+    buildPdfDocument({
+      title: `Tarefa ${task.id}`,
+      docType: "Tarefa Operacional",
+      headline: task.title || "Tarefa sem título",
+      recordId: task.id,
+      createdAt: task.createdAt,
+      bodyHtml,
+    }),
+  );
 }

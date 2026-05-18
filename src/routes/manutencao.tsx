@@ -5,13 +5,11 @@ import { AppLayout, Icon } from "@/components/AppLayout";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { getUrgencyLevel } from "@/lib/urgency";
 import { inventoryActions, useInventoryStore } from "@/lib/inventory-store";
 import type { InventoryItem, StockMovement } from "@/lib/inventory-types";
 import { useAuthStore } from "@/lib/auth-store";
+import { exportMaintenanceAsCsv, exportMaintenanceAsPdf } from "@/lib/maintenance-export";
 import {
-  getMaintenanceAlerts,
-  getStepDelay,
   maintenanceActions,
   useMaintenanceStore,
   type MaintenanceDraft,
@@ -75,11 +73,9 @@ const TYPES: MaintenanceType[] = MAINTENANCE_TYPE_OPTIONS.map((name) => ({
 const EMPTY_MAINTENANCE: MaintenanceDraft = {
   equipment: "Escavadeira CAT 320",
   type: "Preventiva",
-  technician: "Todos",
-  responsible: "Todos",
   status: "Aberta",
-  deadline: "",
-  description: "",
+  item: "",
+  serviceDescription: "",
   notes: "",
 };
 
@@ -120,8 +116,6 @@ function Manutencao() {
             movement.equipment.toLowerCase() === selectedRecord.equipment.toLowerCase()),
       )
     : [];
-  const maintenanceAlerts = getMaintenanceAlerts(records);
-
   const typeCounts = useMemo(
     () =>
       TYPES.reduce<Record<string, number>>((acc, type) => {
@@ -136,20 +130,17 @@ function Manutencao() {
   const activeCount = records.filter(
     (record) => record.status === "Aberta" || record.status === "Em andamento",
   ).length;
-  const overdueCount = records.filter(
-    (record) =>
-      record.status === "Atrasada" ||
-      (record.deadline &&
-        record.status !== "Concluída" &&
-        getUrgencyLevel(record.deadline).isOverdue),
-  ).length;
+  const averageStepMinutes = useMemo(() => {
+    const completedSteps = records.flatMap((record) =>
+      record.steps.filter((step) => step.durationMinutes > 0),
+    );
+    if (completedSteps.length === 0) return 0;
+    const total = completedSteps.reduce((sum, step) => sum + step.durationMinutes, 0);
+    return Math.round(total / completedSteps.length);
+  }, [records]);
 
   const openCreateMaintenance = () => {
-    setDraft({
-      ...EMPTY_MAINTENANCE,
-      technician: user?.name || "Todos",
-      responsible: user?.name || "Todos",
-    });
+    setDraft({ ...EMPTY_MAINTENANCE });
     setShowMaintenanceModal(true);
   };
 
@@ -168,6 +159,20 @@ function Manutencao() {
     if (!draft.equipment.trim()) {
       toast.error("Equipamento obrigatório", {
         description: "Informe qual equipamento receberá a manutenção.",
+      });
+      return;
+    }
+
+    if (!draft.item.trim()) {
+      toast.error("Item obrigatório", {
+        description: "Informe qual componente ou peça será afetado.",
+      });
+      return;
+    }
+
+    if (!draft.serviceDescription.trim()) {
+      toast.error("Serviço obrigatório", {
+        description: "Descreva o que será feito ou o que quebrou.",
       });
       return;
     }
@@ -244,29 +249,8 @@ function Manutencao() {
         <Metric label="Total" value={totalMaintenance} tone="primary" />
         <Metric label="Concluídas" value={completedCount} tone="success" />
         <Metric label="Em andamento" value={activeCount} tone="primary" />
-        <Metric label="Atrasadas" value={overdueCount} tone="error" />
+        <Metric label="Tempo médio (min)" value={averageStepMinutes} tone="primary" />
       </div>
-
-      {maintenanceAlerts.length > 0 && (
-        <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-4 mb-8">
-          <h2 className="text-sm font-black uppercase tracking-widest text-status-error mb-3">
-            Gargalos no processo
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {maintenanceAlerts.map((alert) => (
-              <button
-                key={alert.id}
-                type="button"
-                onClick={() => setSelectedRecordId(alert.recordId)}
-                className="text-left bg-surface-container border border-border-low rounded p-3"
-              >
-                <p className="font-bold text-on-surface text-sm">{alert.title}</p>
-                <p className="text-xs text-on-surface-variant mt-1">{alert.description}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className="bg-surface-container border border-border-low rounded-lg p-5 mb-8 shadow-industrial">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
@@ -439,7 +423,7 @@ function Manutencao() {
               <table className="w-full text-left">
                 <thead className="bg-surface-lowest border-b border-border-low">
                   <tr>
-                    {["Equipamento", "Tipo", "Prazo Técnico", "Técnico", "Status"].map((header) => (
+                    {["Equipamento", "Tipo", "Item", "Aberto por", "Status"].map((header) => (
                       <th
                         key={header}
                         className="px-6 py-4 text-[10px] uppercase tracking-[0.2em] text-on-surface-variant font-black"
@@ -552,8 +536,6 @@ function MaintenanceTableRow({
   record: MaintenanceRecord;
   onOpen: (record: MaintenanceRecord) => void;
 }) {
-  const urgency = record.deadline ? getUrgencyLevel(record.deadline) : null;
-
   return (
     <tr
       role="button"
@@ -579,22 +561,9 @@ function MaintenanceTableRow({
         </div>
       </td>
       <td className="px-6 py-4 text-sm font-medium text-on-surface">{record.type}</td>
-      <td className="px-6 py-4">
-        <div className="flex flex-col">
-          <span className="text-sm font-bold text-on-surface">
-            {record.deadline || "Sem prazo"}
-          </span>
-          {urgency && (
-            <span
-              className={`text-[10px] font-black uppercase tracking-wider ${urgency.colorClass}`}
-            >
-              {urgency.timeRemaining}
-            </span>
-          )}
-        </div>
-      </td>
+      <td className="px-6 py-4 text-sm font-bold text-on-surface">{record.item || "—"}</td>
       <td className="px-6 py-4 text-sm font-bold text-on-surface-variant">
-        {record.technician || "Sem técnico"}
+        {record.submittedBy || "—"}
       </td>
       <td className="px-6 py-4">
         <StatusBadge status={record.status} />
@@ -610,8 +579,6 @@ function MaintenanceCard({
   record: MaintenanceRecord;
   onOpen: (record: MaintenanceRecord) => void;
 }) {
-  const urgency = record.deadline ? getUrgencyLevel(record.deadline) : null;
-
   return (
     <button
       type="button"
@@ -628,18 +595,16 @@ function MaintenanceCard({
       <p className="text-xs text-on-surface-variant mb-3">{record.type}</p>
       <dl className="space-y-2 text-xs text-on-surface-variant mb-3 pb-3 border-b border-border-low">
         <div className="flex justify-between">
-          <dt>Técnico:</dt>
-          <dd className="font-bold text-on-surface">{record.technician || "Sem técnico"}</dd>
+          <dt>Aberto por:</dt>
+          <dd className="font-bold text-on-surface">{record.submittedBy || "—"}</dd>
         </div>
         <div className="flex justify-between">
           <dt>Criado em:</dt>
           <dd className="font-bold text-on-surface">{record.createdAt}</dd>
         </div>
-        <div className="flex justify-between">
-          <dt>Prazo:</dt>
-          <dd className={`font-bold ${urgency?.colorClass || ""}`}>
-            {urgency?.timeRemaining || "Sem prazo"}
-          </dd>
+        <div className="flex justify-between gap-2">
+          <dt>Item / Componente:</dt>
+          <dd className="font-bold text-on-surface text-right truncate">{record.item || "—"}</dd>
         </div>
       </dl>
       <div className="text-xs font-black text-primary uppercase tracking-widest flex items-center gap-1">
@@ -679,6 +644,7 @@ function MaintenanceFormDialog({
   onDraftChange: (draft: MaintenanceDraft) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const user = useAuthStore((snapshot) => snapshot.user);
   const setValue = <K extends keyof MaintenanceDraft>(key: K, value: MaintenanceDraft[K]) =>
     onDraftChange({ ...draft, [key]: value });
 
@@ -689,6 +655,13 @@ function MaintenanceFormDialog({
           <DialogTitle className="text-2xl font-black uppercase">Registrar Manutenção</DialogTitle>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
+          <div className="flex items-center gap-2 rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm">
+            <Icon name="person" className="text-primary text-base" />
+            <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+              Aberto por:
+            </span>
+            <span className="font-bold text-on-surface">{user?.name || "Usuário"}</span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <SelectField
               label="Equipamento"
@@ -710,18 +683,16 @@ function MaintenanceFormDialog({
                 ))}
               </select>
             </label>
-            <SelectField
-              label="Técnico"
-              value={draft.technician}
-              options={ASSIGNMENT_OPTIONS}
-              onChange={(value) => setValue("technician", value)}
-            />
-            <SelectField
-              label="Responsável"
-              value={draft.responsible}
-              options={ASSIGNMENT_OPTIONS}
-              onChange={(value) => setValue("responsible", value)}
-            />
+            <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant sm:col-span-2">
+              Item / Componente afetado
+              <input
+                type="text"
+                value={draft.item}
+                onChange={(event) => setValue("item", event.target.value)}
+                placeholder="Ex: Bomba hidráulica, Filtro de ar"
+                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
             <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
               Status
               <select
@@ -738,20 +709,19 @@ function MaintenanceFormDialog({
                 )}
               </select>
             </label>
-            <Field
-              label="Prazo"
-              type="date"
-              value={draft.deadline}
-              onChange={(value) => setValue("deadline", value)}
-            />
           </div>
+          <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant block">
+            O que será feito / O que quebrou
+            <textarea
+              value={draft.serviceDescription}
+              onChange={(event) => setValue("serviceDescription", event.target.value)}
+              rows={4}
+              placeholder="Descreva o problema e o reparo necessário"
+              className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+          </label>
           <TextArea
-            label="Descrição"
-            value={draft.description}
-            onChange={(value) => setValue("description", value)}
-          />
-          <TextArea
-            label="Observações"
+            label="Observações adicionais"
             value={draft.notes}
             onChange={(value) => setValue("notes", value)}
           />
@@ -776,7 +746,6 @@ function MaintenanceDetailsDialog({
   inventoryItems: InventoryItem[];
   onOpenChange: (open: boolean) => void;
 }) {
-  const user = useAuthStore((snapshot) => snapshot.user);
   const totalCost = movements.reduce((sum, movement) => sum + movement.costImpact, 0);
   const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
   const [completionComments, setCompletionComments] = useState<Record<string, string>>({});
@@ -790,20 +759,36 @@ function MaintenanceDetailsDialog({
         {record && (
           <>
             <DialogHeader>
-              <DialogTitle className="text-2xl font-black uppercase">
-                {record.equipment}
-              </DialogTitle>
+              <div className="flex items-start justify-between gap-3">
+                <DialogTitle className="text-2xl font-black uppercase">
+                  {record.equipment}
+                </DialogTitle>
+                <div className="flex gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => exportMaintenanceAsPdf(record, movements)}
+                    aria-label="Exportar PDF"
+                  >
+                    <Icon name="picture_as_pdf" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => exportMaintenanceAsCsv(record, movements)}
+                    aria-label="Exportar CSV"
+                  >
+                    <Icon name="table_view" />
+                  </Button>
+                </div>
+              </div>
             </DialogHeader>
             <div className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Info label="OS" value={record.id} />
                 <Info label="Tipo" value={record.type} />
                 <Info label="Status" value={record.status} />
-                <Info
-                  label="Responsável"
-                  value={record.responsible || user?.name || "Sem responsável"}
-                />
-                <Info label="Prazo" value={record.deadline || "Sem prazo"} />
+                <Info label="Aberto por" value={record.submittedBy || "—"} />
                 <Info
                   label="Custo em peças"
                   value={totalCost.toLocaleString("pt-BR", {
@@ -811,6 +796,20 @@ function MaintenanceDetailsDialog({
                     currency: "BRL",
                   })}
                 />
+              </div>
+              <div className="bg-surface-highest border border-border-low rounded-lg p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                  Item / Componente
+                </p>
+                <p className="text-sm font-bold text-on-surface mt-1">{record.item || "—"}</p>
+              </div>
+              <div className="bg-surface-highest border border-border-low rounded-lg p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                  Serviço a executar
+                </p>
+                <p className="text-sm text-on-surface mt-1 whitespace-pre-wrap">
+                  {record.serviceDescription || "—"}
+                </p>
               </div>
               <div>
                 <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">
@@ -883,14 +882,16 @@ function MaintenanceDetailsDialog({
                   </div>
                 )}
               </div>
-              <div>
-                <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-2">
-                  Descrição
-                </p>
-                <p className="bg-surface-highest border border-border-low rounded-lg p-3 text-sm">
-                  {record.description || "Sem descrição"}
-                </p>
-              </div>
+              {record.description && (
+                <div>
+                  <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-2">
+                    Notas iniciais
+                  </p>
+                  <p className="bg-surface-highest border border-border-low rounded-lg p-3 text-sm">
+                    {record.description}
+                  </p>
+                </div>
+              )}
               <div>
                 <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-2">
                   Timeline real
@@ -1124,7 +1125,11 @@ function MaintenanceProgressNode({
       <p className="mt-1 text-xs font-bold leading-snug text-on-surface break-words">
         {step.label}
       </p>
-      <p className="mt-2 text-[11px] text-on-surface-variant">Prazo: {step.slaHours}h</p>
+      {step.durationMinutes > 0 && (
+        <p className="mt-2 text-[11px] text-on-surface-variant">
+          Duração: {formatStepDuration(step.durationMinutes)}
+        </p>
+      )}
     </div>
   );
 }
@@ -1154,8 +1159,6 @@ function MaintenanceStepCard({
   onCommentChange: (value: string) => void;
   onAttachmentsChange: (files: AttachedFile[]) => void;
 }) {
-  const delayedHours = getStepDelay(step);
-  const isDelayed = delayedHours > 0;
   const meta = getStepMeta(step, active, blocked);
   const canStart = active && step.status === "pendente";
   const canComplete = active && step.status === "em_andamento";
@@ -1172,50 +1175,23 @@ function MaintenanceStepCard({
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="font-black text-on-surface break-words">{step.label}</p>
+              <p className="font-black text-on-surface break-words">
+                ETAPA {index + 1} — {step.label}
+              </p>
               <span
                 className={`border rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest ${meta.badgeClass}`}
               >
                 {meta.label}
               </span>
             </div>
-            <p className="text-xs text-on-surface-variant mt-1">
-              Etapa {index + 1} do fluxo · prazo máximo: {step.slaHours}h
-              {step.durationMinutes > 0
-                ? ` · duração: ${formatStepDuration(step.durationMinutes)}`
-                : ""}
-            </p>
+            {step.durationMinutes > 0 && (
+              <p className="text-xs text-on-surface-variant mt-1">
+                Duração: {formatStepDuration(step.durationMinutes)}
+              </p>
+            )}
           </div>
         </div>
-        <label className="w-full sm:w-52 text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
-          Prazo da etapa
-          <span className="mt-2 flex items-center rounded-lg border border-border-low bg-surface-container focus-within:ring-2 focus-within:ring-primary">
-            <input
-              type="number"
-              min="1"
-              value={step.slaHours}
-              aria-label={`Prazo em horas para ${step.label}`}
-              onChange={(event) =>
-                maintenanceActions.updateStepSla(recordId, step.id, Number(event.target.value))
-              }
-              className="w-full min-w-0 bg-transparent px-3 py-2 text-sm text-on-surface outline-none"
-            />
-            <span className="pr-3 text-xs font-bold normal-case tracking-normal text-on-surface-variant">
-              horas
-            </span>
-          </span>
-          <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-on-surface-variant/80">
-            Tempo máximo antes de virar atraso.
-          </span>
-        </label>
       </div>
-
-      {isDelayed && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs font-bold text-status-error">
-          <Icon name="warning" className="text-base" />
-          <span>{delayedHours.toFixed(1)}h acima do prazo desta etapa.</span>
-        </div>
-      )}
 
       {canStart && (
         <div className="mt-4 space-y-3">

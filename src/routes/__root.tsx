@@ -166,11 +166,12 @@ function AuthGate({ children }: { children: ReactNode }) {
   }, [hydrated, isLogin, navigate, pathname, user]);
 
   if (!hydrated && !isLogin) {
-    return <LoginPanel onSuccess={() => navigate({ to: pathname || "/" })} />;
+    return <div className="min-h-screen bg-background" />;
   }
 
   if (!user && !isLogin) {
-    return <LoginPanel onSuccess={() => navigate({ to: pathname || "/" })} />;
+    const safeRedirect = pathname && pathname !== "/login" ? pathname : "/";
+    return <LoginPanel onSuccess={() => navigate({ to: safeRedirect })} />;
   }
 
   return children;

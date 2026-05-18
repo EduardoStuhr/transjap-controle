@@ -1,29 +1,52 @@
 import { toast } from "sonner";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
+import { useAuthStore } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
-import { getMaintenanceAlerts, useMaintenanceStore } from "@/lib/maintenance-store";
+import { filterVisibleTasks } from "@/lib/task-visibility";
+import { useMaintenanceStore } from "@/lib/maintenance-store";
 import { useInventoryStore } from "@/lib/inventory-store";
 
 export const Route = createFileRoute("/")({ component: Dashboard });
 
+function parseBrDate(str: string): number {
+  const [d, m, y] = str.split("/").map(Number);
+  if (!d || !m || !y) return 0;
+  return new Date(y, m - 1, d).getTime();
+}
+
 function Dashboard() {
   const navigate = useNavigate();
+  const user = useAuthStore((snapshot) => snapshot.user);
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
   const pendingRequests = useTaskStore((snapshot) => snapshot.pendingRequests);
   const maintenances = useMaintenanceStore((snapshot) => snapshot.records);
   const stockMovements = useInventoryStore((snapshot) => snapshot.movements);
-  const openTasks = tasks.filter((task) => task.status !== "Concluído");
+  const visibleTasks = useMemo(() => filterVisibleTasks(tasks, user), [tasks, user]);
+  const visiblePending = useMemo(
+    () => filterVisibleTasks(pendingRequests, user),
+    [pendingRequests, user],
+  );
+  const openTasks = visibleTasks.filter((task) => task.status !== "Concluído");
   const criticalTasks = openTasks
     .filter((task) => task.deadline && getUrgencyLevel(task.deadline).isOverdue)
     .slice(0, 5);
-  const completedTasks = tasks.length - openTasks.length;
+  const completedTasks = visibleTasks.length - openTasks.length;
   const openMaintenances = maintenances.filter((record) => record.status !== "Concluída");
-  const maintenanceAlerts = getMaintenanceAlerts(maintenances);
   const completedSteps = maintenances.flatMap((record) =>
     record.steps.filter((step) => step.durationMinutes > 0),
+  );
+  const stepsInProgress = maintenances.flatMap((record) =>
+    record.steps
+      .filter((step) => step.status === "em_andamento")
+      .map((step) => ({
+        id: `${record.id}-${step.id}`,
+        equipment: record.equipment,
+        label: step.label,
+      })),
   );
   const averageStepTime = completedSteps.length
     ? Math.round(
@@ -45,10 +68,10 @@ function Dashboard() {
     const date = new Date(today);
     date.setDate(today.getDate() - (6 - i));
     const dayLabel = weekDays[date.getDay()];
-    const dateStr = date.toLocaleDateString("pt-BR");
+    const dayTime = date.getTime();
 
     const activeOnDay = maintenances.filter(
-      (m) => m.status !== "Concluída" && m.createdAt <= dateStr,
+      (m) => m.status !== "Concluída" && parseBrDate(m.createdAt) <= dayTime,
     ).length;
     const total = Math.max(5, maintenances.length);
     const downPct = Math.min(100, Math.round((activeOnDay / total) * 100));
@@ -66,9 +89,9 @@ function Dashboard() {
       tone: "success",
     },
     {
-      icon: "new_inbox",
+      icon: "inbox",
       title: "Solicitações",
-      value: String(pendingRequests.length),
+      value: String(visiblePending.length),
       status: "Pendentes",
       tone: "warning",
     },
@@ -76,7 +99,7 @@ function Dashboard() {
       icon: "build",
       title: "Manutenções Abertas",
       value: String(openMaintenances.length),
-      status: `${maintenanceAlerts.length} gargalo(s)`,
+      status: "Ativas",
       tone: "error",
     },
     {
@@ -136,23 +159,34 @@ function Dashboard() {
               ))}
             </div>
           ) : (
-            <p className="text-sm text-on-surface-variant">Sem etapas concluídas ainda</p>
+            <div className="flex flex-col items-center justify-center py-6 text-center gap-2">
+              <Icon name="timer" className="text-3xl text-on-surface-variant/30" />
+              <p className="text-xs text-on-surface-variant font-medium">
+                Conclua etapas para ver tempos
+              </p>
+            </div>
           )}
         </div>
         <div className="bg-surface-container border border-border-low p-5 rounded-lg">
           <h3 className="text-sm font-black uppercase tracking-widest mb-4">
-            Gargalos do processo
+            Etapas em andamento
           </h3>
-          {maintenanceAlerts.length > 0 ? (
+          {stepsInProgress.length > 0 ? (
             <div className="space-y-2">
-              {maintenanceAlerts.slice(0, 3).map((alert) => (
-                <p key={alert.id} className="text-sm text-status-error font-bold">
-                  {alert.description}
+              {stepsInProgress.slice(0, 3).map((step) => (
+                <p key={step.id} className="text-sm flex justify-between gap-3">
+                  <span className="truncate">{step.equipment}</span>
+                  <strong className="text-on-surface-variant text-xs">{step.label}</strong>
                 </p>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-on-surface-variant">Nenhum gargalo ativo</p>
+            <div className="flex flex-col items-center justify-center py-6 text-center gap-2">
+              <Icon name="check_circle" className="text-3xl text-on-surface-variant/30" />
+              <p className="text-xs text-on-surface-variant font-medium">
+                Nenhuma etapa em execução
+              </p>
+            </div>
           )}
         </div>
         <div className="bg-surface-container border border-border-low p-5 rounded-lg">
@@ -173,7 +207,12 @@ function Dashboard() {
                 ))}
             </div>
           ) : (
-            <p className="text-sm text-on-surface-variant">Sem custos registrados</p>
+            <div className="flex flex-col items-center justify-center py-6 text-center gap-2">
+              <Icon name="payments" className="text-3xl text-on-surface-variant/30" />
+              <p className="text-xs text-on-surface-variant font-medium">
+                Registre movimentações no estoque
+              </p>
+            </div>
           )}
         </div>
       </div>

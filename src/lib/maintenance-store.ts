@@ -62,6 +62,9 @@ export type MaintenanceRecord = {
   notes: string;
   serviceSummary: string;
   totalCost: number;
+  item: string;
+  serviceDescription: string;
+  submittedBy: string;
   steps: MaintenanceStep[];
   timeline: MaintenanceTimelineEvent[];
   waitingParts: string[];
@@ -69,14 +72,7 @@ export type MaintenanceRecord = {
 
 export type MaintenanceDraft = Pick<
   MaintenanceRecord,
-  | "equipment"
-  | "type"
-  | "technician"
-  | "responsible"
-  | "status"
-  | "deadline"
-  | "description"
-  | "notes"
+  "equipment" | "type" | "status" | "item" | "serviceDescription" | "notes"
 >;
 
 type MaintenanceState = {
@@ -165,6 +161,9 @@ function normalizeRecord(record: Partial<MaintenanceRecord>): MaintenanceRecord 
     notes: record.notes || "",
     serviceSummary: record.serviceSummary || "",
     totalCost: record.totalCost || 0,
+    item: record.item || "",
+    serviceDescription: record.serviceDescription || "",
+    submittedBy: record.submittedBy || "",
     steps,
     timeline: Array.isArray(record.timeline) ? record.timeline : [],
     waitingParts: Array.isArray(record.waitingParts) ? record.waitingParts : [],
@@ -211,67 +210,46 @@ function nextOpenStep(steps: MaintenanceStep[]) {
   return steps.find((step) => step.status !== "concluida")?.id || steps[steps.length - 1]?.id || "";
 }
 
-export function getStepDelay(step: MaintenanceStep) {
-  if (step.status !== "em_andamento" || !step.startedAt) return 0;
-  const elapsedHours = (Date.now() - new Date(step.startedAt).getTime()) / 3_600_000;
-  return Math.max(0, elapsedHours - step.slaHours);
-}
-
-export function getMaintenanceAlerts(records: MaintenanceRecord[]) {
-  return records.flatMap((record) =>
-    record.steps
-      .filter((step) => step.status === "em_andamento" && getStepDelay(step) > 0)
-      .map((step) => ({
-        id: `${record.id}-${step.id}`,
-        recordId: record.id,
-        title: "Etapa atrasada",
-        description: `${record.equipment} está parado em ${step.label}.`,
-      })),
-  );
+export function getMaintenanceAlerts(_records: MaintenanceRecord[]) {
+  return [] as Array<{
+    id: string;
+    recordId: string;
+    title: string;
+    description: string;
+  }>;
 }
 
 export const maintenanceActions = {
   createRecord(draft: MaintenanceDraft) {
     const createdAt = new Date().toLocaleDateString("pt-BR");
     const steps = initialSteps();
+    const submittedBy = getCurrentUser()?.name || "";
     const record: MaintenanceRecord = {
       id: newId(),
       equipment: draft.equipment.trim(),
       type: draft.type.trim() || "Preventiva",
-      technician: draft.technician.trim(),
-      responsible: draft.responsible.trim() || currentUserName(),
+      technician: "",
+      responsible: "",
       status: "Aberta",
       currentStepId: steps[0].id,
-      deadline: draft.deadline,
+      deadline: "",
       createdAt,
       startedAt: "",
       finishedAt: "",
-      description: draft.description.trim(),
+      description: "",
       notes: draft.notes.trim(),
       serviceSummary: "",
       totalCost: 0,
+      item: draft.item.trim(),
+      serviceDescription: draft.serviceDescription.trim(),
+      submittedBy,
       steps,
-      timeline: [timeline("Manutenção criada", draft.notes)],
+      timeline: [timeline("Manutenção criada", draft.serviceDescription)],
       waitingParts: [],
     };
 
     setState((current) => ({ records: [record, ...current.records] }));
     return record;
-  },
-
-  updateStepSla(recordId: string, stepId: string, slaHours: number) {
-    setState((current) => ({
-      records: current.records.map((record) =>
-        record.id === recordId
-          ? {
-              ...record,
-              steps: record.steps.map((step) =>
-                step.id === stepId ? { ...step, slaHours: Math.max(1, slaHours) } : step,
-              ),
-            }
-          : record,
-      ),
-    }));
   },
 
   startStep(recordId: string, stepId: string, note = "") {

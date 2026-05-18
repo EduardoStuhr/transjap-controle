@@ -47,6 +47,7 @@ export type TaskResponse = {
 
 export type TaskRecord = {
   id: string;
+  createdBy: string;
   title: string;
   description: string;
   equipment: string;

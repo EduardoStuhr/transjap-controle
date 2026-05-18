@@ -3,8 +3,10 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 
 import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
+import { useAuthStore } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { taskActions, useTaskStore } from "@/lib/task-store";
+import { filterVisibleTasks } from "@/lib/task-visibility";
 import {
   TASK_STATUS_CONFIG,
   TASK_STATUSES,
@@ -39,6 +41,7 @@ const FILTERS: TaskFilter[] = [
 ];
 
 function Agenda() {
+  const user = useAuthStore((snapshot) => snapshot.user);
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
   const pending = useTaskStore((snapshot) => snapshot.pendingRequests);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -59,19 +62,21 @@ function Agenda() {
     setShowCreateModal(true);
   }, []);
 
+  const visibleTasks = useMemo(() => filterVisibleTasks(tasks, user), [tasks, user]);
+  const visiblePending = useMemo(() => filterVisibleTasks(pending, user), [pending, user]);
   const filteredTasks = useMemo(
-    () => tasks.filter((task) => filter === "Todas" || task.status === filter),
-    [filter, tasks],
+    () => visibleTasks.filter((task) => filter === "Todas" || task.status === filter),
+    [filter, visibleTasks],
   );
 
   const selectedTask = useMemo(
-    () => tasks.find((task) => task.id === selectedTaskId) || null,
-    [selectedTaskId, tasks],
+    () => visibleTasks.find((task) => task.id === selectedTaskId) || null,
+    [selectedTaskId, visibleTasks],
   );
 
   const editingTask = useMemo(
-    () => tasks.find((task) => task.id === editingTaskId) || null,
-    [editingTaskId, tasks],
+    () => visibleTasks.find((task) => task.id === editingTaskId) || null,
+    [editingTaskId, visibleTasks],
   );
 
   const handleCreateTask = useCallback((data: TaskModalData) => {
@@ -132,14 +137,14 @@ function Agenda() {
         </Button>
       </div>
 
-      {pending.length > 0 && (
+      {visiblePending.length > 0 && (
         <section className="bg-surface-container border border-border-low rounded-lg p-6 mb-8 shadow-industrial">
           <h2 className="text-lg font-black text-on-surface uppercase mb-4 flex items-center gap-2">
             <Icon name="new_inbox" className="text-primary text-2xl" />
             Solicitações Pendentes
           </h2>
           <div className="space-y-3">
-            {pending.map((request) => (
+            {visiblePending.map((request) => (
               <PendingRequestCard
                 key={request.id}
                 request={request}
@@ -201,7 +206,7 @@ function Agenda() {
         <div className="text-center py-12">
           <Icon name="task_alt" className="text-5xl text-on-surface-variant/30 mx-auto mb-3" />
           <p className="text-on-surface-variant">
-            {tasks.length === 0 ? "Nenhuma tarefa cadastrada" : "Nenhuma tarefa neste filtro"}
+            {visibleTasks.length === 0 ? "Nenhuma tarefa cadastrada" : "Nenhuma tarefa neste filtro"}
           </p>
         </div>
       )}
@@ -361,6 +366,10 @@ const TaskListItem = memo(function TaskListItem({
           </h3>
           <div className="flex flex-wrap gap-3 mt-2 text-xs text-on-surface-variant">
             <span className="flex items-center gap-1">
+              <Icon name="outgoing_mail" className="text-base" />
+              Enviado por {task.createdBy || "Sistema"}
+            </span>
+            <span className="flex items-center gap-1">
               <Icon name="person" className="text-base" />
               {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}
             </span>
@@ -405,6 +414,9 @@ const TaskGridCard = memo(function TaskGridCard({
         {task.title}
       </h3>
       <div className="space-y-2 text-xs text-on-surface-variant mb-4">
+        <p className="truncate">
+          <strong>Enviado por:</strong> {task.createdBy || "Sistema"}
+        </p>
         <p className="truncate">
           <strong>Destinatários:</strong>{" "}
           {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}

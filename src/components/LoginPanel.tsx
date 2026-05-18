@@ -30,16 +30,15 @@ export function LoginPanel({ onSuccess }: LoginPanelProps) {
   return (
     <main className="min-h-screen bg-background text-on-surface grid place-items-center px-4">
       <section className="w-full max-w-md bg-surface-container border border-border-low rounded-lg p-6 shadow-industrial">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="w-12 h-12 bg-primary text-on-primary rounded flex items-center justify-center shadow-industrial">
-            <Icon name="construction" filled />
-          </div>
-          <div>
-            <h1 className="text-2xl font-black uppercase text-primary tracking-tight">TransJap</h1>
-            <p className="text-xs text-on-surface-variant font-bold uppercase tracking-widest">
-              Acesso operacional
-            </p>
-          </div>
+        <div className="flex flex-col items-center gap-4 mb-8">
+          <img
+            src="/logo.png"
+            alt="TransJap — Terraplenagem e Construções"
+            className="w-full max-w-[240px] h-auto object-contain"
+          />
+          <p className="text-xs text-on-surface-variant font-bold uppercase tracking-widest">
+            Acesso operacional
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
