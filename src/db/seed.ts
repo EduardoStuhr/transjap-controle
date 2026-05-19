@@ -2,7 +2,7 @@ import { getDb } from "./client";
 import { equipment } from "./schema";
 import type { DbEquipmentInsert } from "./schema";
 
-const SEED_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updatedAt">[] = [
+export const SEED_EQUIPMENT_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updatedAt">[] = [
   {
     id: "FR-001",
     model: "Escavadeira CAT 320",
@@ -76,7 +76,7 @@ export async function seedEquipmentIfEmpty(d1: D1Database): Promise<void> {
   if (existing.length > 0) return;
 
   const now = new Date().toISOString();
-  for (const row of SEED_ROWS) {
+  for (const row of SEED_EQUIPMENT_ROWS) {
     await db.insert(equipment).values({ ...row, createdAt: now, updatedAt: now });
   }
 }

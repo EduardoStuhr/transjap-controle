@@ -10,7 +10,8 @@ import {
 } from "@/components/AttachmentUpload";
 import { TASK_STATUS_CONFIG, type TaskRecord } from "@/lib/task-types";
 import { useAuthStore } from "@/lib/auth-store";
-import { resolveRecipients } from "@/lib/operational-options";
+import { formatEquipmentReference, resolveRecipients } from "@/lib/operational-options";
+import { useEquipmentStore } from "@/lib/equipment-store";
 import {
   downloadAttachment,
   exportTaskAsCsv,
@@ -52,6 +53,7 @@ export function TaskDetailsModal({
   onEdit,
 }: TaskDetailsModalProps) {
   const user = useAuthStore((snapshot) => snapshot.user);
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const [commentAuthor, setCommentAuthor] = useState("");
   const [newComment, setNewComment] = useState("");
   const [responseText, setResponseText] = useState("");
@@ -234,7 +236,9 @@ export function TaskDetailsModal({
                 </p>
                 <div className="flex items-center gap-2">
                   <Icon name="precision_manufacturing" className="text-primary text-lg" />
-                  <p className="font-bold text-on-surface">{task.equipment || "Sem equipamento"}</p>
+                  <p className="font-bold text-on-surface">
+                    {formatEquipmentReference(task.equipment, equipments) || "Sem equipamento"}
+                  </p>
                 </div>
               </div>
 

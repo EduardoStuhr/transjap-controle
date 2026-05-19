@@ -25,7 +25,8 @@ export type Equipment = {
   manufacturer?: string;
 };
 
-export type EquipmentDraft = Omit<Equipment, "id">;
+export type EquipmentDraft = Pick<Equipment, "id" | "model" | "location" | "hours" | "status"> &
+  Partial<Omit<Equipment, "id" | "model" | "location" | "hours" | "status">>;
 
 // Seed data exported for reference / other modules
 export const SEED_EQUIPMENTS: Equipment[] = [
@@ -117,10 +118,9 @@ export function useEquipmentStore<T>(selector: Selector<T>): T {
       // because the schema uses JS camelCase keys mapped to snake_case columns.
       return rows as unknown as Equipment[];
     },
-    staleTime: 30_000,
-    // Show seed data immediately on the first SSR/CSR render; replaced once
-    // the real query resolves.
-    initialData: SEED_EQUIPMENTS,
+    staleTime: 0,
+    // Show seed data while the real source loads, without treating it as cached data.
+    placeholderData: SEED_EQUIPMENTS,
   });
 
   return selector({ equipments: data ?? SEED_EQUIPMENTS });

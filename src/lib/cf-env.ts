@@ -7,13 +7,16 @@ export async function runWithCfEnv<T>(env: unknown, fn: () => Promise<T>): Promi
 }
 
 export function getD1(): D1Database {
+  const db = getOptionalD1();
+  if (db) return db;
+
+  throw new Error(
+    "D1 binding 'DB' não disponível. " +
+      "Em dev: use 'wrangler dev'; em prod: verifique wrangler.jsonc e o binding name.",
+  );
+}
+
+export function getOptionalD1(): D1Database | undefined {
   const env = cfEnvStorage.getStore();
-  const db = env?.DB as D1Database | undefined;
-  if (!db) {
-    throw new Error(
-      "D1 binding 'DB' não disponível. " +
-        "Em dev: use 'wrangler dev'; em prod: verifique wrangler.jsonc e o binding name.",
-    );
-  }
-  return db;
+  return env?.DB as D1Database | undefined;
 }

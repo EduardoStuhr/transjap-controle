@@ -20,10 +20,12 @@ import {
 } from "@/lib/task-types";
 import {
   ASSIGNMENT_OPTIONS,
-  EQUIPMENT_OPTIONS,
   SECTOR_OPTIONS,
+  buildEquipmentOptions,
   normalizeOption,
+  type EquipmentOption,
 } from "@/lib/operational-options";
+import { useEquipmentStore } from "@/lib/equipment-store";
 
 export interface TaskModalData extends TaskInput {
   title: string;
@@ -58,9 +60,18 @@ const EMPTY_FORM: TaskModalData = {
   attachments: [],
 };
 
-function normalizeEquipmentOptional(value: string | undefined): string {
+function normalizeEquipmentOptional(
+  value: string | undefined,
+  equipmentOptions: readonly EquipmentOption[],
+): string {
   if (!value) return "";
-  return EQUIPMENT_OPTIONS.includes(value as (typeof EQUIPMENT_OPTIONS)[number]) ? value : "";
+  const match = equipmentOptions.find(
+    (option) =>
+      option.value === value ||
+      option.label === value ||
+      option.label.toLowerCase().endsWith(` - ${value.toLowerCase()}`),
+  );
+  return match?.value ?? "";
 }
 
 function normalizeAssignedToList(value: unknown): string[] {
@@ -74,12 +85,15 @@ function normalizeAssignedToList(value: unknown): string[] {
   return filtered.length > 0 ? Array.from(new Set(filtered)) : ["Todos"];
 }
 
-function normalizeAssignmentData(data: TaskModalData): TaskModalData {
+function normalizeAssignmentData(
+  data: TaskModalData,
+  equipmentOptions: readonly EquipmentOption[],
+): TaskModalData {
   return {
     ...data,
     assignedTo: normalizeAssignedToList(data.assignedTo),
     sector: normalizeOption(data.sector, SECTOR_OPTIONS, "Operacional"),
-    equipment: normalizeEquipmentOptional(data.equipment),
+    equipment: normalizeEquipmentOptional(data.equipment, equipmentOptions),
   };
 }
 
@@ -112,6 +126,8 @@ export function TaskModal({
   initialData,
   draftKey,
 }: TaskModalProps) {
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
+  const equipmentOptions = useMemo(() => buildEquipmentOptions(equipments), [equipments]);
   const initialFormData = useMemo<TaskModalData>(
     () => ({
       ...EMPTY_FORM,
@@ -128,9 +144,11 @@ export function TaskModal({
 
   useEffect(() => {
     if (!open) return;
-    setFormData(normalizeAssignmentData({ ...initialFormData, ...safeReadDraft(draftKey) }));
+    setFormData(
+      normalizeAssignmentData({ ...initialFormData, ...safeReadDraft(draftKey) }, equipmentOptions),
+    );
     setActiveTab("details");
-  }, [draftKey, initialFormData, open]);
+  }, [draftKey, equipmentOptions, initialFormData, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -265,9 +283,9 @@ export function TaskModal({
                     className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial"
                   >
                     <option value="">— Sem equipamento —</option>
-                    {EQUIPMENT_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
+                    {equipmentOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>

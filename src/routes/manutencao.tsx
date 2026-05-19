@@ -19,10 +19,13 @@ import {
 } from "@/lib/maintenance-store";
 import {
   ASSIGNMENT_OPTIONS,
-  EQUIPMENT_OPTIONS,
   MAINTENANCE_TYPE_OPTIONS,
+  buildEquipmentOptions,
+  formatEquipmentReference,
+  type EquipmentOption,
 } from "@/lib/operational-options";
 import { daysSinceBrDate } from "@/lib/urgency";
+import { useEquipmentStore } from "@/lib/equipment-store";
 
 export const Route = createFileRoute("/manutencao")({ component: Manutencao });
 
@@ -72,7 +75,7 @@ const TYPES: MaintenanceType[] = MAINTENANCE_TYPE_OPTIONS.map((name) => ({
 }));
 
 const EMPTY_MAINTENANCE: MaintenanceDraft = {
-  equipment: "Escavadeira CAT 320",
+  equipment: "",
   type: "Preventiva",
   status: "Aberta",
   item: "",
@@ -82,6 +85,7 @@ const EMPTY_MAINTENANCE: MaintenanceDraft = {
 
 function Manutencao() {
   const records = useMaintenanceStore((snapshot) => snapshot.records);
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const inventoryItems = useInventoryStore((snapshot) => snapshot.items);
   const movements = useInventoryStore((snapshot) => snapshot.movements);
   const user = useAuthStore((snapshot) => snapshot.user);
@@ -98,6 +102,9 @@ function Manutencao() {
     maintenanceId: "",
     note: "",
   });
+  const equipmentOptions = useMemo(() => buildEquipmentOptions(equipments), [equipments]);
+  const formatEquipment = (value: string | undefined) =>
+    formatEquipmentReference(value, equipments) || "Sem equipamento";
 
   const filteredRecords = useMemo(
     () =>
@@ -213,7 +220,7 @@ function Manutencao() {
       equipment: consumption.equipment,
       maintenanceId: consumption.maintenanceId,
       toLocationId: "",
-    });
+    }) as StockMovement | null;
 
     if (!movement) return;
 
@@ -311,9 +318,9 @@ function Manutencao() {
             className="px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm"
           >
             <option value="">Equipamento</option>
-            {EQUIPMENT_OPTIONS.map((equipment) => (
-              <option key={equipment} value={equipment}>
-                {equipment}
+            {equipmentOptions.map((equipment) => (
+              <option key={equipment.value} value={equipment.value}>
+                {equipment.label}
               </option>
             ))}
           </select>
@@ -436,7 +443,12 @@ function Manutencao() {
                 </thead>
                 <tbody className="divide-y divide-border-low">
                   {filteredRecords.map((record) => (
-                    <MaintenanceTableRow key={record.id} record={record} onOpen={openRecord} />
+                    <MaintenanceTableRow
+                      key={record.id}
+                      record={record}
+                      onOpen={openRecord}
+                      formatEquipment={formatEquipment}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -444,7 +456,12 @@ function Manutencao() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-6">
               {filteredRecords.map((record) => (
-                <MaintenanceCard key={record.id} record={record} onOpen={openRecord} />
+                <MaintenanceCard
+                  key={record.id}
+                  record={record}
+                  onOpen={openRecord}
+                  formatEquipment={formatEquipment}
+                />
               ))}
             </div>
           )
@@ -469,12 +486,14 @@ function Manutencao() {
         open={showMaintenanceModal}
         onOpenChange={setShowMaintenanceModal}
         draft={draft}
+        equipmentOptions={equipmentOptions}
         onDraftChange={setDraft}
         onSubmit={saveMaintenance}
       />
 
       <MaintenanceDetailsDialog
         record={selectedRecord}
+        equipmentLabel={formatEquipment(selectedRecord?.equipment)}
         movements={selectedRecordMovements}
         inventoryItems={inventoryItems}
         onOpenChange={(open) => {
@@ -533,9 +552,11 @@ function Metric({
 function MaintenanceTableRow({
   record,
   onOpen,
+  formatEquipment,
 }: {
   record: MaintenanceRecord;
   onOpen: (record: MaintenanceRecord) => void;
+  formatEquipment: (value: string | undefined) => string;
 }) {
   return (
     <tr
@@ -557,7 +578,7 @@ function MaintenanceTableRow({
             <Icon name="construction" className="text-primary text-base" />
           </div>
           <span className="text-sm font-bold text-on-surface group-hover:text-primary transition-colors">
-            {record.equipment}
+            {formatEquipment(record.equipment)}
           </span>
         </div>
       </td>
@@ -590,9 +611,11 @@ function MaintenanceTableRow({
 function MaintenanceCard({
   record,
   onOpen,
+  formatEquipment,
 }: {
   record: MaintenanceRecord;
   onOpen: (record: MaintenanceRecord) => void;
+  formatEquipment: (value: string | undefined) => string;
 }) {
   return (
     <button
@@ -619,7 +642,7 @@ function MaintenanceCard({
         </div>
       </div>
       <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-1">
-        {record.equipment}
+        {formatEquipment(record.equipment)}
       </h3>
       <p className="text-xs text-on-surface-variant mb-3">{record.type}</p>
       <dl className="space-y-2 text-xs text-on-surface-variant mb-3 pb-3 border-b border-border-low">
@@ -664,12 +687,14 @@ function MaintenanceFormDialog({
   open,
   onOpenChange,
   draft,
+  equipmentOptions,
   onDraftChange,
   onSubmit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   draft: MaintenanceDraft;
+  equipmentOptions: EquipmentOption[];
   onDraftChange: (draft: MaintenanceDraft) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
@@ -695,7 +720,7 @@ function MaintenanceFormDialog({
             <SelectField
               label="Equipamento"
               value={draft.equipment}
-              options={EQUIPMENT_OPTIONS}
+              options={equipmentOptions}
               onChange={(value) => setValue("equipment", value)}
             />
             <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
@@ -766,11 +791,13 @@ function MaintenanceFormDialog({
 
 function MaintenanceDetailsDialog({
   record,
+  equipmentLabel,
   movements,
   inventoryItems,
   onOpenChange,
 }: {
   record: MaintenanceRecord | null;
+  equipmentLabel: string;
   movements: StockMovement[];
   inventoryItems: InventoryItem[];
   onOpenChange: (open: boolean) => void;
@@ -790,7 +817,7 @@ function MaintenanceDetailsDialog({
             <DialogHeader>
               <div className="flex items-start justify-between gap-3">
                 <DialogTitle className="text-2xl font-black uppercase">
-                  {record.equipment}
+                  {equipmentLabel}
                 </DialogTitle>
                 <div className="flex gap-2 shrink-0">
                   <Button
@@ -1368,9 +1395,11 @@ function SelectField({
 }: {
   label: string;
   value: string;
-  options: readonly string[];
+  options: readonly EquipmentOption[];
   onChange: (value: string) => void;
 }) {
+  const hasValue = !value || options.some((option) => option.value === value);
+
   return (
     <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
       {label}
@@ -1379,9 +1408,11 @@ function SelectField({
         onChange={(event) => onChange(event.target.value)}
         className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
       >
+        <option value="">Selecione</option>
+        {!hasValue && <option value={value}>{value}</option>}
         {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
+          <option key={option.value} value={option.value}>
+            {option.label}
           </option>
         ))}
       </select>

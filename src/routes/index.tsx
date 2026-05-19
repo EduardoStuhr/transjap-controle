@@ -9,6 +9,8 @@ import { useTaskStore } from "@/lib/task-store";
 import { filterVisibleTasks } from "@/lib/task-visibility";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
 import { useInventoryStore } from "@/lib/inventory-store";
+import { useEquipmentStore } from "@/lib/equipment-store";
+import { formatEquipmentReference } from "@/lib/operational-options";
 
 export const Route = createFileRoute("/")({ component: Dashboard });
 
@@ -24,6 +26,7 @@ function Dashboard() {
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
   const pendingRequests = useTaskStore((snapshot) => snapshot.pendingRequests);
   const maintenances = useMaintenanceStore((snapshot) => snapshot.records);
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const stockMovements = useInventoryStore((snapshot) => snapshot.movements);
   const visibleTasks = useMemo(() => filterVisibleTasks(tasks, user), [tasks, user]);
   const visiblePending = useMemo(
@@ -36,6 +39,8 @@ function Dashboard() {
     .slice(0, 5);
   const completedTasks = visibleTasks.length - openTasks.length;
   const openMaintenances = maintenances.filter((record) => record.status !== "Concluída");
+  const formatEquipment = (value: string | undefined) =>
+    formatEquipmentReference(value, equipments) || "Sem equipamento";
   const completedSteps = maintenances.flatMap((record) =>
     record.steps.filter((step) => step.durationMinutes > 0),
   );
@@ -196,7 +201,7 @@ function Dashboard() {
             <div className="space-y-2">
               {stepsInProgress.slice(0, 3).map((step) => (
                 <p key={step.id} className="text-sm flex justify-between gap-3">
-                  <span className="truncate">{step.equipment}</span>
+                  <span className="truncate">{formatEquipment(step.equipment)}</span>
                   <strong className="text-on-surface-variant text-xs">{step.label}</strong>
                 </p>
               ))}
@@ -220,7 +225,7 @@ function Dashboard() {
                 .slice(0, 3)
                 .map(([equipment, cost]) => (
                   <p key={equipment} className="text-sm flex justify-between gap-3">
-                    <span className="truncate">{equipment}</span>
+                    <span className="truncate">{formatEquipment(equipment)}</span>
                     <strong>
                       {cost.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
                     </strong>

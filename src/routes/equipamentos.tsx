@@ -31,6 +31,7 @@ import {
   type EquipmentTone,
 } from "@/lib/equipment-store";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
+import { formatEquipmentReference, normalizeFleetId } from "@/lib/operational-options";
 
 export const Route = createFileRoute("/equipamentos")({ component: Equipamentos });
 
@@ -41,19 +42,7 @@ const toneBg: Record<string, string> = {
 };
 
 const STATUS_OPTIONS: EquipmentStatus[] = ["Operação", "Manutenção", "Parado"];
-
-const ICON_OPTIONS = [
-  "snowmobile",
-  "local_shipping",
-  "agriculture",
-  "construction",
-  "forklift",
-  "directions_bus",
-  "airport_shuttle",
-  "fire_truck",
-  "excavator",
-  "cable_car",
-] as const;
+const DEFAULT_ICON = "construction";
 
 const STATUS_TONE: Record<EquipmentStatus, EquipmentTone> = {
   Operação: "success",
@@ -62,57 +51,52 @@ const STATUS_TONE: Record<EquipmentStatus, EquipmentTone> = {
 };
 
 type FormState = {
+  fleet: string;
   model: string;
-  manufacturer: string;
-  seriesNumber: string;
-  acquisitionDate: string;
   location: string;
   hours: string;
   status: EquipmentStatus;
-  icon: string;
-  lastMaintenance: string;
 };
 
 const EMPTY_FORM: FormState = {
+  fleet: "",
   model: "",
-  manufacturer: "",
-  seriesNumber: "",
-  acquisitionDate: "",
   location: "",
   hours: "",
   status: "Operação",
-  icon: ICON_OPTIONS[0],
-  lastMaintenance: "",
 };
 
 function equipmentToForm(equipment: Equipment): FormState {
   return {
+    fleet: equipment.id,
     model: equipment.model,
-    manufacturer: equipment.manufacturer ?? "",
-    seriesNumber: equipment.seriesNumber ?? "",
-    acquisitionDate: equipment.acquisitionDate ?? "",
     location: equipment.location,
     hours: String(equipment.hours),
     status: equipment.status,
-    icon: equipment.icon,
-    lastMaintenance: equipment.lastMaintenance,
   };
 }
 
 function formToDraft(form: FormState): EquipmentDraft {
   const status = form.status;
   return {
+    id: normalizeFleetId(form.fleet),
     model: form.model,
-    manufacturer: form.manufacturer,
-    seriesNumber: form.seriesNumber,
-    acquisitionDate: form.acquisitionDate,
+    seriesNumber: "",
     location: form.location,
     hours: Number.parseInt(form.hours, 10) || 0,
     status,
     tone: STATUS_TONE[status],
-    icon: form.icon,
-    lastMaintenance: form.lastMaintenance,
+    icon: DEFAULT_ICON,
+    lastMaintenance: "",
+    manufacturer: "",
+    acquisitionDate: "",
   };
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return "Tente novamente.";
 }
 
 function Equipamentos() {
@@ -132,9 +116,15 @@ function Equipamentos() {
   const maintenancesForEquipment = useMemo(
     () =>
       deleteTarget
-        ? maintenanceRecords.filter((r) => r.equipment === deleteTarget.model)
+        ? maintenanceRecords.filter(
+            (r) =>
+              r.equipment === deleteTarget.id ||
+              r.equipment === deleteTarget.model ||
+              formatEquipmentReference(r.equipment, equipments) ===
+                formatEquipmentReference(deleteTarget.id, equipments),
+          )
         : [],
-    [deleteTarget, maintenanceRecords],
+    [deleteTarget, equipments, maintenanceRecords],
   );
 
   const filtered = useMemo(
@@ -177,9 +167,9 @@ function Equipamentos() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!form.model.trim() || !form.location.trim()) {
+    if (!form.fleet.trim() || !form.model.trim() || !form.location.trim()) {
       toast.error("Campos obrigatórios", {
-        description: "Informe ao menos modelo e localização.",
+        description: "Informe frota, modelo e localização.",
       });
       return;
     }
@@ -196,8 +186,9 @@ function Equipamentos() {
           description: `${created.id} · ${created.model}`,
         });
       }
-    } catch {
-      toast.error("Erro ao salvar", { description: "Tente novamente." });
+    } catch (error) {
+      console.error(error);
+      toast.error("Erro ao salvar", { description: getErrorMessage(error) });
       return;
     }
 
@@ -263,7 +254,7 @@ function Equipamentos() {
         />
         <input
           type="text"
-          placeholder="Buscar por modelo, série ou localização..."
+          placeholder="Buscar por frota, modelo ou localização..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="w-full pl-12 pr-4 py-3 bg-surface-container border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial placeholder:text-on-surface-variant/50"
@@ -292,7 +283,7 @@ function Equipamentos() {
             </div>
 
             <p className="text-xs uppercase tracking-wider text-on-surface-variant font-medium mb-1">
-              Frota {e.id}
+              FROTA {e.id}
             </p>
             <h3 className="text-lg font-black text-on-surface group-hover:text-primary transition-colors mb-4">
               {e.model}
@@ -312,13 +303,6 @@ function Equipamentos() {
                   Localização
                 </dt>
                 <dd className="text-on-surface font-black truncate">{e.location}</dd>
-              </div>
-              <div className="col-span-2">
-                <dt className="uppercase tracking-wider text-on-surface-variant font-black mb-1">
-                  <Icon name="build" className="inline text-base mr-1" />
-                  Última Manutenção
-                </dt>
-                <dd className="text-on-surface font-black">{e.lastMaintenance}</dd>
               </div>
             </dl>
 
@@ -350,16 +334,16 @@ function Equipamentos() {
           setDeleteTarget(eq);
           setDeleteConfirmText("");
         }}
-        onScheduleMaintenance={(equipmentName) => {
+        onScheduleMaintenance={(equipmentId) => {
           if (typeof window !== "undefined") {
-            window.sessionStorage.setItem("transjap:prefill:equipment", equipmentName);
+            window.sessionStorage.setItem("transjap:prefill:equipment", equipmentId);
           }
           setShowDetailsPanel(false);
           navigate({ to: "/manutencao" });
         }}
-        onCreateTask={(equipmentName) => {
+        onCreateTask={(equipmentId) => {
           if (typeof window !== "undefined") {
-            window.sessionStorage.setItem("transjap:prefill:task-equipment", equipmentName);
+            window.sessionStorage.setItem("transjap:prefill:task-equipment", equipmentId);
           }
           setShowDetailsPanel(false);
           navigate({ to: "/agenda" });
@@ -368,7 +352,7 @@ function Equipamentos() {
 
       {/* Create / Edit Dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
               {editingId ? `Editar equipamento ${editingId}` : "Cadastrar equipamento"}
@@ -376,11 +360,26 @@ function Equipamentos() {
             <DialogDescription>
               {editingId
                 ? "Atualize os dados do equipamento selecionado."
-                : "Informe os dados do novo equipamento."}
+                : "Preencha as informações principais da frota."}
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant sm:col-span-2">
+              Frota
+              <input
+                value={form.fleet}
+                onChange={(e) => setForm((s) => ({ ...s, fleet: e.target.value }))}
+                onBlur={(e) => {
+                  const normalized = normalizeFleetId(e.target.value);
+                  if (normalized) setForm((s) => ({ ...s, fleet: normalized }));
+                }}
+                required
+                placeholder="Ex: 16 ou FR-016"
+                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+
             <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant sm:col-span-2">
               Modelo
               <input
@@ -391,110 +390,52 @@ function Equipamentos() {
               />
             </label>
 
-            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Fabricante
-              <input
-                value={form.manufacturer}
-                onChange={(e) => setForm((s) => ({ ...s, manufacturer: e.target.value }))}
-                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-              />
-            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Localização
+                <input
+                  value={form.location}
+                  onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))}
+                  required
+                  className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+                />
+              </label>
 
-            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Número de série
-              <input
-                value={form.seriesNumber}
-                onChange={(e) => setForm((s) => ({ ...s, seriesNumber: e.target.value }))}
-                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-              />
-            </label>
+              <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Horímetro
+                <input
+                  value={form.hours}
+                  onChange={(e) => setForm((s) => ({ ...s, hours: e.target.value }))}
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
+                />
+              </label>
 
-            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Data de aquisição
-              <input
-                value={form.acquisitionDate}
-                onChange={(e) => setForm((s) => ({ ...s, acquisitionDate: e.target.value }))}
-                placeholder="DD/MM/AAAA"
-                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Localização
-              <input
-                value={form.location}
-                onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))}
-                required
-                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Horímetro
-              <input
-                value={form.hours}
-                onChange={(e) => setForm((s) => ({ ...s, hours: e.target.value }))}
-                type="number"
-                min={0}
-                step={1}
-                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Última manutenção
-              <input
-                value={form.lastMaintenance}
-                onChange={(e) => setForm((s) => ({ ...s, lastMaintenance: e.target.value }))}
-                placeholder="DD/MM/AAAA"
-                className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
-              />
-            </label>
-
-            <div className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Status
-              <Select
-                value={form.status}
-                onValueChange={(value) =>
-                  setForm((s) => ({ ...s, status: value as EquipmentStatus }))
-                }
-              >
-                <SelectTrigger className="bg-surface-highest border-border-low">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_OPTIONS.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {status}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Status
+                <Select
+                  value={form.status}
+                  onValueChange={(value) =>
+                    setForm((s) => ({ ...s, status: value as EquipmentStatus }))
+                  }
+                >
+                  <SelectTrigger className="bg-surface-highest border-border-low">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_OPTIONS.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
-            <div className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Ícone
-              <Select
-                value={form.icon}
-                onValueChange={(value) => setForm((s) => ({ ...s, icon: value }))}
-              >
-                <SelectTrigger className="bg-surface-highest border-border-low">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ICON_OPTIONS.map((icon) => (
-                    <SelectItem key={icon} value={icon}>
-                      <span className="flex items-center gap-2">
-                        <Icon name={icon} className="text-primary text-lg" />
-                        <span>{icon}</span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <DialogFooter className="sm:col-span-2 gap-2 pt-2">
+            <DialogFooter className="gap-2 pt-2">
               <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
                 Cancelar
               </Button>
@@ -571,8 +512,9 @@ function Equipamentos() {
                   }
                   setDeleteTarget(null);
                   setDeleteConfirmText("");
-                } catch {
-                  toast.error("Erro ao excluir", { description: "Tente novamente." });
+                } catch (error) {
+                  console.error(error);
+                  toast.error("Erro ao excluir", { description: getErrorMessage(error) });
                 }
               }}
             >

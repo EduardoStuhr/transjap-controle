@@ -22,6 +22,8 @@ import {
   type StockUnit,
   type UserRole,
 } from "@/lib/inventory-types";
+import { useEquipmentStore } from "@/lib/equipment-store";
+import { buildEquipmentOptions, type EquipmentOption } from "@/lib/operational-options";
 
 export const Route = createFileRoute("/estoque")({ component: Estoque });
 
@@ -96,6 +98,7 @@ const EMPTY_MOVEMENT: MovementDraft = {
 
 function Estoque() {
   const items = useInventoryStore((snapshot) => snapshot.items);
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const locations = useInventoryStore((snapshot) => snapshot.locations);
   const movements = useInventoryStore((snapshot) => snapshot.movements);
   const offlineQueue = useInventoryStore((snapshot) => snapshot.offlineQueue);
@@ -110,6 +113,7 @@ function Estoque() {
   const [itemDraft, setItemDraft] = useState<InventoryDraft>(EMPTY_ITEM);
   const [locationDraft, setLocationDraft] = useState<LocationDraft>(EMPTY_LOCATION);
   const [movementDraft, setMovementDraft] = useState<MovementDraft>(EMPTY_MOVEMENT);
+  const equipmentOptions = useMemo(() => buildEquipmentOptions(equipments), [equipments]);
 
   const filteredItems = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -214,7 +218,7 @@ function Estoque() {
   const applyMovement = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canWrite) return;
-    const movement = inventoryActions.applyMovement(movementDraft);
+    const movement = inventoryActions.applyMovement(movementDraft) as StockMovement | null;
     if (!movement) {
       toast.error("Selecione uma peça", { description: "Leia ou escolha um item do estoque." });
       return;
@@ -242,7 +246,7 @@ function Estoque() {
       type,
       itemId: selectedItem.id,
       quantity,
-    });
+    }) as StockMovement | null;
     if (movement) {
       toast.success("Movimento rápido", {
         description: `${movement.itemName}: ${movement.nextStock}`,
@@ -381,6 +385,7 @@ function Estoque() {
                   draft={movementDraft}
                   items={items}
                   locations={locations}
+                  equipmentOptions={equipmentOptions}
                   onChange={setMovementDraft}
                   onSubmit={applyMovement}
                   disabled={!canWrite}
@@ -681,6 +686,7 @@ function MovementForm({
   draft,
   items,
   locations,
+  equipmentOptions,
   onChange,
   onSubmit,
   disabled = false,
@@ -688,6 +694,7 @@ function MovementForm({
   draft: MovementDraft;
   items: InventoryItem[];
   locations: StockLocation[];
+  equipmentOptions: EquipmentOption[];
   onChange: (draft: MovementDraft) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   disabled?: boolean;
@@ -727,10 +734,14 @@ function MovementForm({
         value={draft.responsible}
         onChange={(value) => setValue("responsible", value)}
       />
-      <TextField
+      <SelectField
         label="Equipamento relacionado"
         value={draft.equipment}
         onChange={(value) => setValue("equipment", value)}
+        options={["", ...equipmentOptions.map((equipment) => equipment.value)]}
+        labels={Object.fromEntries(
+          equipmentOptions.map((equipment) => [equipment.value, equipment.label]),
+        )}
       />
       <TextField
         label="Manutenção"

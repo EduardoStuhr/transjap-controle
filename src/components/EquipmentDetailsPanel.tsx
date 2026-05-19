@@ -29,8 +29,8 @@ interface EquipmentDetailsPanelProps {
   equipment: EquipmentDetail | null;
   onEdit?: (equipment: Equipment) => void;
   onDelete?: (equipment: Equipment) => void;
-  onScheduleMaintenance?: (equipmentName: string) => void;
-  onCreateTask?: (equipmentName: string) => void;
+  onScheduleMaintenance?: (equipmentId: string) => void;
+  onCreateTask?: (equipmentId: string) => void;
 }
 
 const TONE_COLORS = {
@@ -82,7 +82,7 @@ export function EquipmentDetailsPanel({
                     {equipment.status}
                   </div>
                   <span className="text-xs font-mono text-on-surface-variant font-bold">
-                    Frota {equipment.id}
+                    FROTA {equipment.id}
                   </span>
                 </div>
               </div>
@@ -154,7 +154,9 @@ export function EquipmentDetailsPanel({
                   <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest mb-2">
                     Última Manutenção
                   </p>
-                  <p className="text-sm font-bold text-on-surface">{equipment.lastMaintenance}</p>
+                  <p className="text-sm font-bold text-on-surface">
+                    {equipment.lastMaintenance || "—"}
+                  </p>
                 </div>
 
                 <div className="bg-surface-highest/50 border border-border-low rounded-lg p-4">
@@ -202,7 +204,7 @@ export function EquipmentDetailsPanel({
               <Button
                 className="w-full font-black"
                 onClick={() => {
-                  if (onScheduleMaintenance) onScheduleMaintenance(equipment.model);
+                  if (onScheduleMaintenance) onScheduleMaintenance(equipment.id);
                   else toast("Agendando manutenção...");
                 }}
               >
@@ -213,7 +215,7 @@ export function EquipmentDetailsPanel({
                 variant="outline"
                 className="w-full font-black"
                 onClick={() => {
-                  if (onCreateTask) onCreateTask(equipment.model);
+                  if (onCreateTask) onCreateTask(equipment.id);
                   else toast("Criando tarefa para este equipamento...");
                 }}
               >

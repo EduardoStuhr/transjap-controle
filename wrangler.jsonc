@@ -1,14 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tanstack-start-app",
+  "name": "transjap-fleet-command",
   "compatibility_date": "2025-09-24",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "main": "src/server.ts",
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "transjap-db",
-      "database_id": "COLE-O-ID-AQUI",
+      "database_id": "59990af1-5695-4547-afa4-0e1193a921b4",
       "migrations_dir": "drizzle/migrations"
     }
   ]

@@ -14,6 +14,8 @@ import {
   type TaskStatus,
 } from "@/lib/task-types";
 import type { TaskModalData } from "@/components/TaskModal";
+import { useEquipmentStore } from "@/lib/equipment-store";
+import { formatEquipmentReference } from "@/lib/operational-options";
 
 const LazyTaskModal = lazy(() =>
   import("@/components/TaskModal").then((module) => ({ default: module.TaskModal })),
@@ -43,6 +45,7 @@ const FILTERS: TaskFilter[] = [
 function Agenda() {
   const user = useAuthStore((snapshot) => snapshot.user);
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
+  const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const pending = useTaskStore((snapshot) => snapshot.pendingRequests);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -51,6 +54,10 @@ function Agenda() {
   const [filter, setFilter] = useState<TaskFilter>("Todas");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [prefillEquipment, setPrefillEquipment] = useState<string | null>(null);
+  const formatEquipment = useCallback(
+    (value: string | undefined) => formatEquipmentReference(value, equipments),
+    [equipments],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -194,11 +201,20 @@ function Agenda() {
 
       {filteredTasks.length > 0 ? (
         viewMode === "list" ? (
-          <VirtualTaskList tasks={filteredTasks} onOpen={openTaskDetails} />
+          <VirtualTaskList
+            tasks={filteredTasks}
+            onOpen={openTaskDetails}
+            formatEquipment={formatEquipment}
+          />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredTasks.map((task) => (
-              <TaskGridCard key={task.id} task={task} onOpen={openTaskDetails} />
+              <TaskGridCard
+                key={task.id}
+                task={task}
+                onOpen={openTaskDetails}
+                formatEquipment={formatEquipment}
+              />
             ))}
           </div>
         )
@@ -297,7 +313,15 @@ const PendingRequestCard = memo(function PendingRequestCard({
   );
 });
 
-function VirtualTaskList({ tasks, onOpen }: { tasks: TaskRecord[]; onOpen: (id: string) => void }) {
+function VirtualTaskList({
+  tasks,
+  onOpen,
+  formatEquipment,
+}: {
+  tasks: TaskRecord[];
+  onOpen: (id: string) => void;
+  formatEquipment: (value: string | undefined) => string;
+}) {
   const rowHeight = 116;
   const viewportHeight = Math.min(680, tasks.length * rowHeight);
   const [scrollTop, setScrollTop] = useState(0);
@@ -330,7 +354,7 @@ function VirtualTaskList({ tasks, onOpen }: { tasks: TaskRecord[]; onOpen: (id: 
             className="absolute left-0 right-0"
             style={{ top: (visibleRange.start + index) * rowHeight, height: rowHeight }}
           >
-            <TaskListItem task={task} onOpen={onOpen} />
+            <TaskListItem task={task} onOpen={onOpen} formatEquipment={formatEquipment} />
           </div>
         ))}
       </div>
@@ -341,9 +365,11 @@ function VirtualTaskList({ tasks, onOpen }: { tasks: TaskRecord[]; onOpen: (id: 
 const TaskListItem = memo(function TaskListItem({
   task,
   onOpen,
+  formatEquipment,
 }: {
   task: TaskRecord;
   onOpen: (id: string) => void;
+  formatEquipment: (value: string | undefined) => string;
 }) {
   const urgency = task.deadline ? getUrgencyLevel(task.deadline) : null;
   const config = TASK_STATUS_CONFIG[task.status];
@@ -377,6 +403,12 @@ const TaskListItem = memo(function TaskListItem({
               <Icon name="domain" className="text-base" />
               {task.sector || "Sem setor"}
             </span>
+            {task.equipment && (
+              <span className="flex items-center gap-1">
+                <Icon name="precision_manufacturing" className="text-base" />
+                {formatEquipment(task.equipment)}
+              </span>
+            )}
             {urgency && (
               <span
                 className={`${urgency.colorClass} font-bold ${urgency.level === "RED" || urgency.level === "ORANGE" ? "animate-pulse" : ""}`}
@@ -395,9 +427,11 @@ const TaskListItem = memo(function TaskListItem({
 const TaskGridCard = memo(function TaskGridCard({
   task,
   onOpen,
+  formatEquipment,
 }: {
   task: TaskRecord;
   onOpen: (id: string) => void;
+  formatEquipment: (value: string | undefined) => string;
 }) {
   const urgency = task.deadline ? getUrgencyLevel(task.deadline) : null;
   const config = TASK_STATUS_CONFIG[task.status];
@@ -428,6 +462,11 @@ const TaskGridCard = memo(function TaskGridCard({
         <p className="truncate">
           <strong>Setor:</strong> {task.sector || "Sem setor"}
         </p>
+        {task.equipment && (
+          <p className="truncate">
+            <strong>Equipamento:</strong> {formatEquipment(task.equipment)}
+          </p>
+        )}
         {urgency && (
           <p>
             <strong>Prazo:</strong>{" "}
