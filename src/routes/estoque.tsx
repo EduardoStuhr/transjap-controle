@@ -6,7 +6,7 @@ import { InventoryLabels } from "@/components/InventoryLabels";
 import { SmartScanner } from "@/components/SmartScanner";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getInventoryAlerts, inventoryActions, useInventoryStore } from "@/lib/inventory-store";
+import { getInventoryAlerts, useInventoryActions, useInventoryStore } from "@/lib/inventory-store";
 import {
   INVENTORY_CATEGORIES,
   STOCK_UNITS,
@@ -97,6 +97,7 @@ const EMPTY_MOVEMENT: MovementDraft = {
 };
 
 function Estoque() {
+  const inventoryActions = useInventoryActions();
   const items = useInventoryStore((snapshot) => snapshot.items);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const locations = useInventoryStore((snapshot) => snapshot.locations);
@@ -187,38 +188,38 @@ function Estoque() {
 
     setSelectedLocationId(result.location.id);
     toast.success("Localização aberta", { description: result.location.name });
-  }, []);
+  }, [inventoryActions]);
 
-  const saveItem = (event: FormEvent<HTMLFormElement>) => {
+  const saveItem = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canWrite) return;
     if (!itemDraft.name.trim()) {
       toast.error("Nome obrigatório", { description: "Informe o nome da peça ou material." });
       return;
     }
-    inventoryActions.saveItem(itemDraft);
+    await inventoryActions.saveItem(itemDraft);
     setItemDraft(EMPTY_ITEM);
     toast.success("Item salvo", {
       description: "Cadastro disponível para leitura e movimentação.",
     });
   };
 
-  const saveLocation = (event: FormEvent<HTMLFormElement>) => {
+  const saveLocation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canWrite) return;
     if (!locationDraft.name.trim()) {
       toast.error("Nome obrigatório", { description: "Informe a localização física." });
       return;
     }
-    inventoryActions.saveLocation(locationDraft);
+    await inventoryActions.saveLocation(locationDraft);
     setLocationDraft(EMPTY_LOCATION);
     toast.success("Localização salva", { description: "Etiqueta QR disponível para impressão." });
   };
 
-  const applyMovement = (event: FormEvent<HTMLFormElement>) => {
+  const applyMovement = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canWrite) return;
-    const movement = inventoryActions.applyMovement(movementDraft) as StockMovement | null;
+    const movement = (await inventoryActions.applyMovement(movementDraft)) as StockMovement | null;
     if (!movement) {
       toast.error("Selecione uma peça", { description: "Leia ou escolha um item do estoque." });
       return;
@@ -235,18 +236,18 @@ function Estoque() {
     });
   };
 
-  const quickMove = (type: StockMovementType, quantity: number) => {
+  const quickMove = async (type: StockMovementType, quantity: number) => {
     if (!selectedItem) {
       toast.error("Selecione uma peça", { description: "Leia um código ou toque em um item." });
       return;
     }
 
-    const movement = inventoryActions.applyMovement({
+    const movement = (await inventoryActions.applyMovement({
       ...movementDraft,
       type,
       itemId: selectedItem.id,
       quantity,
-    }) as StockMovement | null;
+    })) as StockMovement | null;
     if (movement) {
       toast.success("Movimento rápido", {
         description: `${movement.itemName}: ${movement.nextStock}`,

@@ -22,11 +22,14 @@ interface TaskDetailsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   task: TaskRecord | null;
-  onAddComment: (taskId: string, comment: { author: string; text: string }) => void;
+  onAddComment: (
+    taskId: string,
+    comment: { author: string; text: string },
+  ) => void | Promise<unknown>;
   onAddResponse: (
     taskId: string,
     response: { text: string; attachments: AttachedFile[] },
-  ) => void;
+  ) => void | Promise<unknown>;
   onEdit: (task: TaskRecord) => void;
 }
 
@@ -71,19 +74,19 @@ export function TaskDetailsModal({
   const statusTextColor = statusConfig.color.split(" ")[1] || "text-on-surface-variant";
   const statusBgColor = statusConfig.color.split(" ")[0] || "bg-surface-variant";
 
-  const handleAddComment = (e: FormEvent<HTMLFormElement>) => {
+  const handleAddComment = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!newComment.trim() || !commentAuthor.trim()) return;
 
-    onAddComment(task.id, { author: commentAuthor, text: newComment });
+    await onAddComment(task.id, { author: commentAuthor, text: newComment });
     toast.success("Comentário adicionado", { description: "Sua mensagem foi registrada." });
     setNewComment("");
   };
 
-  const handleSendResponse = (e: FormEvent<HTMLFormElement>) => {
+  const handleSendResponse = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!responseText.trim()) return;
-    onAddResponse(task.id, { text: responseText, attachments: responseAttachments });
+    await onAddResponse(task.id, { text: responseText, attachments: responseAttachments });
     toast.success("Resposta enviada", { description: `Como ${user?.name}` });
     setResponseText("");
     setResponseAttachments([]);

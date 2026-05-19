@@ -5,12 +5,12 @@ import { AppLayout, Icon } from "@/components/AppLayout";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { inventoryActions, useInventoryStore } from "@/lib/inventory-store";
+import { useInventoryActions, useInventoryStore } from "@/lib/inventory-store";
 import type { InventoryItem, StockMovement } from "@/lib/inventory-types";
 import { useAuthStore } from "@/lib/auth-store";
 import { exportMaintenanceAsCsv, exportMaintenanceAsPdf } from "@/lib/maintenance-export";
 import {
-  maintenanceActions,
+  useMaintenanceActions,
   useMaintenanceStore,
   type MaintenanceDraft,
   type MaintenanceRecord,
@@ -84,6 +84,8 @@ const EMPTY_MAINTENANCE: MaintenanceDraft = {
 };
 
 function Manutencao() {
+  const inventoryActions = useInventoryActions();
+  const maintenanceActions = useMaintenanceActions();
   const records = useMaintenanceStore((snapshot) => snapshot.records);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const inventoryItems = useInventoryStore((snapshot) => snapshot.items);
@@ -161,7 +163,7 @@ function Manutencao() {
     setShowMaintenanceModal(true);
   }, []);
 
-  const saveMaintenance = (event: FormEvent<HTMLFormElement>) => {
+  const saveMaintenance = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (!draft.equipment.trim()) {
@@ -185,7 +187,7 @@ function Manutencao() {
       return;
     }
 
-    const record = maintenanceActions.createRecord(draft);
+    const record = await maintenanceActions.createRecord(draft);
     setShowMaintenanceModal(false);
     setSelectedRecordId(record.id);
     setConsumption((current) => ({
@@ -205,13 +207,13 @@ function Manutencao() {
     }));
   };
 
-  const consumeInventoryItem = () => {
+  const consumeInventoryItem = async () => {
     if (!selectedInventoryItem) {
       toast.error("Selecione uma peça", { description: "Cadastre ou escolha um item do estoque." });
       return;
     }
 
-    const movement = inventoryActions.applyMovement({
+    const movement = (await inventoryActions.applyMovement({
       type: "uso em manutenção",
       itemId: selectedInventoryItem.id,
       quantity: consumption.quantity,
@@ -220,11 +222,11 @@ function Manutencao() {
       equipment: consumption.equipment,
       maintenanceId: consumption.maintenanceId,
       toLocationId: "",
-    }) as StockMovement | null;
+    })) as StockMovement | null;
 
     if (!movement) return;
 
-    maintenanceActions.addCost(
+    await maintenanceActions.addCost(
       consumption.maintenanceId,
       movement.costImpact,
       `${movement.itemName} consumido em manutenção`,
@@ -496,6 +498,7 @@ function Manutencao() {
         equipmentLabel={formatEquipment(selectedRecord?.equipment)}
         movements={selectedRecordMovements}
         inventoryItems={inventoryItems}
+        actions={maintenanceActions}
         onOpenChange={(open) => {
           if (!open) setSelectedRecordId(null);
         }}
@@ -794,12 +797,14 @@ function MaintenanceDetailsDialog({
   equipmentLabel,
   movements,
   inventoryItems,
+  actions,
   onOpenChange,
 }: {
   record: MaintenanceRecord | null;
   equipmentLabel: string;
   movements: StockMovement[];
   inventoryItems: InventoryItem[];
+  actions: ReturnType<typeof useMaintenanceActions>;
   onOpenChange: (open: boolean) => void;
 }) {
   const totalCost = movements.reduce((sum, movement) => sum + movement.costImpact, 0);
@@ -893,6 +898,8 @@ function MaintenanceDetailsDialog({
                       onAttachmentsChange={(files) =>
                         setStepAttachments((current) => ({ ...current, [step.id]: files }))
                       }
+                      onStartStep={actions.startStep}
+                      onCompleteStep={actions.completeStep}
                     />
                   ))}
                 </div>
@@ -917,8 +924,8 @@ function MaintenanceDetailsDialog({
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => {
-                      maintenanceActions.addWaitingPart(record.id, waitingPart);
+                    onClick={async () => {
+                      await actions.addWaitingPart(record.id, waitingPart);
                       setWaitingPart("");
                     }}
                   >
@@ -1202,6 +1209,8 @@ function MaintenanceStepCard({
   onNoteChange,
   onCommentChange,
   onAttachmentsChange,
+  onStartStep,
+  onCompleteStep,
 }: {
   index: number;
   recordId: string;
@@ -1214,6 +1223,13 @@ function MaintenanceStepCard({
   onNoteChange: (value: string) => void;
   onCommentChange: (value: string) => void;
   onAttachmentsChange: (files: AttachedFile[]) => void;
+  onStartStep: (recordId: string, stepId: string, note?: string) => Promise<unknown>;
+  onCompleteStep: (
+    recordId: string,
+    stepId: string,
+    comment?: string,
+    attachments?: AttachedFile[],
+  ) => Promise<unknown>;
 }) {
   const meta = getStepMeta(step, active, blocked);
   const canStart = active && step.status === "pendente";
@@ -1264,7 +1280,7 @@ function MaintenanceStepCard({
           <Button
             type="button"
             variant="outline"
-            onClick={() => maintenanceActions.startStep(recordId, step.id, note)}
+            onClick={() => void onStartStep(recordId, step.id, note)}
             className="w-full sm:w-auto gap-2"
           >
             <Icon name="play_arrow" />
@@ -1299,8 +1315,8 @@ function MaintenanceStepCard({
           <Button
             type="button"
             disabled={!canComplete}
-            onClick={() => {
-              maintenanceActions.completeStep(recordId, step.id, comment, attachments);
+            onClick={async () => {
+              await onCompleteStep(recordId, step.id, comment, attachments);
               onCommentChange("");
               onAttachmentsChange([]);
             }}

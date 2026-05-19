@@ -11,7 +11,6 @@ export type AttachedFile = {
   mimeType?: string;
   url?: string;
   preview?: string;
-  file?: File;
 };
 
 interface AttachmentUploadProps {

@@ -5,7 +5,7 @@ import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
-import { taskActions, useTaskStore } from "@/lib/task-store";
+import { useTaskActions, useTaskStore } from "@/lib/task-store";
 import { filterVisibleTasks } from "@/lib/task-visibility";
 import {
   TASK_STATUS_CONFIG,
@@ -44,6 +44,7 @@ const FILTERS: TaskFilter[] = [
 
 function Agenda() {
   const user = useAuthStore((snapshot) => snapshot.user);
+  const taskActions = useTaskActions();
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const pending = useTaskStore((snapshot) => snapshot.pendingRequests);
@@ -86,43 +87,43 @@ function Agenda() {
     [editingTaskId, visibleTasks],
   );
 
-  const handleCreateTask = useCallback((data: TaskModalData) => {
-    taskActions.createTask(data);
+  const handleCreateTask = useCallback(async (data: TaskModalData) => {
+    await taskActions.createTask(data);
     setShowCreateModal(false);
-  }, []);
+  }, [taskActions]);
 
   const handleUpdateTask = useCallback(
-    (data: TaskModalData) => {
+    async (data: TaskModalData) => {
       if (!editingTaskId) return;
-      taskActions.updateTask(editingTaskId, data);
+      await taskActions.updateTask(editingTaskId, data);
       setEditingTaskId(null);
     },
-    [editingTaskId],
+    [editingTaskId, taskActions],
   );
 
   const openTaskDetails = useCallback((taskId: string) => {
-    taskActions.markTaskViewed(taskId);
+    void taskActions.markTaskViewed(taskId);
     setSelectedTaskId(taskId);
     setShowDetailsModal(true);
-  }, []);
+  }, [taskActions]);
 
   const handleEditFromDetails = useCallback((task: TaskRecord) => {
     setEditingTaskId(task.id);
     setShowDetailsModal(false);
   }, []);
 
-  const approveRequest = useCallback((id: string) => {
-    const item = taskActions.approveRequest(id);
+  const approveRequest = useCallback(async (id: string) => {
+    const item = await taskActions.approveRequest(id);
     if (!item) return;
     toast.success("Solicitação aprovada", {
       description: `${item.title} foi convertida em tarefa.`,
     });
-  }, []);
+  }, [taskActions]);
 
-  const rejectRequest = useCallback((id: string) => {
-    const item = taskActions.rejectRequest(id);
+  const rejectRequest = useCallback(async (id: string) => {
+    const item = await taskActions.rejectRequest(id);
     toast.error("Solicitação recusada", { description: item?.title });
-  }, []);
+  }, [taskActions]);
 
   return (
     <AppLayout>

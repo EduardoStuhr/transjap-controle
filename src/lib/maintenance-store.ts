@@ -1,4 +1,11 @@
-import { useSyncExternalStore } from "react";
+import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  createMaintenanceRecord,
+  deleteMaintenanceRecord,
+  listMaintenance,
+  updateMaintenanceRecord,
+} from "@/lib/api/maintenance";
 import { getCurrentUser } from "@/lib/auth-store";
 import type { AttachedFile } from "@/components/AttachmentUpload";
 
@@ -79,13 +86,14 @@ type MaintenanceState = {
   records: MaintenanceRecord[];
 };
 
+type MaintenanceSelector<T> = (state: MaintenanceState) => T;
+
+const QK = ["maintenance"] as const;
 const STORAGE_KEY = "transjap:fleet-command:maintenance:v2";
 const LEGACY_STORAGE_KEY = "transjap:fleet-command:maintenance:v1";
 const EMPTY_STATE: MaintenanceState = { records: [] };
 
-let state: MaintenanceState = EMPTY_STATE;
-let hydrated = false;
-const listeners = new Set<() => void>();
+let localMigrationStarted = false;
 
 function isBrowser() {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -105,6 +113,10 @@ function newId(prefix = "MT") {
   }
 
   return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+}
+
+function sanitizeAttachments(attachments: AttachedFile[]) {
+  return attachments.map((attachment) => ({ ...attachment }));
 }
 
 function initialSteps(): MaintenanceStep[] {
@@ -139,9 +151,34 @@ function minutesBetween(start: string, end: string) {
   return Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000));
 }
 
+function normalizeStep(step: Partial<MaintenanceStep> & MaintenanceStepTemplate): MaintenanceStep {
+  return {
+    ...step,
+    status: step.status || "pendente",
+    slaHours: step.slaHours || step.defaultSlaHours,
+    startedAt: step.startedAt || "",
+    completedAt: step.completedAt || "",
+    startedBy: step.startedBy || "",
+    completedBy: step.completedBy || "",
+    startNote: step.startNote || "",
+    completionComment: step.completionComment || "",
+    durationMinutes: step.durationMinutes || 0,
+    attachments: sanitizeAttachments(step.attachments || []),
+  };
+}
+
 function normalizeRecord(record: Partial<MaintenanceRecord>): MaintenanceRecord {
-  const steps =
+  const rawSteps =
     Array.isArray(record.steps) && record.steps.length > 0 ? record.steps : initialSteps();
+  const steps = rawSteps.map((step, index) =>
+    normalizeStep({
+      ...MAINTENANCE_STEPS[index],
+      ...step,
+      id: step.id || MAINTENANCE_STEPS[index]?.id || newId("STEP"),
+      label: step.label || MAINTENANCE_STEPS[index]?.label || "Etapa",
+      defaultSlaHours: step.defaultSlaHours || MAINTENANCE_STEPS[index]?.defaultSlaHours || 24,
+    }),
+  );
   const currentStepId =
     record.currentStepId || steps.find((step) => step.status !== "concluida")?.id || steps[0].id;
 
@@ -170,6 +207,12 @@ function normalizeRecord(record: Partial<MaintenanceRecord>): MaintenanceRecord 
   };
 }
 
+function normalizeState(value: unknown): MaintenanceState {
+  if (!value || typeof value !== "object") return EMPTY_STATE;
+  const stored = value as Partial<MaintenanceState>;
+  return { records: Array.isArray(stored.records) ? stored.records.map(normalizeRecord) : [] };
+}
+
 function readStorage(): MaintenanceState {
   if (!isBrowser()) return EMPTY_STATE;
 
@@ -177,8 +220,7 @@ function readStorage(): MaintenanceState {
     const raw =
       window.localStorage.getItem(STORAGE_KEY) || window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return EMPTY_STATE;
-    const parsed = JSON.parse(raw) as Partial<MaintenanceState>;
-    return { records: Array.isArray(parsed.records) ? parsed.records.map(normalizeRecord) : [] };
+    return normalizeState(JSON.parse(raw));
   } catch {
     return EMPTY_STATE;
   }
@@ -189,25 +231,36 @@ function writeStorage(nextState: MaintenanceState) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
 }
 
-function ensureHydrated() {
-  if (hydrated || !isBrowser()) return;
-  hydrated = true;
-  state = readStorage();
-}
-
-function emit() {
-  listeners.forEach((listener) => listener());
-}
-
-function setState(updater: (current: MaintenanceState) => MaintenanceState) {
-  ensureHydrated();
-  state = updater(state);
-  writeStorage(state);
-  emit();
-}
-
 function nextOpenStep(steps: MaintenanceStep[]) {
   return steps.find((step) => step.status !== "concluida")?.id || steps[steps.length - 1]?.id || "";
+}
+
+function getCachedState(queryClient: ReturnType<typeof useQueryClient>): MaintenanceState {
+  return queryClient.getQueryData<MaintenanceState>(QK) ?? readStorage();
+}
+
+function useLocalMaintenanceMigration(remoteState: MaintenanceState | undefined, enabled: boolean) {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!enabled || !remoteState || localMigrationStarted) return;
+
+    const localState = readStorage();
+    const remoteIds = new Set(remoteState.records.map((record) => record.id));
+    const records = localState.records.filter((record) => !remoteIds.has(record.id));
+
+    if (records.length === 0) {
+      writeStorage(remoteState);
+      return;
+    }
+
+    localMigrationStarted = true;
+    Promise.all(records.map((record) => createMaintenanceRecord({ data: record })))
+      .then(() => queryClient.invalidateQueries({ queryKey: QK }))
+      .catch(() => {
+        localMigrationStarted = false;
+      });
+  }, [enabled, queryClient, remoteState]);
 }
 
 export function getMaintenanceAlerts(_records: MaintenanceRecord[]) {
@@ -219,188 +272,216 @@ export function getMaintenanceAlerts(_records: MaintenanceRecord[]) {
   }>;
 }
 
-export const maintenanceActions = {
-  createRecord(draft: MaintenanceDraft) {
-    const createdAt = new Date().toLocaleDateString("pt-BR");
-    const steps = initialSteps();
-    const submittedBy = getCurrentUser()?.name || "";
-    const record: MaintenanceRecord = {
-      id: newId(),
-      equipment: draft.equipment.trim(),
-      type: draft.type.trim() || "Preventiva",
-      technician: "",
-      responsible: "",
-      status: "Aberta",
-      currentStepId: steps[0].id,
-      deadline: "",
-      createdAt,
-      startedAt: "",
-      finishedAt: "",
-      description: "",
-      notes: draft.notes.trim(),
-      serviceSummary: "",
-      totalCost: 0,
-      item: draft.item.trim(),
-      serviceDescription: draft.serviceDescription.trim(),
-      submittedBy,
-      steps,
-      timeline: [timeline("Manutenção criada", draft.serviceDescription)],
-      waitingParts: [],
-    };
+export function useMaintenanceStore<T>(selector: MaintenanceSelector<T>): T {
+  const query = useQuery({
+    queryKey: QK,
+    queryFn: async () => normalizeState(await listMaintenance()),
+    staleTime: 0,
+    retry: 1,
+    placeholderData: () => readStorage(),
+  });
 
-    setState((current) => ({ records: [record, ...current.records] }));
+  useLocalMaintenanceMigration(query.data, query.isSuccess && !query.isPlaceholderData);
+
+  return selector(query.data ?? readStorage());
+}
+
+export function useMaintenanceActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: QK });
+
+  const createMutation = useMutation({
+    mutationFn: (record: MaintenanceRecord) => createMaintenanceRecord({ data: record }),
+    onSuccess: invalidate,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (record: MaintenanceRecord) => updateMaintenanceRecord({ data: record }),
+    onSuccess: invalidate,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteMaintenanceRecord({ data: id }),
+    onSuccess: invalidate,
+  });
+
+  const updateRecord = async (record: MaintenanceRecord) => {
+    await updateMutation.mutateAsync(record);
     return record;
-  },
+  };
 
-  startStep(recordId: string, stepId: string, note = "") {
-    const timestamp = nowIso();
-    const user = currentUserName();
-
-    setState((current) => ({
-      records: current.records.map((record) => {
-        if (record.id !== recordId) return record;
-        const nextSteps = record.steps.map((step) =>
-          step.id === stepId
-            ? {
-                ...step,
-                status: "em_andamento" as const,
-                startedAt: step.startedAt || timestamp,
-                startedBy: step.startedBy || user,
-                startNote: note.trim() || step.startNote,
-              }
-            : step,
-        );
-
-        return {
-          ...record,
-          status: "Em andamento",
-          currentStepId: stepId,
-          startedAt: record.startedAt || timestamp,
-          responsible: record.responsible || user,
-          steps: nextSteps,
-          timeline: [timeline("Etapa iniciada", note, stepId), ...record.timeline],
-        };
-      }),
-    }));
-  },
-
-  completeStep(recordId: string, stepId: string, comment = "", attachments: AttachedFile[] = []) {
-    const timestamp = nowIso();
-    const user = currentUserName();
-
-    setState((current) => ({
-      records: current.records.map((record) => {
-        if (record.id !== recordId) return record;
-        const completedStep = record.steps.find((step) => step.id === stepId);
-        const nextSteps = record.steps.map((step) =>
-          step.id === stepId
-            ? {
-                ...step,
-                status: "concluida" as const,
-                startedAt: step.startedAt || timestamp,
-                startedBy: step.startedBy || user,
-                completedAt: timestamp,
-                completedBy: user,
-                completionComment: comment.trim(),
-                durationMinutes: minutesBetween(step.startedAt || timestamp, timestamp),
-                attachments: [
-                  ...step.attachments,
-                  ...attachments.map(({ file, ...attachment }) => attachment),
-                ],
-              }
-            : step,
-        );
-        const currentStepId = nextOpenStep(nextSteps);
-        const finished =
-          currentStepId === nextSteps[nextSteps.length - 1]?.id && stepId === currentStepId;
-        const status: MaintenanceStatus =
-          stepId === "concluido" || nextSteps.every((step) => step.status === "concluida")
-            ? "Concluída"
-            : "Em andamento";
-
-        return {
-          ...record,
-          status,
-          currentStepId,
-          finishedAt: status === "Concluída" ? timestamp : record.finishedAt,
-          serviceSummary:
-            status === "Concluída"
-              ? comment.trim() || record.serviceSummary
-              : record.serviceSummary,
-          steps: nextSteps,
-          timeline: [
-            timeline(
-              "Etapa concluída",
-              comment ||
-                `Duração: ${minutesBetween(completedStep?.startedAt || timestamp, timestamp)} min`,
-              stepId,
-            ),
-            ...record.timeline,
-          ],
-        };
-      }),
-    }));
-  },
-
-  addWaitingPart(recordId: string, partName: string) {
-    const name = partName.trim();
-    if (!name) return;
-    setState((current) => ({
-      records: current.records.map((record) =>
-        record.id === recordId
-          ? {
-              ...record,
-              waitingParts: [...record.waitingParts, name],
-              timeline: [timeline("Peça aguardada registrada", name), ...record.timeline],
-            }
-          : record,
-      ),
-    }));
-  },
-
-  addCost(recordId: string, cost: number, note: string) {
-    setState((current) => ({
-      records: current.records.map((record) =>
-        record.id === recordId
-          ? {
-              ...record,
-              totalCost: record.totalCost + Math.max(0, cost),
-              timeline: [timeline("Custo registrado", note), ...record.timeline],
-            }
-          : record,
-      ),
-    }));
-  },
-};
-
-export function useMaintenanceStore<T>(selector: (state: MaintenanceState) => T): T {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-
-      if (!hydrated && isBrowser()) {
-        queueMicrotask(() => {
-          ensureHydrated();
-          emit();
-        });
-      }
-
-      if (isBrowser()) window.addEventListener("storage", handleStorageEvent);
-
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0 && isBrowser()) {
-          window.removeEventListener("storage", handleStorageEvent);
-        }
+  return {
+    async createRecord(draft: MaintenanceDraft) {
+      const createdAt = new Date().toLocaleDateString("pt-BR");
+      const steps = initialSteps();
+      const submittedBy = getCurrentUser()?.name || "";
+      const record: MaintenanceRecord = {
+        id: newId(),
+        equipment: draft.equipment.trim(),
+        type: draft.type.trim() || "Preventiva",
+        technician: "",
+        responsible: "",
+        status: "Aberta",
+        currentStepId: steps[0].id,
+        deadline: "",
+        createdAt,
+        startedAt: "",
+        finishedAt: "",
+        description: "",
+        notes: draft.notes.trim(),
+        serviceSummary: "",
+        totalCost: 0,
+        item: draft.item.trim(),
+        serviceDescription: draft.serviceDescription.trim(),
+        submittedBy,
+        steps,
+        timeline: [timeline("Manutenção criada", draft.serviceDescription)],
+        waitingParts: [],
       };
+
+      await createMutation.mutateAsync(record);
+      return record;
     },
-    () => selector(state),
-    () => selector(EMPTY_STATE),
-  );
+
+    async startStep(recordId: string, stepId: string, note = "") {
+      const timestamp = nowIso();
+      const user = currentUserName();
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!record) return null;
+
+      const nextSteps = record.steps.map((step) =>
+        step.id === stepId
+          ? {
+              ...step,
+              status: "em_andamento" as const,
+              startedAt: step.startedAt || timestamp,
+              startedBy: step.startedBy || user,
+              startNote: note.trim() || step.startNote,
+            }
+          : step,
+      );
+
+      return updateRecord({
+        ...record,
+        status: "Em andamento",
+        currentStepId: stepId,
+        startedAt: record.startedAt || timestamp,
+        responsible: record.responsible || user,
+        steps: nextSteps,
+        timeline: [timeline("Etapa iniciada", note, stepId), ...record.timeline],
+      });
+    },
+
+    async completeStep(
+      recordId: string,
+      stepId: string,
+      comment = "",
+      attachments: AttachedFile[] = [],
+    ) {
+      const timestamp = nowIso();
+      const user = currentUserName();
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!record) return null;
+
+      const completedStep = record.steps.find((step) => step.id === stepId);
+      const nextSteps = record.steps.map((step) =>
+        step.id === stepId
+          ? {
+              ...step,
+              status: "concluida" as const,
+              startedAt: step.startedAt || timestamp,
+              startedBy: step.startedBy || user,
+              completedAt: timestamp,
+              completedBy: user,
+              completionComment: comment.trim(),
+              durationMinutes: minutesBetween(step.startedAt || timestamp, timestamp),
+              attachments: [...step.attachments, ...sanitizeAttachments(attachments)],
+            }
+          : step,
+      );
+      const currentStepId = nextOpenStep(nextSteps);
+      const status: MaintenanceStatus =
+        stepId === "concluido" || nextSteps.every((step) => step.status === "concluida")
+          ? "Concluída"
+          : "Em andamento";
+
+      return updateRecord({
+        ...record,
+        status,
+        currentStepId,
+        finishedAt: status === "Concluída" ? timestamp : record.finishedAt,
+        serviceSummary:
+          status === "Concluída" ? comment.trim() || record.serviceSummary : record.serviceSummary,
+        steps: nextSteps,
+        timeline: [
+          timeline(
+            "Etapa concluída",
+            comment ||
+              `Duração: ${minutesBetween(completedStep?.startedAt || timestamp, timestamp)} min`,
+            stepId,
+          ),
+          ...record.timeline,
+        ],
+      });
+    },
+
+    async addWaitingPart(recordId: string, partName: string) {
+      const name = partName.trim();
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!name || !record) return null;
+
+      return updateRecord({
+        ...record,
+        waitingParts: [...record.waitingParts, name],
+        timeline: [timeline("Peça aguardada registrada", name), ...record.timeline],
+      });
+    },
+
+    async addCost(recordId: string, cost: number, note: string) {
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!record) return null;
+
+      return updateRecord({
+        ...record,
+        totalCost: record.totalCost + Math.max(0, cost),
+        timeline: [timeline("Custo registrado", note), ...record.timeline],
+      });
+    },
+
+    async removeRecord(id: string) {
+      await deleteMutation.mutateAsync(id);
+    },
+  };
 }
 
-function handleStorageEvent(event: StorageEvent) {
-  if (event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) return;
-  state = readStorage();
-  emit();
-}
+export const maintenanceActions = {
+  createRecord: (): never => {
+    throw new Error(
+      "maintenanceActions.createRecord() foi removido. Use useMaintenanceActions().createRecord().",
+    );
+  },
+  startStep: (): never => {
+    throw new Error(
+      "maintenanceActions.startStep() foi removido. Use useMaintenanceActions().startStep().",
+    );
+  },
+  completeStep: (): never => {
+    throw new Error(
+      "maintenanceActions.completeStep() foi removido. Use useMaintenanceActions().completeStep().",
+    );
+  },
+  addWaitingPart: (): never => {
+    throw new Error(
+      "maintenanceActions.addWaitingPart() foi removido. Use useMaintenanceActions().addWaitingPart().",
+    );
+  },
+  addCost: (): never => {
+    throw new Error(
+      "maintenanceActions.addCost() foi removido. Use useMaintenanceActions().addCost().",
+    );
+  },
+} as const;

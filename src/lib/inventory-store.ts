@@ -1,4 +1,17 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  createInventoryItem,
+  createInventoryLocation,
+  createInventoryMovement,
+  deleteInventoryItem,
+  deleteInventoryLocation,
+  deleteInventoryMovement,
+  listInventory,
+  updateInventoryItem,
+  updateInventoryLocation,
+  updateInventoryMovement,
+} from "@/lib/api/inventory";
 import type {
   InventoryAlert,
   InventoryDraft,
@@ -24,6 +37,10 @@ type InventoryState = {
     | "visualização";
 };
 
+type InventoryData = Omit<InventoryState, "currentRole" | "offlineQueue">;
+type InventorySelector<T> = (state: InventoryState) => T;
+
+const QK = ["inventory"] as const;
 const STORAGE_KEY = "transjap:fleet-command:inventory:v1";
 
 const EMPTY_STATE: InventoryState = {
@@ -34,9 +51,10 @@ const EMPTY_STATE: InventoryState = {
   currentRole: "administrador",
 };
 
-let state: InventoryState = EMPTY_STATE;
-let hydrated = false;
-const listeners = new Set<() => void>();
+let localMigrationStarted = false;
+let roleHydrated = false;
+let currentRole: InventoryState["currentRole"] = "administrador";
+const roleListeners = new Set<() => void>();
 
 function isBrowser() {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -86,26 +104,41 @@ function readStorage(): InventoryState {
   }
 }
 
-function writeStorage(nextState: InventoryState) {
+function getRoleSnapshot() {
+  if (!roleHydrated && isBrowser()) {
+    roleHydrated = true;
+    currentRole = readStorage().currentRole;
+  }
+
+  return currentRole;
+}
+
+function writeStorage(nextState: Omit<InventoryState, "currentRole">) {
   if (!isBrowser()) return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+  window.localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({ ...nextState, currentRole: getRoleSnapshot() }),
+  );
 }
 
-function ensureHydrated() {
-  if (hydrated || !isBrowser()) return;
-  hydrated = true;
-  state = readStorage();
+function setRoleSnapshot(role: InventoryState["currentRole"]) {
+  currentRole = role;
+  roleHydrated = true;
+  const snapshot = readStorage();
+  const { currentRole: _storedRole, ...data } = snapshot;
+  writeStorage(data);
+  roleListeners.forEach((listener) => listener());
 }
 
-function emit() {
-  listeners.forEach((listener) => listener());
-}
-
-function setState(updater: (current: InventoryState) => InventoryState) {
-  ensureHydrated();
-  state = updater(state);
-  writeStorage(state);
-  emit();
+function useInventoryRole() {
+  return useSyncExternalStore(
+    (listener) => {
+      roleListeners.add(listener);
+      return () => roleListeners.delete(listener);
+    },
+    getRoleSnapshot,
+    () => "administrador" as InventoryState["currentRole"],
+  );
 }
 
 function sanitizeNumber(value: number) {
@@ -151,6 +184,59 @@ function makeMovement(item: InventoryItem, draft: MovementDraft): StockMovement 
     costImpact: draft.type === "entrada" ? 0 : sanitizeNumber(draft.quantity) * item.cost,
     syncStatus: isOnline() ? "synced" : "pending",
   };
+}
+
+function getCachedState(queryClient: ReturnType<typeof useQueryClient>): InventoryState {
+  const data = queryClient.getQueryData<InventoryData>(QK);
+  if (!data) return readStorage();
+  return { ...data, offlineQueue: readStorage().offlineQueue, currentRole: getRoleSnapshot() };
+}
+
+function newerByUpdatedAt(remote: { updatedAt: string } | undefined, local: { updatedAt: string }) {
+  if (!remote) return true;
+  return local.updatedAt.localeCompare(remote.updatedAt) > 0;
+}
+
+function useLocalInventoryMigration(remoteData: InventoryData | undefined, enabled: boolean) {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!enabled || !remoteData || localMigrationStarted) return;
+
+    const local = readStorage();
+    const remoteItems = new Map(remoteData.items.map((item) => [item.id, item]));
+    const remoteLocations = new Map(remoteData.locations.map((location) => [location.id, location]));
+    const remoteMovements = new Set(remoteData.movements.map((movement) => movement.id));
+
+    const items = local.items.filter((item) => newerByUpdatedAt(remoteItems.get(item.id), item));
+    const locations = local.locations.filter((location) =>
+      newerByUpdatedAt(remoteLocations.get(location.id), location),
+    );
+    const movements = [...local.movements, ...local.offlineQueue].filter(
+      (movement) => !remoteMovements.has(movement.id),
+    );
+
+    if (items.length === 0 && locations.length === 0 && movements.length === 0) {
+      writeStorage({ ...remoteData, offlineQueue: [] });
+      return;
+    }
+
+    localMigrationStarted = true;
+    Promise.all([
+      ...items.map((item) => createInventoryItem({ data: item })),
+      ...locations.map((location) => createInventoryLocation({ data: location })),
+      ...movements.map((movement) => {
+        const item = local.items.find((candidate) => candidate.id === movement.itemId);
+        return item
+          ? createInventoryMovement({ data: { item, movement: { ...movement, syncStatus: "synced" } } })
+          : updateInventoryMovement({ data: { ...movement, syncStatus: "synced" } });
+      }),
+    ])
+      .then(() => queryClient.invalidateQueries({ queryKey: QK }))
+      .catch(() => {
+        localMigrationStarted = false;
+      });
+  }, [enabled, queryClient, remoteData]);
 }
 
 export function getInventoryAlerts(snapshot: InventoryState): InventoryAlert[] {
@@ -205,16 +291,90 @@ export function getInventoryAlerts(snapshot: InventoryState): InventoryAlert[] {
   return alerts;
 }
 
-export const inventoryActions = {
-  setRole(role: InventoryState["currentRole"]) {
-    setState((current) => ({ ...current, currentRole: role }));
-  },
+export function useInventoryStore<T>(selector: InventorySelector<T>): T {
+  const role = useInventoryRole();
+  const query = useQuery({
+    queryKey: QK,
+    queryFn: async () => {
+      const data = await listInventory();
+      return {
+        items: data.items,
+        locations: data.locations,
+        movements: data.movements,
+      };
+    },
+    staleTime: 0,
+    retry: 1,
+    placeholderData: () => {
+      const fallback = readStorage();
+      return {
+        items: fallback.items,
+        locations: fallback.locations,
+        movements: fallback.movements,
+      };
+    },
+  });
 
-  saveItem(draft: InventoryDraft, id?: string) {
-    const code = draft.internalCode.trim() || draft.sku.trim() || newId("ITEM");
+  useLocalInventoryMigration(query.data, query.isSuccess && !query.isPlaceholderData);
 
-    setState((current) => {
+  const data = query.data ?? readStorage();
+  return selector({
+    items: data.items,
+    locations: data.locations,
+    movements: data.movements,
+    offlineQueue: readStorage().offlineQueue,
+    currentRole: role,
+  });
+}
+
+export function useInventoryActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: QK });
+
+  const itemMutation = useMutation({
+    mutationFn: ({ item, exists }: { item: InventoryItem; exists: boolean }) =>
+      exists ? updateInventoryItem({ data: item }) : createInventoryItem({ data: item }),
+    onSuccess: invalidate,
+  });
+
+  const locationMutation = useMutation({
+    mutationFn: ({ location, exists }: { location: StockLocation; exists: boolean }) =>
+      exists
+        ? updateInventoryLocation({ data: location })
+        : createInventoryLocation({ data: location }),
+    onSuccess: invalidate,
+  });
+
+  const movementMutation = useMutation({
+    mutationFn: ({ item, movement }: { item: InventoryItem; movement: StockMovement }) =>
+      createInventoryMovement({ data: { item, movement } }),
+    onSuccess: invalidate,
+  });
+
+  const deleteItemMutation = useMutation({
+    mutationFn: (id: string) => deleteInventoryItem({ data: id }),
+    onSuccess: invalidate,
+  });
+
+  const deleteLocationMutation = useMutation({
+    mutationFn: (id: string) => deleteInventoryLocation({ data: id }),
+    onSuccess: invalidate,
+  });
+
+  const deleteMovementMutation = useMutation({
+    mutationFn: (id: string) => deleteInventoryMovement({ data: id }),
+    onSuccess: invalidate,
+  });
+
+  return {
+    setRole(role: InventoryState["currentRole"]) {
+      setRoleSnapshot(role);
+    },
+
+    async saveItem(draft: InventoryDraft, id?: string) {
+      const current = getCachedState(queryClient);
       const existing = current.items.find((item) => item.id === id);
+      const code = draft.internalCode.trim() || draft.sku.trim() || existing?.internalCode || newId("ITEM");
       const item: InventoryItem = {
         ...draft,
         id: id || newId("IT"),
@@ -239,20 +399,14 @@ export const inventoryActions = {
         updatedAt: nowIso(),
       };
 
-      return {
-        ...current,
-        items: existing
-          ? current.items.map((currentItem) => (currentItem.id === id ? item : currentItem))
-          : [item, ...current.items],
-      };
-    });
-  },
+      await itemMutation.mutateAsync({ item, exists: Boolean(existing) });
+      return item;
+    },
 
-  saveLocation(draft: LocationDraft, id?: string) {
-    const code = draft.code.trim() || newId("LOC");
-
-    setState((current) => {
+    async saveLocation(draft: LocationDraft, id?: string) {
+      const current = getCachedState(queryClient);
       const existing = current.locations.find((location) => location.id === id);
+      const code = draft.code.trim() || existing?.code || newId("LOC");
       const location: StockLocation = {
         ...draft,
         id: id || newId("LC"),
@@ -263,126 +417,106 @@ export const inventoryActions = {
         updatedAt: nowIso(),
       };
 
-      return {
-        ...current,
-        locations: existing
-          ? current.locations.map((currentLocation) =>
-              currentLocation.id === id ? location : currentLocation,
-            )
-          : [location, ...current.locations],
-      };
-    });
-  },
-
-  applyMovement(draft: MovementDraft) {
-    let movement: StockMovement | null = null;
-
-    setState((current) => {
-      const item = current.items.find((currentItem) => currentItem.id === draft.itemId);
-      if (!item) return current;
-
-      movement = makeMovement(item, draft);
-
-      return {
-        ...current,
-        items: current.items.map((currentItem) =>
-          currentItem.id === item.id
-            ? {
-                ...currentItem,
-                currentStock: movement!.nextStock,
-                locationId: draft.toLocationId || currentItem.locationId,
-                physicalLocation:
-                  current.locations.find((location) => location.id === draft.toLocationId)?.name ||
-                  currentItem.physicalLocation,
-                updatedAt: nowIso(),
-              }
-            : currentItem,
-        ),
-        movements: [movement, ...current.movements],
-        offlineQueue:
-          movement.syncStatus === "pending"
-            ? [movement, ...current.offlineQueue]
-            : current.offlineQueue,
-      };
-    });
-
-    return movement;
-  },
-
-  resolveScan(value: string) {
-    const needle = value.trim().toLowerCase();
-    if (!needle) return null;
-
-    ensureHydrated();
-
-    const item = state.items.find((candidate) =>
-      [
-        candidate.qrCode,
-        candidate.barcode,
-        candidate.internalCode,
-        candidate.sku,
-        candidate.name,
-      ].some((field) => field.toLowerCase() === needle),
-    );
-
-    if (item) return { type: "item" as const, item };
-
-    const location = state.locations.find((candidate) =>
-      [candidate.qrCode, candidate.code, candidate.name].some(
-        (field) => field.toLowerCase() === needle,
-      ),
-    );
-
-    if (location) return { type: "location" as const, location };
-
-    return null;
-  },
-
-  syncPending() {
-    setState((current) => ({
-      ...current,
-      movements: current.movements.map((movement) => ({ ...movement, syncStatus: "synced" })),
-      offlineQueue: [],
-    }));
-  },
-};
-
-export function useInventoryStore<T>(selector: (state: InventoryState) => T): T {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-
-      if (!hydrated && isBrowser()) {
-        queueMicrotask(() => {
-          ensureHydrated();
-          emit();
-        });
-      }
-
-      if (isBrowser()) {
-        window.addEventListener("storage", handleStorageEvent);
-        window.addEventListener("online", handleOnline);
-      }
-
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0 && isBrowser()) {
-          window.removeEventListener("storage", handleStorageEvent);
-          window.removeEventListener("online", handleOnline);
-        }
-      };
+      await locationMutation.mutateAsync({ location, exists: Boolean(existing) });
+      return location;
     },
-    () => selector(state),
-    () => selector(EMPTY_STATE),
-  );
+
+    async applyMovement(draft: MovementDraft) {
+      const current = getCachedState(queryClient);
+      const item = current.items.find((currentItem) => currentItem.id === draft.itemId);
+      if (!item) return null;
+
+      const movement = makeMovement(item, draft);
+      const nextItem: InventoryItem = {
+        ...item,
+        currentStock: movement.nextStock,
+        locationId: draft.toLocationId || item.locationId,
+        physicalLocation:
+          current.locations.find((location) => location.id === draft.toLocationId)?.name ||
+          item.physicalLocation,
+        updatedAt: nowIso(),
+      };
+
+      await movementMutation.mutateAsync({
+        item: nextItem,
+        movement: { ...movement, syncStatus: "synced" },
+      });
+      return { ...movement, syncStatus: "synced" as const };
+    },
+
+    resolveScan(value: string) {
+      const current = getCachedState(queryClient);
+      const needle = value.trim().toLowerCase();
+      if (!needle) return null;
+
+      const item = current.items.find((candidate) =>
+        [
+          candidate.qrCode,
+          candidate.barcode,
+          candidate.internalCode,
+          candidate.sku,
+          candidate.name,
+        ].some((field) => field.toLowerCase() === needle),
+      );
+
+      if (item) return { type: "item" as const, item };
+
+      const location = current.locations.find((candidate) =>
+        [candidate.qrCode, candidate.code, candidate.name].some(
+          (field) => field.toLowerCase() === needle,
+        ),
+      );
+
+      if (location) return { type: "location" as const, location };
+
+      return null;
+    },
+
+    async syncPending() {
+      await queryClient.invalidateQueries({ queryKey: QK });
+      const { currentRole: _storedRole, ...data } = getCachedState(queryClient);
+      writeStorage({ ...data, offlineQueue: [] });
+    },
+
+    async removeItem(id: string) {
+      await deleteItemMutation.mutateAsync(id);
+    },
+
+    async removeLocation(id: string) {
+      await deleteLocationMutation.mutateAsync(id);
+    },
+
+    async removeMovement(id: string) {
+      await deleteMovementMutation.mutateAsync(id);
+    },
+  };
 }
 
-function handleStorageEvent(event: StorageEvent) {
-  if (event.key !== STORAGE_KEY) return;
-  state = readStorage();
-  emit();
-}
-
-function handleOnline() {
-  inventoryActions.syncPending();
-}
+export const inventoryActions = {
+  setRole: (): never => {
+    throw new Error("inventoryActions.setRole() foi removido. Use useInventoryActions().setRole().");
+  },
+  saveItem: (): never => {
+    throw new Error("inventoryActions.saveItem() foi removido. Use useInventoryActions().saveItem().");
+  },
+  saveLocation: (): never => {
+    throw new Error(
+      "inventoryActions.saveLocation() foi removido. Use useInventoryActions().saveLocation().",
+    );
+  },
+  applyMovement: (): never => {
+    throw new Error(
+      "inventoryActions.applyMovement() foi removido. Use useInventoryActions().applyMovement().",
+    );
+  },
+  resolveScan: (): never => {
+    throw new Error(
+      "inventoryActions.resolveScan() foi removido. Use useInventoryActions().resolveScan().",
+    );
+  },
+  syncPending: (): never => {
+    throw new Error(
+      "inventoryActions.syncPending() foi removido. Use useInventoryActions().syncPending().",
+    );
+  },
+} as const;

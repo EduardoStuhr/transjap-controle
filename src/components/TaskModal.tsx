@@ -42,7 +42,7 @@ export interface TaskModalData extends TaskInput {
 interface TaskModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (data: TaskModalData) => void;
+  onSubmit: (data: TaskModalData) => void | Promise<void>;
   mode?: "create" | "edit";
   initialData?: Partial<TaskModalData>;
   draftKey?: string;
@@ -184,7 +184,7 @@ export function TaskModal({
 
     setIsSubmitting(true);
     try {
-      onSubmit(formData);
+      await onSubmit(formData);
       safeClearDraft(draftKey);
       toast.success(mode === "create" ? "Tarefa criada" : "Tarefa atualizada", {
         description: formData.title,

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { primaryKey, sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
@@ -143,6 +143,20 @@ export const maintenanceTimeline = sqliteTable("maintenance_timeline", {
   actor: text("actor").notNull(),
   observation: text("observation").notNull().default(""),
 });
+
+export const storeDocuments = sqliteTable(
+  "store_documents",
+  {
+    module: text("module").notNull(),
+    id: text("id").notNull(),
+    payload: text("payload").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.module, table.id] }),
+  }),
+);
 
 export type DbEquipment = typeof equipment.$inferSelect;
 export type DbEquipmentInsert = typeof equipment.$inferInsert;
