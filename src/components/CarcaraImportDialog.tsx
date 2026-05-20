@@ -535,6 +535,36 @@ export function CarcaraImportDialog({
 
   async function handleCreate() {
     if (!preview || !canGoConfirm) return;
+    const analysisPayload = {
+      id: `preview-${Date.now()}`,
+      name: draft.name,
+      dateStart: draft.dateStart,
+      dateEnd: draft.dateEnd,
+      obra: draft.obra,
+      material: draft.material,
+      equipment: preview.pdeRowsUsed,
+      trucks: uniq(preview.trips.map(vehicleKey)),
+      metrics: {
+        viagensTotais: preview.trips.length,
+        dieselConsumidoLitros: preview.liters,
+        horasEquipamentos: preview.pdeHoursUsed,
+        producaoSoltaM3: preview.looseM3,
+        producaoCompactadaM3: preview.compactedM3,
+        custoTotalCombustivel: preview.fuelCost,
+        consumoMedioLitroPorM3: preview.compactedM3 > 0 ? preview.liters / preview.compactedM3 : 0,
+        custoMedioRsPorLitro: preview.liters > 0 ? preview.fuelCost / preview.liters : 0,
+        faturamento: preview.trips.reduce((sum, row) => sum + row.total, 0),
+        margemBruta: preview.trips.reduce((sum, row) => sum + row.total, 0) - preview.fuelCost,
+      },
+      productionRows: preview.trips,
+      consumptionRows: preview.fueling,
+      equipmentRows: preview.pdeRowsUsed,
+      truckRows: preview.trips,
+      auditRows: preview.pdeRows,
+      createdAt: new Date().toISOString(),
+    };
+    console.log("confirmAnalysis payload", analysisPayload);
+    console.log("metrics", analysisPayload.metrics);
     setCreating(true);
     try {
       const result = await createAnalysis({
@@ -567,286 +597,319 @@ export function CarcaraImportDialog({
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto !flex flex-col p-0 gap-0">
+        <DialogHeader className="shrink-0 px-6 pt-6 pb-3">
           <DialogTitle>Criar Análise</DialogTitle>
           <DialogDescription>
             Informe o contexto, envie RCO, CMB e Parte Diária, confira o preview e confirme.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-2 mb-4">
-          {["Dados", "Planilhas", "Preview", "Confirmar"].map((label, index) => {
-            const targetStep = index + 1;
-            const enabled = canAccessStep(targetStep);
-            return (
-              <button
-                type="button"
-                key={label}
-                disabled={!enabled}
-                onClick={() => {
-                  if (enabled) setStep(targetStep);
-                }}
-                className={`flex-1 rounded border px-3 py-2 text-left text-xs font-black uppercase tracking-widest transition-colors ${
-                  step === index + 1
-                    ? "border-primary bg-primary/10 text-primary"
-                    : enabled
-                      ? "border-border-low text-on-surface-variant hover:border-primary/60 hover:text-on-surface"
-                      : "border-border-low text-on-surface-variant/40"
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="flex gap-2 mb-4">
+            {["Dados", "Planilhas", "Preview", "Confirmar"].map((label, index) => {
+              const targetStep = index + 1;
+              const enabled = canAccessStep(targetStep);
+              return (
+                <button
+                  type="button"
+                  key={label}
+                  disabled={!enabled}
+                  onClick={() => {
+                    if (enabled) setStep(targetStep);
+                  }}
+                  className={`flex-1 rounded border px-3 py-2 text-left text-xs font-black uppercase tracking-widest transition-colors ${
+                    step === index + 1
+                      ? "border-primary bg-primary/10 text-primary"
+                      : enabled
+                        ? "border-border-low text-on-surface-variant hover:border-primary/60 hover:text-on-surface"
+                        : "border-border-low text-on-surface-variant/40"
+                  }`}
+                >
+                  {index + 1}. {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {step === 1 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="text-xs font-bold">
+                Nome da análise
+                <input
+                  value={draft.name}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+              <label className="text-xs font-bold">
+                Obra
+                <input
+                  value={draft.obra}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, obra: e.target.value }))}
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+              <label className="text-xs font-bold">
+                Material
+                <input
+                  value={draft.material}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, material: e.target.value }))}
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+              <label className="text-xs font-bold">
+                Fator de empolamento padrão
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draft.swellFactor}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, swellFactor: e.target.value }))}
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+              <label className="text-xs font-bold">
+                Início do período analisado
+                <input
+                  type="date"
+                  value={draft.dateStart}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, dateStart: e.target.value }))}
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+              <label className="text-xs font-bold">
+                Fim do período analisado
+                <input
+                  type="date"
+                  value={draft.dateEnd}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, dateEnd: e.target.value }))}
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                />
+              </label>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-4">
+              <div
+                className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+                  dragging
+                    ? "border-primary bg-primary/5"
+                    : "border-border-low hover:border-primary/50 hover:bg-surface-highest/40"
                 }`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  handleSelected(e.dataTransfer.files);
+                }}
+                onClick={() => inputRef.current?.click()}
               >
-                {index + 1}. {label}
-              </button>
-            );
-          })}
+                <Icon name="upload_file" className="text-4xl text-on-surface-variant/50 mb-3" />
+                <p className="text-sm font-black">Arraste RCO, CMB e PDE aqui</p>
+                <p className="text-xs text-on-surface-variant mt-1">
+                  ou clique para selecionar os 3 XLSX
+                </p>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept=".xlsx"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) handleSelected(e.target.files);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <UploadCard
+                  title="Planilha RCO"
+                  loadedLabel="RCO carregado"
+                  emptyLabel="Aguardando planilha de viagens/produção"
+                  item={arquivoRCO}
+                  uploadType="rco"
+                  onFileSelect={handleFileSelect}
+                  onRemove={() => setArquivoRCO(null)}
+                />
+                <UploadCard
+                  title="Planilha CMB"
+                  loadedLabel="CMB carregado"
+                  emptyLabel="Aguardando planilha de abastecimentos/consumo"
+                  item={arquivoCMB}
+                  uploadType="cmb"
+                  onFileSelect={handleFileSelect}
+                  onRemove={() => setArquivoCMB(null)}
+                />
+                <div>
+                  <UploadCard
+                    title="Planilha PDE"
+                    loadedLabel="PDE carregada"
+                    emptyLabel="Aguardando Parte Diária de Equipamentos"
+                    item={arquivoPDE}
+                    uploadType="pde"
+                    onFileSelect={handleFileSelect}
+                    onRemove={() => setArquivoPDE(null)}
+                  />
+                  {arquivoPDE && cmbRequiredFleets.size > 0 && (
+                    <p className="text-xs text-on-surface-variant mt-1 px-1">
+                      Filtrado para {cmbRequiredFleets.size} frota(s) própria(s) identificada(s) no
+                      CMB
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3 text-xs">
+                <span className={arquivoRCO ? "text-status-success" : "text-on-surface-variant"}>
+                  {arquivoRCO ? "✓ RCO carregado" : "RCO pendente"}
+                </span>
+                <span className={arquivoCMB ? "text-status-success" : "text-on-surface-variant"}>
+                  {arquivoCMB ? "✓ CMB carregado" : "CMB pendente"}
+                </span>
+                <span className={arquivoPDE ? "text-status-success" : "text-on-surface-variant"}>
+                  {arquivoPDE ? "✓ PDE carregada" : "PDE pendente"}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && preview && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {[
+                  ["Viagens encontradas", preview.trips.length],
+                  ["Volume solto total", `${preview.looseM3.toFixed(2)} m³`],
+                  ["Volume compactado estimado", `${preview.compactedM3.toFixed(2)} m³`],
+                  ["Abastecimentos", preview.fueling.length],
+                  ["Litros totais", `${preview.liters.toFixed(0)} L`],
+                  ["Custo diesel", `R$ ${fmtBRL(preview.fuelCost)}`],
+                  ["Horas PDE usadas", `${preview.pdeHoursUsed.toFixed(1)} h`],
+                  ["Frotas PDE usadas", preview.pdeFleetsUsed.length],
+                  ["Pendências PDE", preview.pdePending.length],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="rounded border border-border-low bg-surface-highest p-3"
+                  >
+                    <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-black">
+                      {label}
+                    </p>
+                    <p className="text-lg font-black mt-1">{value}</p>
+                  </div>
+                ))}
+              </div>
+              {preview.trips.length > 0 && preview.looseM3 === 0 && (
+                <div className="rounded border border-status-warning/30 bg-status-warning/5 p-3 text-xs">
+                  RCO não possui coluna de volume m³ identificada. Produção m³ ficará zerada.
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div className="rounded border border-border-low p-3">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                    Período encontrado
+                  </p>
+                  <p className="mt-1">
+                    {preview.dateStart || "—"} até {preview.dateEnd || "—"}
+                  </p>
+                </div>
+                <div className="rounded border border-border-low p-3">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                    Equipamentos encontrados
+                  </p>
+                  <p className="mt-1">{preview.equipments.slice(0, 8).join(", ") || "—"}</p>
+                </div>
+                <div className="rounded border border-border-low p-3">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                    PDE
+                  </p>
+                  <p className="mt-1">
+                    {preview.pdeFleets.length} frotas encontradas · {preview.pdeFleetsUsed.length}{" "}
+                    usadas
+                  </p>
+                </div>
+                <div className="rounded border border-border-low p-3">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                    Pendências de datas/frotas
+                  </p>
+                  <p className="mt-1">{preview.pdePending.slice(0, 4).join(", ") || "Nenhuma"}</p>
+                </div>
+                <div className="rounded border border-border-low p-3">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                    Obras encontradas
+                  </p>
+                  <p className="mt-1">{preview.obras.join(", ") || "—"}</p>
+                </div>
+                <div className="rounded border border-border-low p-3">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                    Materiais encontrados
+                  </p>
+                  <p className="mt-1">{preview.materials.join(", ") || "—"}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && !preview && (
+            <div className="rounded border border-status-warning/30 bg-status-warning/5 p-4 text-sm">
+              Envie planilhas RCO, CMB e PDE válidas para gerar o preview.
+            </div>
+          )}
+
+          {step === 4 && preview && (
+            <div className="rounded border border-border-low p-5">
+              <p className="text-sm font-black">Confirmar criação da análise</p>
+              <p className="text-xs text-on-surface-variant mt-2">
+                {draft.name} · {draft.obra} · {draft.material} · fator {factor.toFixed(2)}
+              </p>
+              <p className="text-xs text-on-surface-variant mt-1">
+                Serão vinculadas {preview.trips.length} viagens, {preview.fueling.length}{" "}
+                abastecimentos e {preview.pdeRowsUsed.length} apontamentos PDE usados a uma nova
+                análise independente.
+              </p>
+            </div>
+          )}
+
+          {step === 4 && !preview && (
+            <div className="rounded border border-status-warning/30 bg-status-warning/5 p-4 text-sm">
+              Volte ao preview e confira as planilhas antes de confirmar.
+            </div>
+          )}
+
+          <div className="mt-4 rounded border border-border-low bg-surface-highest p-3 text-xs">
+            <p className="font-black uppercase tracking-widest text-on-surface-variant">Debug</p>
+            <div className="mt-2 grid grid-cols-2 gap-1 md:grid-cols-4">
+              <span>hasRco: {String(hasRco)}</span>
+              <span>hasCmb: {String(hasCmb)}</span>
+              <span>hasPde: {String(hasPde)}</span>
+              <span>contextValid: {String(contextValid)}</span>
+              <span>parseErrors: {parseErrors.length ? parseErrors.join(" | ") : "none"}</span>
+              <span>canGoPreview: {String(canGoPreview)}</span>
+              <span>canGoConfirm: {String(canGoConfirm)}</span>
+              <span>currentStep: {step}</span>
+            </div>
+          </div>
         </div>
 
-        {step === 1 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className="text-xs font-bold">
-              Nome da análise
-              <input
-                value={draft.name}
-                onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
-                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
-            <label className="text-xs font-bold">
-              Obra
-              <input
-                value={draft.obra}
-                onChange={(e) => setDraft((prev) => ({ ...prev, obra: e.target.value }))}
-                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
-            <label className="text-xs font-bold">
-              Material
-              <input
-                value={draft.material}
-                onChange={(e) => setDraft((prev) => ({ ...prev, material: e.target.value }))}
-                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
-            <label className="text-xs font-bold">
-              Fator de empolamento padrão
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={draft.swellFactor}
-                onChange={(e) => setDraft((prev) => ({ ...prev, swellFactor: e.target.value }))}
-                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
-            <label className="text-xs font-bold">
-              Início do período analisado
-              <input
-                type="date"
-                value={draft.dateStart}
-                onChange={(e) => setDraft((prev) => ({ ...prev, dateStart: e.target.value }))}
-                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
-            <label className="text-xs font-bold">
-              Fim do período analisado
-              <input
-                type="date"
-                value={draft.dateEnd}
-                onChange={(e) => setDraft((prev) => ({ ...prev, dateEnd: e.target.value }))}
-                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div className="space-y-4">
-            <div
-              className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-                dragging
-                  ? "border-primary bg-primary/5"
-                  : "border-border-low hover:border-primary/50 hover:bg-surface-highest/40"
-              }`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragging(false);
-                handleSelected(e.dataTransfer.files);
-              }}
-              onClick={() => inputRef.current?.click()}
-            >
-              <Icon name="upload_file" className="text-4xl text-on-surface-variant/50 mb-3" />
-              <p className="text-sm font-black">Arraste RCO, CMB e PDE aqui</p>
-              <p className="text-xs text-on-surface-variant mt-1">
-                ou clique para selecionar os 3 XLSX
-              </p>
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xlsx"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files) handleSelected(e.target.files);
-                  e.currentTarget.value = "";
-                }}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <UploadCard
-                title="Planilha RCO"
-                loadedLabel="RCO carregado"
-                emptyLabel="Aguardando planilha de viagens/produção"
-                item={arquivoRCO}
-                uploadType="rco"
-                onFileSelect={handleFileSelect}
-                onRemove={() => setArquivoRCO(null)}
-              />
-              <UploadCard
-                title="Planilha CMB"
-                loadedLabel="CMB carregado"
-                emptyLabel="Aguardando planilha de abastecimentos/consumo"
-                item={arquivoCMB}
-                uploadType="cmb"
-                onFileSelect={handleFileSelect}
-                onRemove={() => setArquivoCMB(null)}
-              />
-              <div>
-                <UploadCard
-                  title="Planilha PDE"
-                  loadedLabel="PDE carregada"
-                  emptyLabel="Aguardando Parte Diária de Equipamentos"
-                  item={arquivoPDE}
-                  uploadType="pde"
-                  onFileSelect={handleFileSelect}
-                  onRemove={() => setArquivoPDE(null)}
-                />
-                {arquivoPDE && cmbRequiredFleets.size > 0 && (
-                  <p className="text-xs text-on-surface-variant mt-1 px-1">
-                    Filtrado para {cmbRequiredFleets.size} frota(s) própria(s) identificada(s) no
-                    CMB
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-3 text-xs">
-              <span className={arquivoRCO ? "text-status-success" : "text-on-surface-variant"}>
-                {arquivoRCO ? "✓ RCO carregado" : "RCO pendente"}
-              </span>
-              <span className={arquivoCMB ? "text-status-success" : "text-on-surface-variant"}>
-                {arquivoCMB ? "✓ CMB carregado" : "CMB pendente"}
-              </span>
-              <span className={arquivoPDE ? "text-status-success" : "text-on-surface-variant"}>
-                {arquivoPDE ? "✓ PDE carregada" : "PDE pendente"}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {step === 3 && preview && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {[
-                ["Viagens encontradas", preview.trips.length],
-                ["Volume solto total", `${preview.looseM3.toFixed(2)} m³`],
-                ["Volume compactado estimado", `${preview.compactedM3.toFixed(2)} m³`],
-                ["Abastecimentos", preview.fueling.length],
-                ["Litros totais", `${preview.liters.toFixed(0)} L`],
-                ["Custo diesel", `R$ ${fmtBRL(preview.fuelCost)}`],
-                ["Horas PDE usadas", `${preview.pdeHoursUsed.toFixed(1)} h`],
-                ["Frotas PDE usadas", preview.pdeFleetsUsed.length],
-                ["Pendências PDE", preview.pdePending.length],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="rounded border border-border-low bg-surface-highest p-3"
-                >
-                  <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-black">
-                    {label}
-                  </p>
-                  <p className="text-lg font-black mt-1">{value}</p>
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-              <div className="rounded border border-border-low p-3">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
-                  Período encontrado
-                </p>
-                <p className="mt-1">
-                  {preview.dateStart || "—"} até {preview.dateEnd || "—"}
-                </p>
-              </div>
-              <div className="rounded border border-border-low p-3">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
-                  Equipamentos encontrados
-                </p>
-                <p className="mt-1">{preview.equipments.slice(0, 8).join(", ") || "—"}</p>
-              </div>
-              <div className="rounded border border-border-low p-3">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
-                  PDE
-                </p>
-                <p className="mt-1">
-                  {preview.pdeFleets.length} frotas encontradas · {preview.pdeFleetsUsed.length}{" "}
-                  usadas
-                </p>
-              </div>
-              <div className="rounded border border-border-low p-3">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
-                  Pendências de datas/frotas
-                </p>
-                <p className="mt-1">{preview.pdePending.slice(0, 4).join(", ") || "Nenhuma"}</p>
-              </div>
-              <div className="rounded border border-border-low p-3">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
-                  Obras encontradas
-                </p>
-                <p className="mt-1">{preview.obras.join(", ") || "—"}</p>
-              </div>
-              <div className="rounded border border-border-low p-3">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
-                  Materiais encontrados
-                </p>
-                <p className="mt-1">{preview.materials.join(", ") || "—"}</p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {step === 3 && !preview && (
-          <div className="rounded border border-status-warning/30 bg-status-warning/5 p-4 text-sm">
-            Envie planilhas RCO, CMB e PDE válidas para gerar o preview.
-          </div>
-        )}
-
-        {step === 4 && preview && (
-          <div className="rounded border border-border-low p-5">
-            <p className="text-sm font-black">Confirmar criação da análise</p>
-            <p className="text-xs text-on-surface-variant mt-2">
-              {draft.name} · {draft.obra} · {draft.material} · fator {factor.toFixed(2)}
-            </p>
-            <p className="text-xs text-on-surface-variant mt-1">
-              Serão vinculadas {preview.trips.length} viagens, {preview.fueling.length}{" "}
-              abastecimentos e {preview.pdeRowsUsed.length} apontamentos PDE usados a uma nova
-              análise independente.
-            </p>
-          </div>
-        )}
-
-        <DialogFooter>
+        <DialogFooter className="sticky bottom-0 z-20 bg-surface border-t border-border-low p-4">
+          <Button variant="outline" onClick={onClose} disabled={creating}>
+            Cancelar
+          </Button>
           <Button
             variant="outline"
-            onClick={step === 1 ? onClose : () => setStep((s) => s - 1)}
-            disabled={creating}
+            onClick={() => setStep((s) => Math.max(1, s - 1))}
+            disabled={creating || step === 1}
           >
-            {step === 1 ? "Cancelar" : "Voltar"}
+            Voltar
+          </Button>
+          <Button variant="outline" onClick={() => setStep(3)} disabled={creating || !canGoPreview}>
+            Preview
           </Button>
           {step < 4 ? (
             <Button
@@ -860,10 +923,16 @@ export function CarcaraImportDialog({
               Avançar
             </Button>
           ) : (
-            <Button onClick={handleCreate} disabled={creating || !canGoConfirm}>
-              {creating ? "Criando..." : "Criar análise"}
+            <Button variant="outline" onClick={() => setStep(4)} disabled>
+              Avançar
             </Button>
           )}
+          <Button
+            onClick={step === 4 ? handleCreate : () => setStep(4)}
+            disabled={creating || !canGoConfirm}
+          >
+            {creating ? "Criando..." : step === 4 ? "Criar análise" : "Confirmar"}
+          </Button>
         </DialogFooter>
       </DialogContent>
 

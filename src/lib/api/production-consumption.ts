@@ -64,6 +64,7 @@ function makeTripRow(
   now: string,
   factor: number,
 ): DbTrip {
+  const compactedM3 = row.cubicMLoose > 0 ? row.cubicMLoose / (1 + factor) : 0;
   return {
     id: analysisScopedId(analysisId, row.id),
     analysisId,
@@ -83,9 +84,9 @@ function makeTripRow(
     weight: row.weight,
     cubicMLoose: row.cubicMLoose,
     swellFactorApplied: factor,
-    cubicMCompacted: row.cubicMLoose / (1 + factor),
+    cubicMCompacted: compactedM3,
     unitPrice: row.unitPrice,
-    total: row.total,
+    total: row.total || compactedM3 * row.unitPrice,
     status: row.status ?? null,
     importBatchId: batchId,
     importedAt: now,
@@ -98,6 +99,7 @@ function makeFuelRow(
   batchId: string,
   now: string,
 ): DbFueling {
+  const total = row.total || row.liters * row.unitPrice;
   return {
     id: analysisScopedId(analysisId, row.id),
     analysisId,
@@ -111,7 +113,7 @@ function makeFuelRow(
     kmCurrent: row.kmCurrent,
     liters: row.liters,
     unitPrice: row.unitPrice,
-    total: row.total,
+    total,
     consumption: row.consumption,
     standardConsumption: row.standardConsumption,
     operator: row.operator,
@@ -149,11 +151,125 @@ function obraMatches(rowObra: string, analysisObra: string) {
   return rowObra.trim().toLowerCase() === analysisObra.trim().toLowerCase();
 }
 
-function summarizeFueling(rows: ParsedFueling[], dateStart: string, dateEnd: string) {
-  return rows.filter((row) => {
-    const date = normalizeDateKey(row.datetime);
-    return date >= dateStart && date <= dateEnd;
+function importedDateRange(rows: Array<{ datetime?: string }>) {
+  const dates = rows
+    .map((row) => normalizeDateKey(row.datetime))
+    .filter(Boolean)
+    .sort();
+  return dates.length ? { start: dates[0], end: dates[dates.length - 1] } : null;
+}
+
+function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: string) {
+  const batchId = `BATCH-${Date.now()}`;
+  const factor = Number.isFinite(data.swellFactor) ? data.swellFactor : 0.3;
+  const range = importedDateRange([...data.tripsRows, ...data.fuelingRows]);
+  const analysis: DbProductionAnalysis = {
+    id,
+    name: data.name.trim(),
+    obra: data.obra.trim(),
+    material: data.material.trim(),
+    dateStart: data.dateStart || range?.start || now.slice(0, 10),
+    dateEnd: data.dateEnd || range?.end || data.dateStart || now.slice(0, 10),
+    swellFactor: factor,
+    createdAt: now,
+    createdBy: data.createdBy ?? "",
+  };
+
+  const tripRows = data.tripsRows.map((row) => makeTripRow(row, id, batchId, now, factor));
+  const fuelRows = data.fuelingRows.map((row) => makeFuelRow(row, id, batchId, now));
+  const fueledFleets = new Set(
+    fuelRows.map((row) => normalizeFleet(row.prefix || row.vehicleId || row.plate)).filter(Boolean),
+  );
+  const fueledDates = new Set(
+    fuelRows.map((row) => normalizeDateKey(row.datetime)).filter(Boolean),
+  );
+
+  const dailyRows = data.dailyPartRows.map((row) => {
+    let status = "OK";
+    let used = true;
+    if (fueledFleets.size > 0 && !fueledFleets.has(row.fleet)) {
+      status = "Sem abastecimento";
+      used = false;
+    } else if (!obraMatches(row.obra, analysis.obra)) {
+      status = "Obra divergente";
+      used = false;
+    } else if (fueledDates.size > 0 && !fueledDates.has(row.date)) {
+      status = "OK";
+    }
+    return makeDailyPartRow(row, id, now, status, used);
   });
+
+  const dailyKeys = new Set(
+    dailyRows.filter((row) => row.usedInAnalysis).map((row) => `${row.fleet}|${row.date}`),
+  );
+  const missingRows: DbEquipmentDailyPart[] = [];
+  fuelRows.forEach((row) => {
+    const fleet = normalizeFleet(row.prefix || row.vehicleId || row.plate);
+    const date = normalizeDateKey(row.datetime);
+    if (!fleet || !date || dailyKeys.has(`${fleet}|${date}`)) return;
+    missingRows.push({
+      id: analysisScopedId(id, `missing:${fleet}:${date}:${row.id}`),
+      analysisId: id,
+      fleet,
+      fleetLabel: row.prefix || row.vehicleId || row.plate,
+      date,
+      obra: row.obra,
+      hours: 0,
+      sourceSheet: "",
+      status: "Sem horas na PDE",
+      usedInAnalysis: false,
+      importedAt: now,
+    });
+  });
+  const dailyPartRows = [...dailyRows, ...missingRows];
+  const productionRows = tripRows;
+  const consumptionRows = fuelRows;
+  const equipmentRows = dailyPartRows.filter((row) => row.usedInAnalysis);
+  const trucks = [
+    ...new Set(
+      productionRows.map((row) => row.prefix || row.vehicleId || row.plate).filter(Boolean),
+    ),
+  ];
+  const looseM3 = productionRows.reduce((sum, row) => sum + row.cubicMLoose, 0);
+  const compactedM3 = productionRows.reduce((sum, row) => sum + row.cubicMCompacted, 0);
+  const dieselLiters = consumptionRows.reduce((sum, row) => sum + row.liters, 0);
+  const fuelCost = consumptionRows.reduce((sum, row) => sum + row.total, 0);
+  const revenue = productionRows.reduce((sum, row) => sum + row.total, 0);
+  const hours = equipmentRows.reduce((sum, row) => sum + row.hours, 0);
+  const metrics = {
+    viagensTotais: productionRows.length,
+    dieselConsumidoLitros: dieselLiters,
+    horasEquipamentos: hours,
+    producaoSoltaM3: looseM3,
+    producaoCompactadaM3: compactedM3,
+    custoTotalCombustivel: fuelCost,
+    consumoMedioLitroPorM3: compactedM3 > 0 ? dieselLiters / compactedM3 : 0,
+    custoMedioRsPorLitro: dieselLiters > 0 ? fuelCost / dieselLiters : 0,
+    faturamento: revenue,
+    margemBruta: revenue - fuelCost,
+  };
+
+  return {
+    id,
+    name: analysis.name,
+    dateStart: analysis.dateStart,
+    dateEnd: analysis.dateEnd,
+    obra: analysis.obra,
+    material: analysis.material,
+    equipment: equipmentRows,
+    trucks,
+    metrics,
+    productionRows,
+    consumptionRows,
+    equipmentRows,
+    truckRows: productionRows,
+    auditRows: dailyPartRows,
+    createdAt: now,
+    analysis,
+    tripRows,
+    fuelRows,
+    dailyPartRows,
+  };
 }
 
 function filterByDate<T extends { datetime: string }>(rows: T[], filters: DateFilters): T[] {
@@ -377,76 +493,9 @@ export const createAnalysis = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const now = new Date().toISOString();
     const id = `ANL-${Date.now().toString(36).toUpperCase()}`;
-    const batchId = `BATCH-${Date.now()}`;
-    const factor = Number.isFinite(data.swellFactor) ? data.swellFactor : 0.3;
-    const analysis: DbProductionAnalysis = {
-      id,
-      name: data.name.trim(),
-      obra: data.obra.trim(),
-      material: data.material.trim(),
-      dateStart: data.dateStart,
-      dateEnd: data.dateEnd,
-      swellFactor: factor,
-      createdAt: now,
-      createdBy: data.createdBy ?? "",
-    };
-    const tripsInPeriod = data.tripsRows.filter((row) => {
-      const date = normalizeDateKey(row.datetime);
-      const obraOk = obraMatches(row.obra, analysis.obra);
-      const materialOk =
-        !analysis.material ||
-        !row.material ||
-        row.material.trim().toLowerCase() === analysis.material.trim().toLowerCase();
-      return date >= data.dateStart && date <= data.dateEnd && obraOk && materialOk;
-    });
-    const tripRows = tripsInPeriod.map((row) => makeTripRow(row, id, batchId, now, factor));
-    const fuelingInPeriod = summarizeFueling(data.fuelingRows, data.dateStart, data.dateEnd);
-    const fuelRows = fuelingInPeriod.map((row) => makeFuelRow(row, id, batchId, now));
-    const fueledFleets = new Set(
-      fuelingInPeriod.map((row) => normalizeFleet(row.prefix || row.vehicleId || row.plate)),
-    );
-    const fueledDates = new Set(fuelingInPeriod.map((row) => normalizeDateKey(row.datetime)));
-    const dailyRows = data.dailyPartRows.map((row) => {
-      let status = "OK";
-      let used = true;
-      if (row.date < data.dateStart || row.date > data.dateEnd) {
-        status = "Fora do período";
-        used = false;
-      } else if (!fueledFleets.has(row.fleet)) {
-        status = "Sem abastecimento";
-        used = false;
-      } else if (!obraMatches(row.obra, analysis.obra)) {
-        status = "Obra divergente";
-        used = false;
-      } else if (!fueledDates.has(row.date)) {
-        status = "OK";
-      }
-      return makeDailyPartRow(row, id, now, status, used);
-    });
-
-    const dailyKeys = new Set(
-      dailyRows.filter((row) => row.usedInAnalysis).map((row) => `${row.fleet}|${row.date}`),
-    );
-    const missingRows: DbEquipmentDailyPart[] = [];
-    fuelingInPeriod.forEach((row) => {
-      const fleet = normalizeFleet(row.prefix || row.vehicleId || row.plate);
-      const date = normalizeDateKey(row.datetime);
-      if (!fleet || !date || dailyKeys.has(`${fleet}|${date}`)) return;
-      missingRows.push({
-        id: analysisScopedId(id, `missing:${fleet}:${date}:${row.id}`),
-        analysisId: id,
-        fleet,
-        fleetLabel: row.prefix || row.vehicleId || row.plate,
-        date,
-        obra: row.obra,
-        hours: 0,
-        sourceSheet: "",
-        status: "Sem horas na PDE",
-        usedInAnalysis: false,
-        importedAt: now,
-      });
-    });
-    const dailyPartRows = [...dailyRows, ...missingRows];
+    const built = buildAnalysisFromImports(data, id, now);
+    const { analysis, tripRows, fuelRows, dailyPartRows, metrics } = built;
+    console.log("metrics", metrics);
 
     const d1 = getOptionalD1();
     if (!d1) {
@@ -459,8 +508,9 @@ export const createAnalysis = createServerFn({ method: "POST" })
         trips: tripRows.length,
         fueling: fuelRows.length,
         dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
-        compactedM3: tripRows.reduce((sum, row) => sum + row.cubicMCompacted, 0),
-        liters: fuelRows.reduce((sum, row) => sum + row.liters, 0),
+        compactedM3: metrics.producaoCompactadaM3,
+        liters: metrics.dieselConsumidoLitros,
+        metrics,
       };
     }
 
@@ -483,8 +533,9 @@ export const createAnalysis = createServerFn({ method: "POST" })
       trips: tripRows.length,
       fueling: fuelRows.length,
       dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
-      compactedM3: tripRows.reduce((sum, row) => sum + row.cubicMCompacted, 0),
-      liters: fuelRows.reduce((sum, row) => sum + row.liters, 0),
+      compactedM3: metrics.producaoCompactadaM3,
+      liters: metrics.dieselConsumidoLitros,
+      metrics,
     };
   });
 

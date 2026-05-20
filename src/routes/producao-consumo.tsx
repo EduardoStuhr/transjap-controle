@@ -480,6 +480,11 @@ function ProducaoConsumo() {
     };
   }, [filteredFueling, filteredTrips]);
 
+  useEffect(() => {
+    console.log("dashboard activeAnalysis", selectedAnalysis);
+    console.log("metrics", kpis);
+  }, [kpis, selectedAnalysis]);
+
   const daily = useMemo(() => {
     const map = new Map<
       string,
@@ -687,6 +692,14 @@ function ProducaoConsumo() {
   const pagedFueling = searchedFueling.slice(fuelPage * PAGE_SIZE, (fuelPage + 1) * PAGE_SIZE);
 
   async function handleCreated(analysisId: string) {
+    setDateFrom("");
+    setDateTo("");
+    setObraFilter("all");
+    setMaterialFilter("all");
+    setEquipmentFilter("all");
+    setTruckFilter("all");
+    setAnalysisType("all");
+    setSearch("");
     await loadAnalyses(analysisId);
     setSelectedAnalysisId(analysisId);
     setTab("overview");
