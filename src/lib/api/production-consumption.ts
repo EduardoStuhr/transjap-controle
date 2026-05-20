@@ -192,7 +192,7 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
       used = false;
     } else if (!obraMatches(row.obra, analysis.obra)) {
       status = "Obra divergente";
-      used = false;
+      used = true;
     } else if (fueledDates.size > 0 && !fueledDates.has(row.date)) {
       status = "OK";
     }

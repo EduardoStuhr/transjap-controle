@@ -1,6 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Bar,
+  BarChart as RechartsBarChart,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  LineChart as RechartsLineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +29,7 @@ import {
   listFueling,
   listTrips,
 } from "@/lib/api/production-consumption";
-import { normalizeFleet } from "@/lib/carcara-parser";
+import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import type { DbEquipmentDailyPart, DbFueling, DbProductionAnalysis, DbTrip } from "@/db/schema";
 
 const CarcaraImportDialog = lazy(() =>
@@ -37,9 +49,61 @@ type TabId =
   | "data";
 
 const PAGE_SIZE = 12;
+const AGGREGATE_TRIP_PRICE = 1.65;
+const CHART_YELLOW = "#f4c430";
+const CHART_BLUE = "#38bdf8";
+const CHART_GREEN = "#22c55e";
+const CHART_RED = "#ef4444";
+const CHART_ORANGE = "#fb923c";
+const CHART_GRID = "rgba(255,255,255,0.12)";
+const CHART_TEXT = "#c9c1a8";
+
+type DailyPoint = {
+  date: string;
+  label: string;
+  m3: number;
+  loose: number;
+  liters: number;
+  cost: number;
+  trips: number;
+  revenue: number;
+  margin: number;
+  litersPerM3: number;
+  costPerM3: number;
+};
+
+type TooltipPayload = {
+  name?: string;
+  value?: unknown;
+  color?: string;
+  payload?: Record<string, unknown>;
+};
+
+function safeDivide(numerator: number, denominator: number) {
+  return denominator > 0 ? numerator / denominator : 0;
+}
+
+function formatNumber(v: number, digits = 1) {
+  return v.toLocaleString("pt-BR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function formatBRL(v: number) {
+  return `R$ ${formatNumber(v, 2)}`;
+}
+
+function formatLiters(v: number) {
+  return `${formatNumber(v, 0)} L`;
+}
+
+function formatM3(v: number) {
+  return `${formatNumber(v, 1)} m³`;
+}
 
 function fmtBRL(v: number) {
-  return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatNumber(v, 2);
 }
 
 function fmtDate(iso: string) {
@@ -52,12 +116,26 @@ function vehicleKey(row: { prefix: string; vehicleId: string; plate: string }) {
   return row.prefix || row.vehicleId || row.plate || "Sem identificação";
 }
 
+function aggregateKey(row: DbTrip) {
+  return row.prefix || row.vehicleId || row.plate || "Agregado sem identificação";
+}
+
+function ownEquipmentKey(row: { prefix: string; vehicleId: string; plate: string }) {
+  return normalizeFleet(row.prefix || row.vehicleId || row.plate) || vehicleKey(row);
+}
+
 function uniq(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort();
 }
 
-function dateKey(iso: string) {
-  return iso.slice(0, 10);
+function dateKey(value: unknown) {
+  return normalizeDateKey(value) || String(value ?? "").slice(0, 10);
+}
+
+function shortDate(key: string) {
+  if (!key || key.length < 10) return "—";
+  const [, m, d] = key.split("-");
+  return `${d}/${m}`;
 }
 
 function compacted(row: DbTrip) {
@@ -76,7 +154,10 @@ function KpiCard({
   icon: string;
 }) {
   return (
-    <div className="rounded border border-border-low bg-surface-container p-3 min-h-[104px]">
+    <div
+      className="rounded border border-border-low bg-surface-container p-3 min-h-[104px]"
+      title={sub}
+    >
       <div className="flex items-start justify-between gap-2">
         <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
           {label}
@@ -89,120 +170,684 @@ function KpiCard({
   );
 }
 
-function BarChart({
+function ChartCard({
   title,
-  data,
-  color = "bg-primary",
+  description,
+  hasData,
+  children,
 }: {
   title: string;
-  data: { label: string; value: number }[];
-  color?: string;
+  description: string;
+  hasData: boolean;
+  children: ReactNode;
 }) {
-  const max = Math.max(1, ...data.map((d) => d.value));
   return (
     <div className="rounded border border-border-low bg-surface-container p-4">
-      <h3 className="text-[10px] font-black uppercase tracking-widest mb-4">{title}</h3>
-      <div className="flex items-end gap-2 h-56">
-        {data.length === 0 ? (
-          <p className="m-auto text-xs text-on-surface-variant">Sem dados</p>
+      <div className="mb-3">
+        <h3 className="text-[10px] font-black uppercase tracking-widest">{title}</h3>
+        <p className="mt-1 text-xs text-on-surface-variant">{description}</p>
+      </div>
+      <div className="h-[320px]">
+        {hasData ? (
+          children
         ) : (
-          data.map((d) => (
-            <div key={d.label} className="flex-1 min-w-0 flex flex-col items-center gap-2">
-              <div className="w-full flex items-end h-48">
-                <div
-                  className={`w-full rounded-t ${color}`}
-                  style={{ height: `${Math.max(4, (d.value / max) * 100)}%` }}
-                  title={`${d.label}: ${d.value.toFixed(2)}`}
-                />
-              </div>
-              <span className="text-[10px] text-on-surface-variant truncate w-full text-center">
-                {d.label.slice(5).split("-").reverse().join("/")}
-              </span>
-            </div>
-          ))
+          <div className="flex h-full items-center justify-center rounded border border-border-low/60 bg-surface-low text-xs text-on-surface-variant">
+            Sem dados suficientes para este gráfico.
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function LineChart({
-  title,
-  data,
-  color = "#f4c430",
-}: {
-  title: string;
-  data: { label: string; value: number }[];
-  color?: string;
-}) {
-  const max = Math.max(1, ...data.map((d) => d.value));
-  const points = data
-    .map((d, i) => {
-      const x = data.length === 1 ? 50 : (i / (data.length - 1)) * 100;
-      const y = 92 - (d.value / max) * 82;
-      return `${x},${y}`;
-    })
-    .join(" ");
+function TooltipShell({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="rounded border border-border-low bg-surface-container p-4">
-      <h3 className="text-[10px] font-black uppercase tracking-widest mb-4">{title}</h3>
-      <svg viewBox="0 0 100 100" className="w-full h-56">
-        <polyline fill="none" stroke={color} strokeWidth="2.5" points={points} />
-        {data.map((d, i) => {
-          const x = data.length === 1 ? 50 : (i / (data.length - 1)) * 100;
-          const y = 92 - (d.value / max) * 82;
-          return <circle key={d.label} cx={x} cy={y} r="2.5" fill={color} />;
-        })}
-      </svg>
+    <div className="rounded border border-border-low bg-surface-highest p-3 text-xs shadow-xl">
+      <p className="mb-2 font-black text-on-surface">{label}</p>
+      <div className="space-y-1 text-on-surface-variant">{children}</div>
     </div>
   );
 }
 
-function CombinedChart({ data }: { data: { date: string; m3: number; liters: number }[] }) {
-  const maxM3 = Math.max(1, ...data.map((d) => d.m3));
-  const maxLiters = Math.max(1, ...data.map((d) => d.liters));
-  const points = data
-    .map((d, i) => {
-      const x = data.length === 1 ? 50 : (i / (data.length - 1)) * 100;
-      const y = 92 - (d.liters / maxLiters) * 82;
-      return `${x},${y}`;
-    })
-    .join(" ");
+function TooltipLine({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="rounded border border-border-low bg-surface-container p-5">
-      <div className="flex items-center justify-between gap-4 mb-4">
-        <h3 className="text-sm font-black uppercase tracking-widest">Produção × Consumo</h3>
-        <div className="flex gap-4 text-xs text-on-surface-variant">
-          <span className="flex items-center gap-2">
-            <span className="h-3 w-3 rounded-sm bg-primary" />
-            m³ compactado
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="h-3 w-3 rounded-sm bg-status-info" />
-            litros
-          </span>
-        </div>
-      </div>
-      <div className="relative h-80">
-        <div className="absolute inset-0 flex items-end gap-2">
-          {data.map((d) => (
-            <div key={d.date} className="flex-1 min-w-0 flex items-end h-full">
-              <div
-                className="w-full rounded-t bg-primary/80"
-                style={{ height: `${Math.max(2, (d.m3 / maxM3) * 100)}%` }}
-              />
-            </div>
-          ))}
-        </div>
-        <svg
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="absolute inset-0 h-full w-full"
+    <p className="flex min-w-48 items-center justify-between gap-4">
+      <span className="flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+        {label}
+      </span>
+      <strong className="text-on-surface">{value}</strong>
+    </p>
+  );
+}
+
+function DailyTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: TooltipPayload[];
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload as DailyPoint;
+  return (
+    <TooltipShell label={label ? fmtDate(String(row.date || label)) : "Dia"}>
+      <TooltipLine label="m³ solto" value={formatM3(row.loose)} color={CHART_ORANGE} />
+      <TooltipLine label="m³ compactado" value={formatM3(row.m3)} color={CHART_YELLOW} />
+      <TooltipLine label="Litros" value={formatLiters(row.liters)} color={CHART_BLUE} />
+      <TooltipLine label="Viagens" value={formatNumber(row.trips, 0)} color={CHART_TEXT} />
+      <TooltipLine label="Custo diesel" value={formatBRL(row.cost)} color={CHART_RED} />
+      <TooltipLine label="Margem" value={formatBRL(row.margin)} color={CHART_GREEN} />
+    </TooltipShell>
+  );
+}
+
+function GenericTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: TooltipPayload[];
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <TooltipShell label={label ?? "Dados"}>
+      {payload.map((item) => (
+        <TooltipLine
+          key={`${item.name}-${String(item.value)}`}
+          label={item.name ?? "Valor"}
+          value={typeof item.value === "number" ? formatNumber(item.value, 2) : String(item.value)}
+          color={item.color ?? CHART_YELLOW}
+        />
+      ))}
+    </TooltipShell>
+  );
+}
+
+function ProductionConsumptionChart({ data }: { data: DailyPoint[] }) {
+  return (
+    <ChartCard
+      title="Produção × Consumo por dia"
+      description="Barras de m³ compactado e linha de litros consumidos, agrupados por data."
+      hasData={data.some((row) => row.m3 > 0 || row.liters > 0 || row.trips > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            yAxisId="m3"
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            tickFormatter={(value) => formatNumber(Number(value), 0)}
+            label={{ value: "m³", angle: -90, position: "insideLeft", fill: CHART_TEXT }}
+          />
+          <YAxis
+            yAxisId="liters"
+            orientation="right"
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            tickFormatter={(value) => formatNumber(Number(value), 0)}
+            label={{ value: "litros", angle: 90, position: "insideRight", fill: CHART_TEXT }}
+          />
+          <Tooltip content={<DailyTooltip />} />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Bar
+            yAxisId="m3"
+            dataKey="m3"
+            name="m³ compactado"
+            fill={CHART_YELLOW}
+            radius={[4, 4, 0, 0]}
+          />
+          <Line
+            yAxisId="liters"
+            type="monotone"
+            dataKey="liters"
+            name="litros diesel"
+            stroke={CHART_BLUE}
+            strokeWidth={3}
+            dot={{ r: 3 }}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function DailyProductionChart({ data }: { data: DailyPoint[] }) {
+  return (
+    <ChartCard
+      title="Produção diária"
+      description="m³ compactado por dia, com volume solto no tooltip."
+      hasData={data.some((row) => row.m3 > 0 || row.trips > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <Tooltip content={<DailyTooltip />} />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Bar dataKey="m3" name="m³ compactado" fill={CHART_YELLOW} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="loose" name="m³ solto" fill={CHART_ORANGE} radius={[4, 4, 0, 0]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function DailyFuelChart({ data }: { data: DailyPoint[] }) {
+  return (
+    <ChartCard
+      title="Consumo diário"
+      description="Litros consumidos por dia pelos equipamentos próprios."
+      hasData={data.some((row) => row.liters > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsLineChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <Tooltip content={<DailyTooltip />} />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Line
+            type="monotone"
+            dataKey="liters"
+            name="litros diesel"
+            stroke={CHART_BLUE}
+            strokeWidth={3}
+            dot={{ r: 3 }}
+          />
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function AverageConsumptionChart({ data }: { data: DailyPoint[] }) {
+  return (
+    <ChartCard
+      title="Consumo médio L/m³ por dia"
+      description="Litros ÷ m³ compactado. Dias sem produção aparecem como zero."
+      hasData={data.some((row) => row.liters > 0 || row.m3 > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsLineChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <Tooltip
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload as DailyPoint;
+              return (
+                <TooltipShell label={label ? fmtDate(row.date) : "Dia"}>
+                  <TooltipLine
+                    label="Consumo operacional"
+                    value={`${formatNumber(row.litersPerM3, 2)} L/m³`}
+                    color={CHART_BLUE}
+                  />
+                  <TooltipLine
+                    label="Produção"
+                    value={row.m3 > 0 ? formatM3(row.m3) : "sem produção"}
+                    color={CHART_YELLOW}
+                  />
+                  <TooltipLine label="Litros" value={formatLiters(row.liters)} color={CHART_BLUE} />
+                </TooltipShell>
+              );
+            }}
+          />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Line
+            type="monotone"
+            dataKey="litersPerM3"
+            name="L/m³"
+            stroke={CHART_GREEN}
+            strokeWidth={3}
+            dot={{ r: 3 }}
+          />
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function DailyFuelCostChart({ data }: { data: DailyPoint[] }) {
+  return (
+    <ChartCard
+      title="Custo combustível por dia"
+      description="Custo de diesel da CMB por data."
+      hasData={data.some((row) => row.cost > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            yAxisId="cost"
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            tickFormatter={(value) => `R$ ${formatNumber(Number(value), 0)}`}
+          />
+          <YAxis
+            yAxisId="m3"
+            orientation="right"
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            tickFormatter={(value) => `R$ ${formatNumber(Number(value), 2)}`}
+          />
+          <Tooltip content={<DailyTooltip />} />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Bar
+            yAxisId="cost"
+            dataKey="cost"
+            name="custo diesel"
+            fill={CHART_RED}
+            radius={[4, 4, 0, 0]}
+          />
+          <Line
+            yAxisId="m3"
+            type="monotone"
+            dataKey="costPerM3"
+            name="R$/m³"
+            stroke={CHART_YELLOW}
+            strokeWidth={3}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function TopAggregatesChart({
+  rows,
+}: {
+  rows: Array<{
+    aggregate: string;
+    trips: number;
+    loose: number;
+    m3: number;
+    participation: number;
+  }>;
+}) {
+  const data = rows.slice(0, 10);
+  return (
+    <ChartCard
+      title="Top caminhões por produção"
+      description="Agregados do RCO por m³ compactado, viagens e participação."
+      hasData={data.some((row) => row.trips > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
         >
-          <polyline fill="none" stroke="#4aa3ff" strokeWidth="2" points={points} />
-        </svg>
+          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            dataKey="aggregate"
+            type="category"
+            width={92}
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+          />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload as (typeof data)[number];
+              return (
+                <TooltipShell label={row.aggregate}>
+                  <TooltipLine
+                    label="Viagens"
+                    value={formatNumber(row.trips, 0)}
+                    color={CHART_TEXT}
+                  />
+                  <TooltipLine label="m³ solto" value={formatM3(row.loose)} color={CHART_ORANGE} />
+                  <TooltipLine
+                    label="m³ compactado"
+                    value={formatM3(row.m3)}
+                    color={CHART_YELLOW}
+                  />
+                  <TooltipLine
+                    label="Participação"
+                    value={`${formatNumber(row.participation, 1)}%`}
+                    color={CHART_GREEN}
+                  />
+                </TooltipShell>
+              );
+            }}
+          />
+          <Bar dataKey="m3" name="m³ compactado" fill={CHART_YELLOW} radius={[0, 4, 4, 0]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function TopEquipmentChart({
+  rows,
+}: {
+  rows: Array<{
+    equipment: string;
+    liters: number;
+    cost: number;
+    hours: number;
+    lh: number;
+  }>;
+}) {
+  const data = rows.slice(0, 10);
+  return (
+    <ChartCard
+      title="Top equipamentos por consumo"
+      description="Equipamentos próprios da CMB/PDE por litros, custo e L/h."
+      hasData={data.some((row) => row.liters > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
+        >
+          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            dataKey="equipment"
+            type="category"
+            width={92}
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+          />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload as (typeof data)[number];
+              return (
+                <TooltipShell label={row.equipment}>
+                  <TooltipLine label="Litros" value={formatLiters(row.liters)} color={CHART_BLUE} />
+                  <TooltipLine label="Custo" value={formatBRL(row.cost)} color={CHART_RED} />
+                  <TooltipLine
+                    label="Horas PDE"
+                    value={`${formatNumber(row.hours, 1)} h`}
+                    color={CHART_GREEN}
+                  />
+                  <TooltipLine label="L/h" value={formatNumber(row.lh, 2)} color={CHART_YELLOW} />
+                </TooltipShell>
+              );
+            }}
+          />
+          <Bar dataKey="liters" name="litros" fill={CHART_BLUE} radius={[0, 4, 4, 0]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function FinancialChart({
+  kpis,
+}: {
+  kpis: {
+    revenue: number;
+    fuelCost: number;
+    aggregateCost: number;
+    operationalMargin: number;
+  };
+}) {
+  const data = [
+    {
+      label: "Análise",
+      faturamento: kpis.revenue,
+      combustivel: kpis.fuelCost,
+      agregados: kpis.aggregateCost,
+      margem: kpis.operationalMargin,
+    },
+  ];
+  return (
+    <ChartCard
+      title="Faturamento × Custo × Margem"
+      description="Receita da RCO comparada a combustível, agregados e margem operacional."
+      hasData={kpis.revenue > 0 || kpis.fuelCost > 0 || kpis.aggregateCost > 0}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            tickFormatter={(v) => `R$ ${formatNumber(Number(v), 0)}`}
+          />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              return (
+                <TooltipShell label="Resultado financeiro">
+                  {payload.map((item) => (
+                    <TooltipLine
+                      key={String(item.name)}
+                      label={String(item.name ?? "Valor")}
+                      value={formatBRL(Number(item.value ?? 0))}
+                      color={item.color ?? CHART_YELLOW}
+                    />
+                  ))}
+                </TooltipShell>
+              );
+            }}
+          />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Bar dataKey="faturamento" name="Faturamento" fill={CHART_YELLOW} radius={[4, 4, 0, 0]} />
+          <Bar
+            dataKey="combustivel"
+            name="Custo combustível"
+            fill={CHART_RED}
+            radius={[4, 4, 0, 0]}
+          />
+          <Bar
+            dataKey="agregados"
+            name="Custo agregados"
+            fill={CHART_ORANGE}
+            radius={[4, 4, 0, 0]}
+          />
+          <Bar
+            dataKey="margem"
+            name="Margem operacional"
+            fill={kpis.operationalMargin >= 0 ? CHART_GREEN : CHART_RED}
+            radius={[4, 4, 0, 0]}
+          />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function DistributionChart({
+  title,
+  description,
+  data,
+  color = CHART_GREEN,
+}: {
+  title: string;
+  description: string;
+  data: { label: string; value: number }[];
+  color?: string;
+}) {
+  const hasMultiple = data.length > 1;
+  if (!hasMultiple && data.length === 1) {
+    return (
+      <div className="rounded border border-border-low bg-surface-container p-4">
+        <h3 className="text-[10px] font-black uppercase tracking-widest">{title}</h3>
+        <p className="mt-1 text-xs text-on-surface-variant">{description}</p>
+        <div className="mt-6 rounded border border-border-low bg-surface-highest p-4">
+          <p className="text-xs text-on-surface-variant">Único grupo encontrado</p>
+          <p className="mt-2 text-xl font-black">{data[0].label}</p>
+          <p className="mt-1 text-sm text-primary">{formatM3(data[0].value)}</p>
+        </div>
       </div>
-    </div>
+    );
+  }
+  return (
+    <ChartCard title={title} description={description} hasData={data.length > 0}>
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
+        >
+          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            dataKey="label"
+            type="category"
+            width={110}
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+          />
+          <Tooltip content={<GenericTooltip />} />
+          <Bar dataKey="value" name="m³ compactado" fill={color} radius={[0, 4, 4, 0]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function ObraComparisonChart({
+  rows,
+}: {
+  rows: Array<{
+    obra: string;
+    m3: number;
+    liters: number;
+    cost: number;
+    revenue: number;
+    costPerM3: number;
+  }>;
+}) {
+  if (rows.length <= 1) {
+    const row = rows[0];
+    return (
+      <div className="rounded border border-border-low bg-surface-container p-4">
+        <h3 className="text-[10px] font-black uppercase tracking-widest">Distribuição por obra</h3>
+        <p className="mt-1 text-xs text-on-surface-variant">Há apenas uma obra nesta análise.</p>
+        <div className="mt-6 rounded border border-border-low bg-surface-highest p-4">
+          <p className="text-xl font-black">{row?.obra ?? "Sem obra"}</p>
+          <p className="mt-1 text-sm text-primary">{formatM3(row?.m3 ?? 0)}</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <ChartCard
+      title="Comparativo por obra"
+      description="Produção, litros, custo por m³ e faturamento por obra."
+      hasData={rows.length > 0}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={rows} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={CHART_GRID} vertical={false} />
+          <XAxis dataKey="obra" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis yAxisId="m3" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis yAxisId="liters" orientation="right" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload as (typeof rows)[number];
+              return (
+                <TooltipShell label={row.obra}>
+                  <TooltipLine label="Produção" value={formatM3(row.m3)} color={CHART_YELLOW} />
+                  <TooltipLine label="Litros" value={formatLiters(row.liters)} color={CHART_BLUE} />
+                  <TooltipLine label="R$/m³" value={formatBRL(row.costPerM3)} color={CHART_RED} />
+                  <TooltipLine
+                    label="Faturamento"
+                    value={formatBRL(row.revenue)}
+                    color={CHART_GREEN}
+                  />
+                </TooltipShell>
+              );
+            }}
+          />
+          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Bar
+            yAxisId="m3"
+            dataKey="m3"
+            name="m³ compactado"
+            fill={CHART_YELLOW}
+            radius={[4, 4, 0, 0]}
+          />
+          <Line
+            yAxisId="liters"
+            type="monotone"
+            dataKey="liters"
+            name="litros"
+            stroke={CHART_BLUE}
+            strokeWidth={3}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function EquipmentHoursChart({
+  rows,
+}: {
+  rows: Array<{ equipment: string; hours: number; liters: number; lh: number }>;
+}) {
+  const data = rows.filter((row) => row.hours > 0).slice(0, 10);
+  return (
+    <ChartCard
+      title="Horas PDE por frota"
+      description="Horas trabalhadas na Parte Diária por equipamento próprio."
+      hasData={data.length > 0}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
+        >
+          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            dataKey="equipment"
+            type="category"
+            width={92}
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+          />
+          <Tooltip content={<GenericTooltip />} />
+          <Bar dataKey="hours" name="horas PDE" fill={CHART_GREEN} radius={[0, 4, 4, 0]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function EquipmentLhChart({
+  rows,
+}: {
+  rows: Array<{ equipment: string; hours: number; liters: number; lh: number }>;
+}) {
+  const data = rows.filter((row) => row.hours > 0 && row.liters > 0).slice(0, 10);
+  return (
+    <ChartCard
+      title="L/h por equipamento"
+      description="Eficiência operacional com base em CMB e PDE cruzadas."
+      hasData={data.length > 0}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
+        >
+          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <YAxis
+            dataKey="equipment"
+            type="category"
+            width={92}
+            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+          />
+          <Tooltip content={<GenericTooltip />} />
+          <Bar dataKey="lh" name="L/h" fill={CHART_BLUE} radius={[0, 4, 4, 0]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
   );
 }
 
@@ -434,8 +1079,11 @@ function ProducaoConsumo() {
     [fuelRows, tripRows],
   );
   const distinctMaterials = useMemo(() => uniq(tripRows.map((t) => t.material)), [tripRows]);
-  const distinctEquipment = useMemo(() => uniq(fuelRows.map(vehicleKey)), [fuelRows]);
-  const distinctTrucks = useMemo(() => uniq(tripRows.map(vehicleKey)), [tripRows]);
+  const distinctEquipment = useMemo(
+    () => uniq([...fuelRows.map(ownEquipmentKey), ...dailyPartRows.map((row) => row.fleet)]),
+    [dailyPartRows, fuelRows],
+  );
+  const distinctTrucks = useMemo(() => uniq(tripRows.map(aggregateKey)), [tripRows]);
 
   const filteredTrips = useMemo(() => {
     return tripRows.filter((row) => {
@@ -443,7 +1091,7 @@ function ProducaoConsumo() {
       if (dateTo && dateKey(row.datetime) > dateTo) return false;
       if (obraFilter !== "all" && row.obra !== obraFilter) return false;
       if (materialFilter !== "all" && row.material !== materialFilter) return false;
-      if (truckFilter !== "all" && vehicleKey(row) !== truckFilter) return false;
+      if (truckFilter !== "all" && aggregateKey(row) !== truckFilter) return false;
       if (analysisType === "production-only" && row.cubicMLoose <= 0) return false;
       return true;
     });
@@ -454,7 +1102,7 @@ function ProducaoConsumo() {
       if (dateFrom && dateKey(row.datetime) < dateFrom) return false;
       if (dateTo && dateKey(row.datetime) > dateTo) return false;
       if (obraFilter !== "all" && row.obra !== obraFilter) return false;
-      if (equipmentFilter !== "all" && vehicleKey(row) !== equipmentFilter) return false;
+      if (equipmentFilter !== "all" && ownEquipmentKey(row) !== equipmentFilter) return false;
       if (analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
     });
@@ -466,17 +1114,19 @@ function ProducaoConsumo() {
     const liters = filteredFueling.reduce((sum, row) => sum + row.liters, 0);
     const fuelCost = filteredFueling.reduce((sum, row) => sum + row.total, 0);
     const revenue = filteredTrips.reduce((sum, row) => sum + row.total, 0);
+    const aggregateCost = filteredTrips.length * AGGREGATE_TRIP_PRICE;
     return {
       looseM3,
       compactedM3,
       liters,
       fuelCost,
-      costPerM3: compactedM3 > 0 ? fuelCost / compactedM3 : 0,
+      costPerM3: safeDivide(fuelCost, compactedM3),
       trips: filteredTrips.length,
+      aggregateCost,
       revenue,
-      grossMargin: revenue - fuelCost,
-      litersPerM3: compactedM3 > 0 ? liters / compactedM3 : 0,
-      avgCostPerLiter: liters > 0 ? fuelCost / liters : 0,
+      operationalMargin: revenue - fuelCost - aggregateCost,
+      litersPerM3: safeDivide(liters, compactedM3),
+      avgCostPerLiter: safeDivide(fuelCost, liters),
     };
   }, [filteredFueling, filteredTrips]);
 
@@ -485,63 +1135,108 @@ function ProducaoConsumo() {
     console.log("metrics", kpis);
   }, [kpis, selectedAnalysis]);
 
-  const daily = useMemo(() => {
-    const map = new Map<
-      string,
-      { date: string; m3: number; loose: number; liters: number; cost: number }
-    >();
+  const daily = useMemo<DailyPoint[]>(() => {
+    const map = new Map<string, DailyPoint>();
     filteredTrips.forEach((row) => {
       const date = dateKey(row.datetime);
-      const curr = map.get(date) ?? { date, m3: 0, loose: 0, liters: 0, cost: 0 };
+      if (!date) return;
+      const curr = map.get(date) ?? {
+        date,
+        label: shortDate(date),
+        m3: 0,
+        loose: 0,
+        liters: 0,
+        cost: 0,
+        trips: 0,
+        revenue: 0,
+        margin: 0,
+        litersPerM3: 0,
+        costPerM3: 0,
+      };
       curr.m3 += compacted(row);
       curr.loose += row.cubicMLoose;
+      curr.trips++;
+      curr.revenue += row.total;
       map.set(date, curr);
     });
     filteredFueling.forEach((row) => {
       const date = dateKey(row.datetime);
-      const curr = map.get(date) ?? { date, m3: 0, loose: 0, liters: 0, cost: 0 };
+      if (!date) return;
+      const curr = map.get(date) ?? {
+        date,
+        label: shortDate(date),
+        m3: 0,
+        loose: 0,
+        liters: 0,
+        cost: 0,
+        trips: 0,
+        revenue: 0,
+        margin: 0,
+        litersPerM3: 0,
+        costPerM3: 0,
+      };
       curr.liters += row.liters;
       curr.cost += row.total;
       map.set(date, curr);
     });
-    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+    return [...map.values()]
+      .map((row) => ({
+        ...row,
+        margin: row.revenue - row.cost - row.trips * AGGREGATE_TRIP_PRICE,
+        litersPerM3: safeDivide(row.liters, row.m3),
+        costPerM3: safeDivide(row.cost, row.m3),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }, [filteredFueling, filteredTrips]);
 
-  const costPerM3Daily = daily.map((row) => ({
-    label: row.date,
-    value: row.m3 > 0 ? row.cost / row.m3 : 0,
-  }));
-  const productionDaily = daily.map((row) => ({ label: row.date, value: row.m3 }));
-  const consumptionDaily = daily.map((row) => ({ label: row.date, value: row.liters }));
-
-  const topTrucks = useMemo(() => {
+  const aggregateProduction = useMemo(() => {
     const map = new Map<
       string,
-      { prefix: string; trips: number; loose: number; m3: number; avg: number }
+      {
+        aggregate: string;
+        trips: number;
+        loose: number;
+        m3: number;
+        avg: number;
+        tripPrice: number;
+        totalPay: number;
+        participation: number;
+      }
     >();
     filteredTrips.forEach((row) => {
-      const key = vehicleKey(row);
-      const curr = map.get(key) ?? { prefix: key, trips: 0, loose: 0, m3: 0, avg: 0 };
+      const key = aggregateKey(row);
+      const curr = map.get(key) ?? {
+        aggregate: key,
+        trips: 0,
+        loose: 0,
+        m3: 0,
+        avg: 0,
+        tripPrice: AGGREGATE_TRIP_PRICE,
+        totalPay: 0,
+        participation: 0,
+      };
       curr.trips++;
       curr.loose += row.cubicMLoose;
       curr.m3 += compacted(row);
       curr.avg = curr.trips > 0 ? curr.m3 / curr.trips : 0;
+      curr.totalPay = curr.trips * AGGREGATE_TRIP_PRICE;
       map.set(key, curr);
     });
-    return [...map.values()].sort((a, b) => b.m3 - a.m3);
+    const rows = [...map.values()];
+    const totalM3 = rows.reduce((sum, row) => sum + row.m3, 0);
+    const totalTrips = rows.reduce((sum, row) => sum + row.trips, 0);
+    return rows
+      .map((row) => ({
+        ...row,
+        participation:
+          totalM3 > 0
+            ? (row.m3 / totalM3) * 100
+            : totalTrips > 0
+              ? (row.trips / totalTrips) * 100
+              : 0,
+      }))
+      .sort((a, b) => b.trips - a.trips || b.m3 - a.m3);
   }, [filteredTrips]);
-
-  const topEquipment = useMemo(() => {
-    const map = new Map<string, { equipment: string; liters: number; cost: number }>();
-    filteredFueling.forEach((row) => {
-      const key = vehicleKey(row);
-      const curr = map.get(key) ?? { equipment: key, liters: 0, cost: 0 };
-      curr.liters += row.liters;
-      curr.cost += row.total;
-      map.set(key, curr);
-    });
-    return [...map.values()].sort((a, b) => b.liters - a.liters);
-  }, [filteredFueling]);
 
   const materialDistribution = useMemo(() => {
     const map = new Map<string, number>();
@@ -606,51 +1301,77 @@ function ProducaoConsumo() {
     });
   }, [dailyPartRows, dateFrom, dateTo, equipmentFilter, obraFilter]);
 
-  const fleetIndicators = useMemo(() => {
+  const equipmentConsumption = useMemo(() => {
     const map = new Map<
       string,
       {
-        fleet: string;
-        production: number;
+        equipment: string;
         liters: number;
         cost: number;
         hours: number;
+        statuses: Set<string>;
       }
     >();
-    const ensure = (fleet: string) => {
-      const key = fleet || "SEM_FROTA";
-      const current = map.get(key) ?? { fleet: key, production: 0, liters: 0, cost: 0, hours: 0 };
+    const ensure = (equipment: string) => {
+      const key = equipment || "SEM_EQUIPAMENTO";
+      const current = map.get(key) ?? {
+        equipment: key,
+        liters: 0,
+        cost: 0,
+        hours: 0,
+        statuses: new Set<string>(),
+      };
       map.set(key, current);
       return current;
     };
-    filteredTrips.forEach((row) => {
-      ensure(normalizeFleet(vehicleKey(row))).production += compacted(row);
-    });
     filteredFueling.forEach((row) => {
-      const item = ensure(normalizeFleet(vehicleKey(row)));
+      const item = ensure(ownEquipmentKey(row));
       item.liters += row.liters;
       item.cost += row.total;
     });
-    filteredDailyParts
-      .filter((row) => row.usedInAnalysis)
-      .forEach((row) => {
-        ensure(row.fleet).hours += row.hours;
-      });
+    filteredDailyParts.forEach((row) => {
+      const item = ensure(row.fleet);
+      item.hours += row.hours;
+      if (row.status) item.statuses.add(row.status);
+    });
     return [...map.values()]
       .map((row) => ({
         ...row,
-        m3h: row.hours > 0 ? row.production / row.hours : 0,
         lh: row.hours > 0 ? row.liters / row.hours : 0,
-        lm3: row.production > 0 ? row.liters / row.production : 0,
-        costM3: row.production > 0 ? row.cost / row.production : 0,
         costH: row.hours > 0 ? row.cost / row.hours : 0,
+        status:
+          row.liters > 0 && row.hours <= 0
+            ? "CMB sem PDE"
+            : row.hours > 0 && row.liters <= 0
+              ? "PDE sem CMB"
+              : row.statuses.size
+                ? [...row.statuses].join(", ")
+                : "OK",
       }))
       .sort((a, b) => b.liters - a.liters);
-  }, [filteredDailyParts, filteredFueling, filteredTrips]);
+  }, [filteredDailyParts, filteredFueling]);
+
+  const auditAlerts = useMemo(() => {
+    const aggregateNoVolume = aggregateProduction
+      .filter((row) => row.trips > 0 && row.loose <= 0 && row.m3 <= 0)
+      .map((row) => `Agregado ${row.aggregate} sem produção/volume m³ identificado`);
+    const cmbNoPde = equipmentConsumption
+      .filter((row) => row.liters > 0 && row.hours <= 0)
+      .map((row) => `CMB sem PDE para equipamento próprio ${row.equipment}`);
+    const pdeNoCmb = equipmentConsumption
+      .filter((row) => row.hours > 0 && row.liters <= 0)
+      .map((row) => `PDE sem CMB para equipamento próprio ${row.equipment}`);
+    return [
+      ...cmbNoPde,
+      ...pdeNoCmb,
+      ...aggregateNoVolume,
+      "Caminhões agregados do RCO não são comparados com PDE.",
+    ];
+  }, [aggregateProduction, equipmentConsumption]);
 
   const crossAudit = useMemo(() => {
     return {
-      frotasCmb: uniq(filteredFueling.map((row) => normalizeFleet(vehicleKey(row)))),
+      frotasCmb: uniq(filteredFueling.map(ownEquipmentKey)),
       frotasPde: uniq(
         filteredDailyParts
           .filter((row) => row.status !== "Sem horas na PDE")
@@ -831,7 +1552,7 @@ function ProducaoConsumo() {
               onChange={(e) => setTruckFilter(e.target.value)}
               className="rounded border border-border-low bg-surface-highest px-3 py-2 text-xs"
             >
-              <option value="all">Todos caminhões</option>
+              <option value="all">Todos agregados</option>
               {distinctTrucks.map((value) => (
                 <option key={value}>{value}</option>
               ))}
@@ -856,7 +1577,7 @@ function ProducaoConsumo() {
               ["production", "Produção"],
               ["consumption", "Consumo"],
               ["equipment", "Equipamentos"],
-              ["trucks", "Caminhões"],
+              ["trucks", "Caminhões agregados"],
               ["audit", "Auditoria"],
               ["crossAudit", "Auditoria de Cruzamento"],
               ["data", "Dados importados"],
@@ -879,40 +1600,55 @@ function ProducaoConsumo() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
             <KpiCard
               label="Produção solta na caçamba"
-              value={`${kpis.looseM3.toFixed(0)} m³`}
+              value={formatM3(kpis.looseM3)}
               icon="inventory_2"
             />
             <KpiCard
               label="Produção compactada"
-              value={`${kpis.compactedM3.toFixed(0)} m³`}
+              value={formatM3(kpis.compactedM3)}
               icon="compress"
             />
             <KpiCard
               label="Diesel consumido"
-              value={`${kpis.liters.toFixed(0)} L`}
+              value={formatLiters(kpis.liters)}
               icon="local_gas_station"
             />
             <KpiCard
               label="Custo total combustível"
-              value={`R$ ${fmtBRL(kpis.fuelCost)}`}
+              value={formatBRL(kpis.fuelCost)}
               icon="payments"
             />
             <KpiCard
-              label="Custo R$/m³ compactado"
-              value={`R$ ${kpis.costPerM3.toFixed(2)}`}
+              label="Combustível R$/m³ compactado"
+              value={formatBRL(kpis.costPerM3)}
               icon="monitoring"
             />
-            <KpiCard label="Viagens totais" value={String(kpis.trips)} icon="local_shipping" />
-            <KpiCard label="Faturamento" value={`R$ ${fmtBRL(kpis.revenue)}`} icon="trending_up" />
+            <KpiCard label="Viagens agregados" value={String(kpis.trips)} icon="local_shipping" />
             <KpiCard
-              label="Margem bruta"
-              value={`R$ ${fmtBRL(kpis.grossMargin)}`}
+              label="Custo com agregados"
+              value={formatBRL(kpis.aggregateCost)}
+              sub={`${kpis.trips} viagens × ${formatBRL(AGGREGATE_TRIP_PRICE)}`}
+              icon="local_shipping"
+            />
+            <KpiCard
+              label="Faturamento/Receita"
+              value={formatBRL(kpis.revenue)}
+              icon="trending_up"
+            />
+            <KpiCard
+              label="Margem operacional"
+              value={formatBRL(kpis.operationalMargin)}
               icon="account_balance"
             />
-            <KpiCard label="Consumo médio L/m³" value={kpis.litersPerM3.toFixed(2)} icon="speed" />
+            <KpiCard
+              label="Consumo operacional L/m³"
+              value={formatNumber(kpis.litersPerM3, 2)}
+              sub="Diesel dos equipamentos próprios ÷ volume compactado dos agregados"
+              icon="speed"
+            />
             <KpiCard
               label="Custo médio R$/L"
-              value={`R$ ${kpis.avgCostPerLiter.toFixed(2)}`}
+              value={formatBRL(kpis.avgCostPerLiter)}
               icon="local_atm"
             />
           </div>
@@ -920,123 +1656,181 @@ function ProducaoConsumo() {
           {tab === "overview" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="lg:col-span-2">
-                <CombinedChart data={daily} />
+                <ProductionConsumptionChart data={daily} />
               </div>
-              <div className="space-y-4">
-                <Ranking
-                  title="Top caminhões por produção"
-                  rows={topTrucks.slice(0, 5).map((r) => ({
-                    prefixo: r.prefix,
-                    viagens: r.trips,
-                    m3: r.m3.toFixed(1),
-                  }))}
-                  columns={[
-                    { key: "prefixo", label: "Prefixo" },
-                    { key: "viagens", label: "Viagens", align: "right" },
-                    { key: "m3", label: "m³", align: "right" },
-                  ]}
-                />
-                <Ranking
-                  title="Top equipamentos por consumo"
-                  rows={topEquipment.slice(0, 5).map((r) => ({
-                    equipamento: r.equipment,
-                    litros: r.liters.toFixed(0),
-                    custo: `R$ ${fmtBRL(r.cost)}`,
-                  }))}
-                  columns={[
-                    { key: "equipamento", label: "Equip." },
-                    { key: "litros", label: "L", align: "right" },
-                    { key: "custo", label: "R$", align: "right" },
-                  ]}
-                />
-              </div>
+              <TopAggregatesChart rows={aggregateProduction} />
+              <TopEquipmentChart rows={equipmentConsumption} />
+              <FinancialChart kpis={kpis} />
+              <AverageConsumptionChart data={daily} />
             </div>
           )}
 
           {tab === "production" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <BarChart title="Produção diária" data={productionDaily} />
-              <BarChart
+              <DailyProductionChart data={daily} />
+              <TopAggregatesChart rows={aggregateProduction} />
+              <DistributionChart
                 title="Distribuição por material"
                 data={materialDistribution}
-                color="bg-status-success"
+                description="Volume compactado agrupado por material da RCO."
+                color={CHART_GREEN}
               />
-              {obraCompare.length > 1 && (
+              <ObraComparisonChart rows={obraCompare} />
+              <div className="lg:col-span-2">
                 <Ranking
-                  title="Comparativo por obra"
-                  rows={obraCompare.map((r) => ({
-                    obra: r.obra,
-                    m3: r.m3.toFixed(1),
-                    litros: r.liters.toFixed(0),
-                    custo: `R$ ${r.costPerM3.toFixed(2)}`,
-                    faturamento: `R$ ${fmtBRL(r.revenue)}`,
+                  title="Produção por agregado"
+                  rows={aggregateProduction.map((r) => ({
+                    agregado: r.aggregate,
+                    viagens: r.trips,
+                    solto: formatNumber(r.loose, 1),
+                    compactado: formatNumber(r.m3, 1),
+                    valor: formatBRL(r.tripPrice),
+                    total: formatBRL(r.totalPay),
+                    participacao: `${formatNumber(r.participation, 1)}%`,
                   }))}
                   columns={[
-                    { key: "obra", label: "Obra" },
-                    { key: "m3", label: "m³", align: "right" },
-                    { key: "litros", label: "L", align: "right" },
-                    { key: "custo", label: "R$/m³", align: "right" },
-                    { key: "faturamento", label: "Faturamento", align: "right" },
+                    { key: "agregado", label: "Agregado / Prefixo" },
+                    { key: "viagens", label: "Viagens", align: "right" },
+                    { key: "solto", label: "m³ solto", align: "right" },
+                    { key: "compactado", label: "m³ comp.", align: "right" },
+                    { key: "valor", label: "R$/viagem", align: "right" },
+                    { key: "total", label: "Total a pagar", align: "right" },
+                    { key: "participacao", label: "%", align: "right" },
                   ]}
                 />
-              )}
+              </div>
+              <div className="lg:col-span-2">
+                <DataTable
+                  title={`Viagens importadas · ${searchedTrips.length}`}
+                  headers={[
+                    "Data",
+                    "Prefixo agregado",
+                    "Obra",
+                    "Material",
+                    "m³ solto",
+                    "m³ comp.",
+                    "R$",
+                  ]}
+                  rows={pagedTrips.map((row) => [
+                    fmtDate(row.datetime),
+                    aggregateKey(row),
+                    row.obra,
+                    row.material,
+                    formatNumber(row.cubicMLoose, 2),
+                    formatNumber(compacted(row), 2),
+                    fmtBRL(row.total),
+                  ])}
+                  page={tripPage}
+                  total={searchedTrips.length}
+                  onPage={setTripPage}
+                />
+              </div>
             </div>
           )}
 
           {tab === "consumption" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <LineChart title="Consumo diário" data={consumptionDaily} color="#4aa3ff" />
-              <LineChart title="Custo por m³ ao longo do tempo" data={costPerM3Daily} />
-              <BarChart
-                title="Abastecimentos por equipamento"
-                data={topEquipment.map((r) => ({ label: r.equipment, value: r.liters }))}
-                color="bg-status-info"
-              />
+              <DailyFuelChart data={daily} />
+              <AverageConsumptionChart data={daily} />
+              <TopEquipmentChart rows={equipmentConsumption} />
+              <DailyFuelCostChart data={daily} />
+              <div className="lg:col-span-2">
+                <DataTable
+                  title={`Abastecimentos importados · ${searchedFueling.length}`}
+                  headers={["Data", "Equipamento", "Obra", "Litros", "R$/L", "Total"]}
+                  rows={pagedFueling.map((row) => [
+                    fmtDate(row.datetime),
+                    ownEquipmentKey(row),
+                    row.obra,
+                    formatNumber(row.liters, 0),
+                    formatNumber(row.unitPrice, 2),
+                    fmtBRL(row.total),
+                  ])}
+                  page={fuelPage}
+                  total={searchedFueling.length}
+                  onPage={setFuelPage}
+                />
+              </div>
             </div>
           )}
 
           {tab === "equipment" && (
-            <Ranking
-              title="Indicadores por frota"
-              rows={fleetIndicators.map((r) => ({
-                frota: r.fleet,
-                litros: r.liters.toFixed(0),
-                custo: `R$ ${fmtBRL(r.cost)}`,
-                horas: r.hours.toFixed(1),
-                lh: r.lh.toFixed(2),
-                custoH: `R$ ${r.costH.toFixed(2)}`,
-              }))}
-              columns={[
-                { key: "frota", label: "Frota" },
-                { key: "litros", label: "Litros", align: "right" },
-                { key: "custo", label: "Custo", align: "right" },
-                { key: "horas", label: "Horas", align: "right" },
-                { key: "lh", label: "L/h", align: "right" },
-                { key: "custoH", label: "R$/h", align: "right" },
-              ]}
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <EquipmentHoursChart rows={equipmentConsumption} />
+              <EquipmentLhChart rows={equipmentConsumption} />
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Consumo por equipamento próprio"
+                  rows={equipmentConsumption.map((r) => ({
+                    equipamento: r.equipment,
+                    litros: formatNumber(r.liters, 0),
+                    custo: formatBRL(r.cost),
+                    horas: formatNumber(r.hours, 1),
+                    lh: formatNumber(r.lh, 2),
+                    custoH: formatBRL(r.costH),
+                    status: r.status,
+                  }))}
+                  columns={[
+                    { key: "equipamento", label: "Frota equipamento" },
+                    { key: "litros", label: "Litros", align: "right" },
+                    { key: "custo", label: "Custo combustível", align: "right" },
+                    { key: "horas", label: "Horas PDE", align: "right" },
+                    { key: "lh", label: "L/h", align: "right" },
+                    { key: "custoH", label: "R$/h", align: "right" },
+                    { key: "status", label: "Status PDE" },
+                  ]}
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Pendências PDE"
+                  rows={equipmentConsumption
+                    .filter((row) => row.status !== "OK")
+                    .map((row) => ({
+                      equipamento: row.equipment,
+                      status: row.status,
+                      litros: formatLiters(row.liters),
+                      horas: `${formatNumber(row.hours, 1)} h`,
+                    }))}
+                  columns={[
+                    { key: "equipamento", label: "Equipamento" },
+                    { key: "status", label: "Pendência" },
+                    { key: "litros", label: "Litros", align: "right" },
+                    { key: "horas", label: "Horas", align: "right" },
+                  ]}
+                />
+              </div>
+            </div>
           )}
 
           {tab === "trucks" && (
-            <Ranking
-              title="Eficiência por caminhão/frota"
-              rows={fleetIndicators.map((r) => ({
-                frota: r.fleet,
-                producao: r.production.toFixed(1),
-                horas: r.hours.toFixed(1),
-                m3h: r.m3h.toFixed(2),
-                lm3: r.lm3.toFixed(2),
-                custoM3: `R$ ${r.costM3.toFixed(2)}`,
-              }))}
-              columns={[
-                { key: "frota", label: "Frota" },
-                { key: "producao", label: "m³ comp.", align: "right" },
-                { key: "horas", label: "Horas", align: "right" },
-                { key: "m3h", label: "m³/h", align: "right" },
-                { key: "lm3", label: "L/m³", align: "right" },
-                { key: "custoM3", label: "R$/m³", align: "right" },
-              ]}
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <TopAggregatesChart rows={aggregateProduction} />
+              <FinancialChart kpis={kpis} />
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Produção por agregado"
+                  rows={aggregateProduction.map((r) => ({
+                    agregado: r.aggregate,
+                    viagens: r.trips,
+                    solto: formatNumber(r.loose, 1),
+                    compactado: formatNumber(r.m3, 1),
+                    valor: formatBRL(r.tripPrice),
+                    total: formatBRL(r.totalPay),
+                    participacao: `${formatNumber(r.participation, 1)}%`,
+                  }))}
+                  columns={[
+                    { key: "agregado", label: "Agregado / Prefixo" },
+                    { key: "viagens", label: "Viagens", align: "right" },
+                    { key: "solto", label: "m³ solto", align: "right" },
+                    { key: "compactado", label: "m³ comp.", align: "right" },
+                    { key: "valor", label: "R$/viagem", align: "right" },
+                    { key: "total", label: "Total a pagar", align: "right" },
+                    { key: "participacao", label: "%", align: "right" },
+                  ]}
+                />
+              </div>
+            </div>
           )}
 
           {tab === "audit" && (
@@ -1049,14 +1843,28 @@ function ProducaoConsumo() {
                 <strong>custo_combustivel</strong> = litros × preço médio diesel
               </p>
               <p>
+                <strong>custo_agregado</strong> = viagens RCO × R$ {AGGREGATE_TRIP_PRICE.toFixed(2)}
+              </p>
+              <p>
                 <strong>custo_por_m3</strong> = custo_combustivel ÷ volume_compactado
               </p>
               <p>
-                <strong>faturamento</strong> = volume_compactado × preço_unitário_venda
+                <strong>faturamento</strong> = receita informada na RCO, quando existir
               </p>
               <p>
-                <strong>margem_bruta</strong> = faturamento - custo_combustivel
+                <strong>margem_operacional</strong> = faturamento - custo_combustivel -
+                custo_agregado
               </p>
+              <div className="rounded border border-border-low bg-surface-highest p-3 text-xs">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant">
+                  Alertas operacionais
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-on-surface-variant">
+                  {auditAlerts.map((alert) => (
+                    <li key={alert}>{alert}</li>
+                  ))}
+                </ul>
+              </div>
               <div className="rounded bg-surface-highest p-3 text-xs text-on-surface-variant">
                 Análise: {selectedAnalysis.name} · Fator aplicado na importação:{" "}
                 {selectedAnalysis.swellFactor.toFixed(2)} · ID: {selectedAnalysis.id}
@@ -1106,13 +1914,19 @@ function ProducaoConsumo() {
               </div>
               <DataTable
                 title={`Auditoria de cruzamento · ${filteredDailyParts.length}`}
-                headers={["Frota", "Data", "Litros CMB", "Horas PDE", "Obra PDE", "Status"]}
+                headers={[
+                  "Frota equipamento",
+                  "Data",
+                  "Litros CMB",
+                  "Horas PDE",
+                  "Obra PDE",
+                  "Status",
+                ]}
                 rows={filteredDailyParts.map((row) => {
                   const liters = filteredFueling
                     .filter(
                       (fuel) =>
-                        normalizeFleet(vehicleKey(fuel)) === row.fleet &&
-                        dateKey(fuel.datetime) === row.date,
+                        ownEquipmentKey(fuel) === row.fleet && dateKey(fuel.datetime) === row.date,
                     )
                     .reduce((sum, fuel) => sum + fuel.liters, 0);
                   return [
@@ -1140,15 +1954,23 @@ function ProducaoConsumo() {
                   setTripPage(0);
                   setFuelPage(0);
                 }}
-                placeholder="Buscar por prefixo, placa, obra, material..."
+                placeholder="Buscar por agregado, equipamento, obra, material..."
                 className="w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm"
               />
               <DataTable
                 title={`Viagens importadas · ${searchedTrips.length}`}
-                headers={["Data", "Prefixo", "Obra", "Material", "m³ solto", "m³ comp.", "R$"]}
+                headers={[
+                  "Data",
+                  "Prefixo agregado",
+                  "Obra",
+                  "Material",
+                  "m³ solto",
+                  "m³ comp.",
+                  "R$",
+                ]}
                 rows={pagedTrips.map((row) => [
                   fmtDate(row.datetime),
-                  vehicleKey(row),
+                  aggregateKey(row),
                   row.obra,
                   row.material,
                   row.cubicMLoose.toFixed(2),
@@ -1164,7 +1986,7 @@ function ProducaoConsumo() {
                 headers={["Data", "Equipamento", "Obra", "Litros", "R$/L", "Total"]}
                 rows={pagedFueling.map((row) => [
                   fmtDate(row.datetime),
-                  vehicleKey(row),
+                  ownEquipmentKey(row),
                   row.obra,
                   row.liters.toFixed(0),
                   row.unitPrice.toFixed(2),

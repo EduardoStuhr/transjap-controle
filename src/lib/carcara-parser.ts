@@ -82,7 +82,15 @@ export type CarcaraFileType = "trips" | "fueling";
 const trim = (v: unknown) => (v == null ? "" : String(v).trim());
 const num = (v: unknown) => {
   if (v == null || v === "") return 0;
-  const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  const text = String(v)
+    .replace(/[^\d,.-]/g, "")
+    .trim();
+  const normalized =
+    text.includes(",") && text.includes(".")
+      ? text.replace(/\./g, "").replace(",", ".")
+      : text.replace(",", ".");
+  const n = parseFloat(normalized);
   return isNaN(n) ? 0 : n;
 };
 function isEmptyValue(v: unknown) {
@@ -91,6 +99,18 @@ function isEmptyValue(v: unknown) {
 function safeIsoDateTimeFromDate(date: Date): string {
   return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 }
+function parseBrazilianDateTime(value: string): string {
+  const match = value
+    .trim()
+    .match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!match) return "";
+  const [, d, m, y, h = "0", min = "0", s = "0"] = match;
+  const year = Number(y.length === 2 ? `20${y}` : y);
+  const date = new Date(
+    Date.UTC(year, Number(m) - 1, Number(d), Number(h), Number(min), Number(s)),
+  );
+  return safeIsoDateTimeFromDate(date);
+}
 const dt = (v: unknown): string => {
   if (!v) return "";
   if (v instanceof Date) return safeIsoDateTimeFromDate(v);
@@ -98,6 +118,8 @@ const dt = (v: unknown): string => {
     const ms = (v - 25569) * 86400 * 1000;
     return safeIsoDateTimeFromDate(new Date(ms));
   }
+  const br = parseBrazilianDateTime(String(v));
+  if (br) return br;
   return safeIsoDateTimeFromDate(new Date(String(v)));
 };
 
@@ -373,11 +395,18 @@ type CarcaraPdeLayout = {
  */
 function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPdeLayout | null {
   let headerRow = -1;
-  for (let i = 0; i < Math.min(15, aoa.length); i++) {
+  for (let i = 0; i < Math.min(20, aoa.length); i++) {
     const row = aoa[i] || [];
-    const colA = normalizeHeader(row[0]);
-    const colB = normalizeHeader(row[1]);
-    if (colA === "dia" && colB === "data") {
+    const normalized = row.map(normalizeHeader);
+    const colA = normalized[0];
+    const colB = normalized[1];
+    const hasCarcaraHeader =
+      colA === "dia" &&
+      colB === "data" &&
+      normalized.some((h) => h === "h. inicial" || h === "h inicial") &&
+      normalized.some((h) => h === "h. final" || h === "h final") &&
+      normalized.includes("total");
+    if ((colA === "dia" && colB === "data") || hasCarcaraHeader) {
       headerRow = i;
       break;
     }
@@ -408,6 +437,7 @@ function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPde
       break;
     }
   }
+  if (obraCol < 0) obraCol = 8;
 
   let fleet = "";
   let fleetLabel = "";

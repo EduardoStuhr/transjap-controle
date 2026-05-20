@@ -86,10 +86,6 @@ type Preview = {
   materials: string[];
 };
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function vehicleKey(row: { prefix: string; vehicleId: string; plate: string }) {
   return row.prefix || row.vehicleId || row.plate || "Sem identificação";
 }
@@ -136,8 +132,8 @@ export function CarcaraImportDialog({
     name: "",
     obra: "",
     material: "",
-    dateStart: today(),
-    dateEnd: today(),
+    dateStart: "",
+    dateEnd: "",
     swellFactor: "0.3",
   });
   const [arquivoRCO, setArquivoRCO] = useState<FileItem | null>(null);
@@ -161,6 +157,9 @@ export function CarcaraImportDialog({
   const dailyParts = useMemo(() => {
     return arquivoPDE?.result.type === "pde" ? arquivoPDE.result.rows : [];
   }, [arquivoPDE]);
+  const rawTrips = trips;
+  const rawFueling = fueling;
+  const rawPde = dailyParts;
 
   const hasRco = arquivoRCO?.result.type === "trips";
   const hasCmb = arquivoCMB?.result.type === "fueling";
@@ -180,44 +179,9 @@ export function CarcaraImportDialog({
     if (!validFactor || !hasRco || !hasCmb || !hasPde) {
       return null;
     }
-    const tripsInPeriod = trips.filter((row) => {
-      const date = normalizeDateKey(row.datetime);
-      const obraOk =
-        !draft.obra.trim() ||
-        !row.obra ||
-        row.obra.trim().toLowerCase() === draft.obra.trim().toLowerCase();
-      const materialOk =
-        !draft.material.trim() ||
-        !row.material ||
-        row.material.trim().toLowerCase() === draft.material.trim().toLowerCase();
-      return date >= draft.dateStart && date <= draft.dateEnd && obraOk && materialOk;
-    });
-    const fuelingInPeriod = fueling.filter((row) => {
-      const date = normalizeDateKey(row.datetime);
-      const obraOk =
-        !draft.obra.trim() ||
-        !row.obra ||
-        row.obra.trim().toLowerCase() === draft.obra.trim().toLowerCase();
-      return date >= draft.dateStart && date <= draft.dateEnd && obraOk;
-    });
-    const fueledFleets = new Set(
-      fuelingInPeriod.map((row) => normalizeFleet(row.prefix || row.vehicleId || row.plate)),
-    );
-    const fueledDates = new Set(fuelingInPeriod.map((row) => normalizeDateKey(row.datetime)));
-    const pdeRowsUsed = dailyParts.filter((row) => {
-      const obraOk =
-        !draft.obra.trim() ||
-        !row.obra ||
-        row.obra.trim().toLowerCase() === draft.obra.trim().toLowerCase();
-      return (
-        fueledFleets.has(row.fleet) &&
-        row.date >= draft.dateStart &&
-        row.date <= draft.dateEnd &&
-        obraOk
-      );
-    });
+    const pdeRowsUsed = rawPde;
     const pdeKeys = new Set(pdeRowsUsed.map((row) => `${row.fleet}|${row.date}`));
-    const pdePending = fuelingInPeriod
+    const pdePending = rawFueling
       .map((row) => {
         const fleet = normalizeFleet(row.prefix || row.vehicleId || row.plate);
         const date = normalizeDateKey(row.datetime);
@@ -225,48 +189,32 @@ export function CarcaraImportDialog({
       })
       .filter(Boolean);
     const allDates = [
-      ...tripsInPeriod.map((row) => row.datetime),
-      ...fuelingInPeriod.map((row) => row.datetime),
+      ...rawTrips.map((row) => row.datetime),
+      ...rawFueling.map((row) => row.datetime),
     ]
       .filter(Boolean)
       .sort();
-    const looseM3 = tripsInPeriod.reduce((sum, row) => sum + row.cubicMLoose, 0);
+    const looseM3 = rawTrips.reduce((sum, row) => sum + row.cubicMLoose, 0);
     return {
-      trips: tripsInPeriod,
-      fueling: fuelingInPeriod,
+      trips: rawTrips,
+      fueling: rawFueling,
       looseM3,
       compactedM3: looseM3 / (1 + factor),
-      liters: fuelingInPeriod.reduce((sum, row) => sum + row.liters, 0),
-      fuelCost: fuelingInPeriod.reduce((sum, row) => sum + row.total, 0),
-      pdeRows: dailyParts,
+      liters: rawFueling.reduce((sum, row) => sum + row.liters, 0),
+      fuelCost: rawFueling.reduce((sum, row) => sum + row.total, 0),
+      pdeRows: rawPde,
       pdeRowsUsed,
       pdeHoursUsed: pdeRowsUsed.reduce((sum, row) => sum + row.hours, 0),
-      pdeFleets: uniq(dailyParts.map((row) => row.fleet)),
+      pdeFleets: uniq(rawPde.map((row) => row.fleet)),
       pdeFleetsUsed: uniq(pdeRowsUsed.map((row) => row.fleet)),
       pdePending: uniq(pdePending),
       dateStart: dateOnly(allDates[0] ?? ""),
       dateEnd: dateOnly(allDates[allDates.length - 1] ?? ""),
-      equipments: uniq([...tripsInPeriod.map(vehicleKey), ...fuelingInPeriod.map(vehicleKey)]),
-      obras: uniq([
-        ...tripsInPeriod.map((row) => row.obra),
-        ...fuelingInPeriod.map((row) => row.obra),
-      ]),
-      materials: uniq(tripsInPeriod.map((row) => row.material)),
+      equipments: uniq([...rawTrips.map(vehicleKey), ...rawFueling.map(vehicleKey)]),
+      obras: uniq([...rawTrips.map((row) => row.obra), ...rawFueling.map((row) => row.obra)]),
+      materials: uniq(rawTrips.map((row) => row.material)),
     };
-  }, [
-    dailyParts,
-    draft.dateEnd,
-    draft.dateStart,
-    draft.material,
-    draft.obra,
-    factor,
-    fueling,
-    hasCmb,
-    hasPde,
-    hasRco,
-    trips,
-    validFactor,
-  ]);
+  }, [factor, hasCmb, hasPde, hasRco, rawFueling, rawPde, rawTrips, validFactor]);
 
   const cmbRequiredFleets = useMemo(
     () => extractRequiredFleets({ fueling: fueling.length > 0 ? fueling : undefined }),
@@ -283,6 +231,33 @@ export function CarcaraImportDialog({
       dateTo: range?.dateTo ?? draft.dateEnd,
     };
   }
+
+  useEffect(() => {
+    if (rawTrips.length === 0 && rawFueling.length === 0) return;
+    const dates = [...rawTrips, ...rawFueling]
+      .map((row) => normalizeDateKey(row.datetime))
+      .filter(Boolean)
+      .sort();
+    const firstObra =
+      rawTrips.find((row) => row.obra.trim())?.obra ||
+      rawFueling.find((row) => row.obra.trim())?.obra ||
+      "";
+    const firstMaterial = rawTrips.find((row) => row.material.trim())?.material || "";
+
+    setDraft((prev) => {
+      const next = { ...prev };
+      if (!next.dateStart && dates[0]) next.dateStart = dates[0];
+      if (!next.dateEnd && dates[dates.length - 1]) next.dateEnd = dates[dates.length - 1];
+      if (!next.obra.trim() && firstObra) next.obra = firstObra;
+      if (!next.material.trim() && firstMaterial) next.material = firstMaterial;
+      return next.dateStart !== prev.dateStart ||
+        next.dateEnd !== prev.dateEnd ||
+        next.obra !== prev.obra ||
+        next.material !== prev.material
+        ? next
+        : prev;
+    });
+  }, [rawFueling, rawTrips]);
 
   const contextValid = Boolean(
     draft.name.trim() &&
@@ -576,9 +551,9 @@ export function CarcaraImportDialog({
           dateEnd: draft.dateEnd,
           swellFactor: factor,
           createdBy: userName,
-          tripsRows: preview.trips,
-          fuelingRows: preview.fueling,
-          dailyPartRows: preview.pdeRows,
+          tripsRows: rawTrips,
+          fuelingRows: rawFueling,
+          dailyPartRows: rawPde,
         },
       });
       toast.success("Análise criada", {
