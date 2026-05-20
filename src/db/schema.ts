@@ -160,3 +160,99 @@ export const storeDocuments = sqliteTable(
 
 export type DbEquipment = typeof equipment.$inferSelect;
 export type DbEquipmentInsert = typeof equipment.$inferInsert;
+
+export const productionAnalyses = sqliteTable("production_analyses", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  obra: text("obra").notNull().default(""),
+  material: text("material").notNull().default(""),
+  dateStart: text("date_start").notNull(),
+  dateEnd: text("date_end").notNull(),
+  swellFactor: real("swell_factor").notNull().default(0.3),
+  createdAt: text("created_at").notNull(),
+  createdBy: text("created_by").notNull().default(""),
+});
+
+export const trips = sqliteTable("trips", {
+  id: text("id").primaryKey(),
+  analysisId: text("analysis_id").notNull().default("legacy"),
+  datetime: text("datetime").notNull(),
+  operator: text("operator").notNull().default(""),
+  operation: text("operation").notNull(),
+  owner: text("owner").notNull().default(""),
+  plate: text("plate").notNull().default(""),
+  vehicleId: text("vehicle_id").notNull().default(""),
+  prefix: text("prefix").notNull().default(""),
+  driver: text("driver").notNull().default(""),
+  obra: text("obra").notNull().default(""),
+  origin: text("origin").notNull().default(""),
+  destination: text("destination").notNull().default(""),
+  km: real("km").notNull().default(0),
+  material: text("material").notNull().default(""),
+  weight: real("weight").notNull().default(0),
+  cubicMLoose: real("cubic_m_loose").notNull().default(0),
+  swellFactorApplied: real("swell_factor_applied").notNull().default(0.3),
+  cubicMCompacted: real("cubic_m_compacted").notNull().default(0),
+  unitPrice: real("unit_price").notNull().default(0),
+  total: real("total").notNull().default(0),
+  status: text("status"),
+  importBatchId: text("import_batch_id").notNull(),
+  importedAt: text("imported_at").notNull(),
+});
+
+export const fueling = sqliteTable("fueling", {
+  id: text("id").primaryKey(),
+  analysisId: text("analysis_id").notNull().default("legacy"),
+  datetime: text("datetime").notNull(),
+  owner: text("owner").notNull().default(""),
+  plate: text("plate").notNull().default(""),
+  vehicleId: text("vehicle_id").notNull().default(""),
+  prefix: text("prefix").notNull().default(""),
+  vehicleType: text("vehicle_type").notNull().default(""),
+  kmPrevious: real("km_previous").notNull().default(0),
+  kmCurrent: real("km_current").notNull().default(0),
+  liters: real("liters").notNull().default(0),
+  unitPrice: real("unit_price").notNull().default(0),
+  total: real("total").notNull().default(0),
+  consumption: real("consumption").notNull().default(0),
+  standardConsumption: real("standard_consumption").notNull().default(0),
+  operator: text("operator").notNull().default(""),
+  obra: text("obra").notNull().default(""),
+  status: text("status"),
+  importBatchId: text("import_batch_id").notNull(),
+  importedAt: text("imported_at").notNull(),
+});
+
+export const equipmentDailyParts = sqliteTable("equipment_daily_parts", {
+  id: text("id").primaryKey(),
+  analysisId: text("analysis_id").notNull().default("legacy"),
+  fleet: text("fleet").notNull().default(""),
+  fleetLabel: text("fleet_label").notNull().default(""),
+  date: text("date").notNull(),
+  obra: text("obra").notNull().default(""),
+  hours: real("hours").notNull().default(0),
+  sourceSheet: text("source_sheet").notNull().default(""),
+  status: text("status").notNull().default("OK"),
+  usedInAnalysis: integer("used_in_analysis", { mode: "boolean" }).notNull().default(true),
+  importedAt: text("imported_at").notNull(),
+});
+
+export const swellFactors = sqliteTable(
+  "swell_factors",
+  {
+    obra: text("obra").notNull(),
+    material: text("material").notNull(),
+    factor: real("factor").notNull().default(0.3),
+    updatedAt: text("updated_at").notNull(),
+    updatedBy: text("updated_by").notNull().default(""),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.obra, table.material] }),
+  }),
+);
+
+export type DbTrip = typeof trips.$inferSelect;
+export type DbFueling = typeof fueling.$inferSelect;
+export type DbEquipmentDailyPart = typeof equipmentDailyParts.$inferSelect;
+export type DbSwellFactor = typeof swellFactors.$inferSelect;
+export type DbProductionAnalysis = typeof productionAnalyses.$inferSelect;

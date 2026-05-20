@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as RelatoriosRouteImport } from './routes/relatorios'
+import { Route as ProducaoConsumoRouteImport } from './routes/producao-consumo'
 import { Route as PerfilRouteImport } from './routes/perfil'
 import { Route as ManutencaoRouteImport } from './routes/manutencao'
 import { Route as LoginRouteImport } from './routes/login'
@@ -21,6 +22,11 @@ import { Route as IndexRouteImport } from './routes/index'
 const RelatoriosRoute = RelatoriosRouteImport.update({
   id: '/relatorios',
   path: '/relatorios',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProducaoConsumoRoute = ProducaoConsumoRouteImport.update({
+  id: '/producao-consumo',
+  path: '/producao-consumo',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PerfilRoute = PerfilRouteImport.update({
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
+  '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
 }
 export interface FileRoutesByTo {
@@ -77,6 +84,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
+  '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
 }
 export interface FileRoutesById {
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
+  '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
 }
 export interface FileRouteTypes {
@@ -100,6 +109,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manutencao'
     | '/perfil'
+    | '/producao-consumo'
     | '/relatorios'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -110,6 +120,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manutencao'
     | '/perfil'
+    | '/producao-consumo'
     | '/relatorios'
   id:
     | '__root__'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manutencao'
     | '/perfil'
+    | '/producao-consumo'
     | '/relatorios'
   fileRoutesById: FileRoutesById
 }
@@ -131,6 +143,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   ManutencaoRoute: typeof ManutencaoRoute
   PerfilRoute: typeof PerfilRoute
+  ProducaoConsumoRoute: typeof ProducaoConsumoRoute
   RelatoriosRoute: typeof RelatoriosRoute
 }
 
@@ -141,6 +154,13 @@ declare module '@tanstack/react-router' {
       path: '/relatorios'
       fullPath: '/relatorios'
       preLoaderRoute: typeof RelatoriosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/producao-consumo': {
+      id: '/producao-consumo'
+      path: '/producao-consumo'
+      fullPath: '/producao-consumo'
+      preLoaderRoute: typeof ProducaoConsumoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/perfil': {
@@ -203,6 +223,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   ManutencaoRoute: ManutencaoRoute,
   PerfilRoute: PerfilRoute,
+  ProducaoConsumoRoute: ProducaoConsumoRoute,
   RelatoriosRoute: RelatoriosRoute,
 }
 export const routeTree = rootRouteImport

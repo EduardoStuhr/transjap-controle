@@ -10,9 +10,9 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/pwa-icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/logotransjap.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ],
@@ -21,13 +21,13 @@
       "name": "Estoque",
       "short_name": "Estoque",
       "url": "/estoque",
-      "icons": [{ "src": "/pwa-icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [{ "src": "/logotransjap.png", "sizes": "512x512", "type": "image/png" }]
     },
     {
       "name": "Manutenção",
       "short_name": "Manutenção",
       "url": "/manutencao",
-      "icons": [{ "src": "/pwa-icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [{ "src": "/logotransjap.png", "sizes": "512x512", "type": "image/png" }]
     }
   ]
 }

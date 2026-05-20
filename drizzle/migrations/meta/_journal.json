@@ -15,6 +15,13 @@
       "when": 1779133740844,
       "tag": "0001_store_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1779212940133,
+      "tag": "0002_known_risque",
+      "breakpoints": true
     }
   ]
 }

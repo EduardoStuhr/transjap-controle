@@ -23,10 +23,16 @@ const NAV = [
   { to: "/agenda", label: "Agenda Operacional", icon: "calendar_today" },
   { to: "/manutencao", label: "Manutenção", icon: "build" },
   { to: "/equipamentos", label: "Equipamentos", icon: "construction" },
+  { to: "/producao-consumo", label: "Produção × Consumo", icon: "query_stats" },
   { to: "/estoque", label: "Estoque de Peças", icon: "inventory_2" },
   { to: "/relatorios", label: "Relatórios", icon: "insights" },
   { to: "/perfil", label: "Perfil", icon: "account_circle" },
 ] as const;
+
+// Routes restricted to specific roles; absent = all authenticated users
+const NAV_ROLES: Partial<Record<(typeof NAV)[number]["to"], string[]>> = {
+  "/producao-consumo": ["administrador", "gestor"],
+};
 
 export function Icon({
   name,
@@ -394,6 +400,8 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
       </div>
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex overflow-x-auto scrollbar-hide border-t border-border-low bg-surface-low/95 backdrop-blur px-2 py-2 gap-1">
         {NAV.map((item) => {
+          const allowedRoles = NAV_ROLES[item.to];
+          if (allowedRoles && !allowedRoles.includes(user?.role ?? "")) return null;
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link
@@ -447,6 +455,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
 
 function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
   return (
     <>
       <div className="p-6 flex items-center justify-center">
@@ -458,6 +467,8 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
       </div>
       <nav className="mt-6 flex flex-col flex-1 px-4 gap-1">
         {NAV.map((item) => {
+          const allowedRoles = NAV_ROLES[item.to];
+          if (allowedRoles && !allowedRoles.includes(user?.role ?? "")) return null;
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link

@@ -1,0 +1,1009 @@
+import { useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Icon } from "@/components/AppLayout";
+import { createAnalysis } from "@/lib/api/production-consumption";
+import {
+  normalizeDateKey,
+  normalizeFleet,
+  parseCarcaraFile,
+  parsePdeFile,
+} from "@/lib/carcara-parser";
+import type {
+  CarcaraFileType,
+  PdeColumnMapping,
+  PdeWarning,
+  ParsedDailyPart,
+  ParsedFueling,
+  ParsedTrip,
+} from "@/lib/carcara-parser";
+
+type ParsedUploadResult =
+  | { type: "trips"; rows: ParsedTrip[] }
+  | { type: "fueling"; rows: ParsedFueling[] }
+  | { type: "pde"; rows: ParsedDailyPart[]; warnings: PdeWarning[] }
+  | { type: "unknown"; message: string };
+
+type FileItem = {
+  file: File;
+  result: ParsedUploadResult;
+  parsing?: boolean;
+};
+
+type UploadSlot = "rco" | "cmb" | "pde";
+
+type PendingManualFile = {
+  file: File;
+  reason: string;
+};
+
+type PdeFallbackState = {
+  file: File;
+  reason: string;
+  startRow: string;
+  dateColumn: string;
+  hoursColumn: string;
+  fleetColumn: string;
+  obraColumn: string;
+};
+
+type AnalysisDraft = {
+  name: string;
+  obra: string;
+  material: string;
+  dateStart: string;
+  dateEnd: string;
+  swellFactor: string;
+};
+
+type Preview = {
+  trips: ParsedTrip[];
+  fueling: ParsedFueling[];
+  looseM3: number;
+  compactedM3: number;
+  liters: number;
+  fuelCost: number;
+  pdeRows: ParsedDailyPart[];
+  pdeRowsUsed: ParsedDailyPart[];
+  pdeHoursUsed: number;
+  pdeFleets: string[];
+  pdeFleetsUsed: string[];
+  pdePending: string[];
+  dateStart: string;
+  dateEnd: string;
+  equipments: string[];
+  obras: string[];
+  materials: string[];
+};
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function vehicleKey(row: { prefix: string; vehicleId: string; plate: string }) {
+  return row.prefix || row.vehicleId || row.plate || "Sem identificação";
+}
+
+function uniq(values: string[]) {
+  return [...new Set(values.filter(Boolean))].sort();
+}
+
+function dateOnly(iso: string) {
+  return iso ? iso.slice(0, 10) : "";
+}
+
+function fmtBRL(v: number) {
+  return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fileIcon(type: ParsedUploadResult["type"]) {
+  if (type === "trips") return "local_shipping";
+  if (type === "fueling") return "local_gas_station";
+  if (type === "pde") return "assignment";
+  return "help";
+}
+
+function filePeriod(rows: Array<{ datetime: string }>) {
+  const dates = rows
+    .map((row) => row.datetime)
+    .filter(Boolean)
+    .sort();
+  if (dates.length === 0) return "—";
+  return `${dateOnly(dates[0])} até ${dateOnly(dates[dates.length - 1])}`;
+}
+
+export function CarcaraImportDialog({
+  onClose,
+  onSuccess,
+  userName,
+}: {
+  onClose: () => void;
+  onSuccess: (analysisId: string) => void;
+  userName?: string;
+}) {
+  const [step, setStep] = useState(1);
+  const [draft, setDraft] = useState<AnalysisDraft>({
+    name: "",
+    obra: "",
+    material: "",
+    dateStart: today(),
+    dateEnd: today(),
+    swellFactor: "0.3",
+  });
+  const [arquivoRCO, setArquivoRCO] = useState<FileItem | null>(null);
+  const [arquivoCMB, setArquivoCMB] = useState<FileItem | null>(null);
+  const [arquivoPDE, setArquivoPDE] = useState<FileItem | null>(null);
+  const [arquivoPendente, setArquivoPendente] = useState<PendingManualFile | null>(null);
+  const [pdeFallback, setPdeFallback] = useState<PdeFallbackState | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const factor = Number.parseFloat(draft.swellFactor.replace(",", "."));
+  const validFactor = Number.isFinite(factor) && factor >= 0;
+
+  const trips = useMemo(() => {
+    return arquivoRCO?.result.type === "trips" ? arquivoRCO.result.rows : [];
+  }, [arquivoRCO]);
+  const fueling = useMemo(() => {
+    return arquivoCMB?.result.type === "fueling" ? arquivoCMB.result.rows : [];
+  }, [arquivoCMB]);
+  const dailyParts = useMemo(() => {
+    return arquivoPDE?.result.type === "pde" ? arquivoPDE.result.rows : [];
+  }, [arquivoPDE]);
+
+  const preview = useMemo<Preview | null>(() => {
+    if (!validFactor || trips.length === 0 || fueling.length === 0 || dailyParts.length === 0) {
+      return null;
+    }
+    const tripsInPeriod = trips.filter((row) => {
+      const date = normalizeDateKey(row.datetime);
+      const obraOk =
+        !draft.obra.trim() ||
+        !row.obra ||
+        row.obra.trim().toLowerCase() === draft.obra.trim().toLowerCase();
+      const materialOk =
+        !draft.material.trim() ||
+        !row.material ||
+        row.material.trim().toLowerCase() === draft.material.trim().toLowerCase();
+      return date >= draft.dateStart && date <= draft.dateEnd && obraOk && materialOk;
+    });
+    const fuelingInPeriod = fueling.filter((row) => {
+      const date = normalizeDateKey(row.datetime);
+      const obraOk =
+        !draft.obra.trim() ||
+        !row.obra ||
+        row.obra.trim().toLowerCase() === draft.obra.trim().toLowerCase();
+      return date >= draft.dateStart && date <= draft.dateEnd && obraOk;
+    });
+    const fueledFleets = new Set(
+      fuelingInPeriod.map((row) => normalizeFleet(row.prefix || row.vehicleId || row.plate)),
+    );
+    const fueledDates = new Set(fuelingInPeriod.map((row) => normalizeDateKey(row.datetime)));
+    const pdeRowsUsed = dailyParts.filter((row) => {
+      const obraOk =
+        !draft.obra.trim() ||
+        !row.obra ||
+        row.obra.trim().toLowerCase() === draft.obra.trim().toLowerCase();
+      return (
+        fueledFleets.has(row.fleet) &&
+        row.date >= draft.dateStart &&
+        row.date <= draft.dateEnd &&
+        obraOk
+      );
+    });
+    const pdeKeys = new Set(pdeRowsUsed.map((row) => `${row.fleet}|${row.date}`));
+    const pdePending = fuelingInPeriod
+      .map((row) => {
+        const fleet = normalizeFleet(row.prefix || row.vehicleId || row.plate);
+        const date = normalizeDateKey(row.datetime);
+        return pdeKeys.has(`${fleet}|${date}`) ? "" : `${fleet} em ${date}`;
+      })
+      .filter(Boolean);
+    const allDates = [
+      ...tripsInPeriod.map((row) => row.datetime),
+      ...fuelingInPeriod.map((row) => row.datetime),
+    ]
+      .filter(Boolean)
+      .sort();
+    const looseM3 = tripsInPeriod.reduce((sum, row) => sum + row.cubicMLoose, 0);
+    return {
+      trips: tripsInPeriod,
+      fueling: fuelingInPeriod,
+      looseM3,
+      compactedM3: looseM3 / (1 + factor),
+      liters: fuelingInPeriod.reduce((sum, row) => sum + row.liters, 0),
+      fuelCost: fuelingInPeriod.reduce((sum, row) => sum + row.total, 0),
+      pdeRows: dailyParts,
+      pdeRowsUsed,
+      pdeHoursUsed: pdeRowsUsed.reduce((sum, row) => sum + row.hours, 0),
+      pdeFleets: uniq(dailyParts.map((row) => row.fleet)),
+      pdeFleetsUsed: uniq(pdeRowsUsed.map((row) => row.fleet)),
+      pdePending: uniq(pdePending),
+      dateStart: dateOnly(allDates[0] ?? ""),
+      dateEnd: dateOnly(allDates[allDates.length - 1] ?? ""),
+      equipments: uniq([...tripsInPeriod.map(vehicleKey), ...fuelingInPeriod.map(vehicleKey)]),
+      obras: uniq([
+        ...tripsInPeriod.map((row) => row.obra),
+        ...fuelingInPeriod.map((row) => row.obra),
+      ]),
+      materials: uniq(tripsInPeriod.map((row) => row.material)),
+    };
+  }, [
+    dailyParts,
+    draft.dateEnd,
+    draft.dateStart,
+    draft.material,
+    draft.obra,
+    factor,
+    fueling,
+    trips,
+    validFactor,
+  ]);
+
+  const step1Valid =
+    draft.name.trim() &&
+    draft.obra.trim() &&
+    draft.material.trim() &&
+    draft.dateStart &&
+    draft.dateEnd &&
+    validFactor;
+  const step2Valid = !!arquivoRCO && !!arquivoCMB && !!arquivoPDE;
+
+  function applyParsedFile(item: FileItem, rcoAtual: FileItem | null, cmbAtual: FileItem | null) {
+    if (item.result.type === "trips") {
+      if (rcoAtual) {
+        toast.error("Já existe uma planilha RCO carregada");
+        return { rco: rcoAtual, cmb: cmbAtual };
+      }
+      return { rco: item, cmb: cmbAtual };
+    }
+    if (item.result.type === "fueling") {
+      if (cmbAtual) {
+        toast.error("Já existe uma planilha CMB carregada");
+        return { rco: rcoAtual, cmb: cmbAtual };
+      }
+      return { rco: rcoAtual, cmb: item };
+    }
+    if (item.result.type === "unknown") {
+      setArquivoPendente({ file: item.file, reason: item.result.message });
+    }
+    return { rco: rcoAtual, cmb: cmbAtual };
+  }
+
+  async function replaceSlotFile(file: File, target: UploadSlot) {
+    if (!file.name.match(/\.xlsx$/i)) {
+      toast.error("Arquivo inválido. Selecione uma planilha XLSX.");
+      return;
+    }
+
+    try {
+      if (target === "rco") {
+        const result = await parseCarcaraFile(file, "trips");
+        if (result.type !== "trips" || result.rows.length === 0) {
+          toast.error("Não foi possível ler viagens RCO neste arquivo.");
+          return;
+        }
+        setArquivoRCO({ file, result });
+        toast.success("Planilha RCO carregada");
+        return;
+      }
+
+      if (target === "cmb") {
+        const result = await parseCarcaraFile(file, "fueling");
+        if (result.type !== "fueling" || result.rows.length === 0) {
+          toast.error("Não foi possível ler abastecimentos CMB neste arquivo.");
+          return;
+        }
+        setArquivoCMB({ file, result });
+        toast.success("Planilha CMB carregada");
+        return;
+      }
+
+      const parsed = await parsePdeFile(file);
+      if (parsed.rows.length > 0) {
+        setArquivoPDE({
+          file,
+          result: { type: "pde", rows: parsed.rows, warnings: parsed.warnings },
+        });
+        toast.success("Planilha PDE carregada");
+        return;
+      }
+      setPdeFallback({
+        file,
+        reason: parsed.warnings[0]?.reason || "Não foi possível encontrar horas na Parte Diária.",
+        startRow: "2",
+        dateColumn: "A",
+        hoursColumn: "B",
+        fleetColumn: "",
+        obraColumn: "",
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao ler arquivo.");
+    }
+  }
+
+  async function handleFileSelect(target: UploadSlot, file: File) {
+    await replaceSlotFile(file, target);
+  }
+
+  async function handleSelected(selected: FileList) {
+    if (selected.length === 0) return;
+
+    let rcoAtual = arquivoRCO;
+    let cmbAtual = arquivoCMB;
+    let pdeAtual = arquivoPDE;
+
+    for (const file of Array.from(selected)) {
+      if (!file.name.match(/\.xlsx$/i)) {
+        toast.error("Arquivo inválido. Selecione uma planilha XLSX.");
+        continue;
+      }
+
+      try {
+        const result = await parseCarcaraFile(file);
+        if (result.type === "unknown") {
+          const pdeRows = await parsePdeFile(file);
+          if (pdeRows.rows.length > 0) {
+            if (pdeAtual) {
+              toast.error("Já existe uma planilha PDE carregada");
+            } else {
+              pdeAtual = {
+                file,
+                result: { type: "pde", rows: pdeRows.rows, warnings: pdeRows.warnings },
+              };
+            }
+          } else {
+            setArquivoPendente({ file, reason: result.message });
+          }
+        } else {
+          const next = applyParsedFile({ file, result }, rcoAtual, cmbAtual);
+          rcoAtual = next.rco;
+          cmbAtual = next.cmb;
+        }
+      } catch (err) {
+        setArquivoPendente({
+          file,
+          reason: err instanceof Error ? err.message : "Erro ao ler arquivo.",
+        });
+      }
+    }
+
+    setArquivoRCO(rcoAtual);
+    setArquivoCMB(cmbAtual);
+    setArquivoPDE(pdeAtual);
+  }
+
+  async function forceType(type: CarcaraFileType | "pde") {
+    if (!arquivoPendente) return;
+    const file = arquivoPendente.file;
+    if (type === "trips" && arquivoRCO) {
+      toast.error("Já existe uma planilha RCO carregada");
+      setArquivoPendente(null);
+      return;
+    }
+    if (type === "fueling" && arquivoCMB) {
+      toast.error("Já existe uma planilha CMB carregada");
+      setArquivoPendente(null);
+      return;
+    }
+    if (type === "pde" && arquivoPDE) {
+      toast.error("Já existe uma planilha PDE carregada");
+      setArquivoPendente(null);
+      return;
+    }
+
+    try {
+      if (type === "pde") {
+        const parsed = await parsePdeFile(file);
+        if (parsed.rows.length > 0) {
+          setArquivoPDE({
+            file,
+            result: { type: "pde", rows: parsed.rows, warnings: parsed.warnings },
+          });
+        } else {
+          setPdeFallback({
+            file,
+            reason:
+              parsed.warnings[0]?.reason || "Não foi possível encontrar horas na Parte Diária.",
+            startRow: "2",
+            dateColumn: "A",
+            hoursColumn: "B",
+            fleetColumn: "",
+            obraColumn: "",
+          });
+        }
+      } else {
+        const result = await parseCarcaraFile(file, type);
+        if (result.type === "trips") setArquivoRCO({ file, result });
+        else if (result.type === "fueling") setArquivoCMB({ file, result });
+        else toast.error(result.message);
+      }
+      setArquivoPendente(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao reler arquivo.");
+      setArquivoPendente(null);
+    }
+  }
+
+  async function applyPdeFallback() {
+    if (!pdeFallback) return;
+    const mapping: PdeColumnMapping = {
+      startRow: Number.parseInt(pdeFallback.startRow, 10) || 2,
+      dateColumn: pdeFallback.dateColumn,
+      hoursColumn: pdeFallback.hoursColumn,
+      fleetColumn: pdeFallback.fleetColumn || undefined,
+      obraColumn: pdeFallback.obraColumn || undefined,
+    };
+    try {
+      const parsed = await parsePdeFile(pdeFallback.file, mapping);
+      if (parsed.rows.length === 0) {
+        toast.error(
+          parsed.warnings[0]?.reason || "Não foi possível identificar datas válidas nesta aba.",
+        );
+        return;
+      }
+      setArquivoPDE({
+        file: pdeFallback.file,
+        result: { type: "pde", rows: parsed.rows, warnings: parsed.warnings },
+      });
+      setPdeFallback(null);
+      setArquivoPendente(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao aplicar fallback da PDE.");
+    }
+  }
+
+  async function handleCreate() {
+    if (!preview || !step1Valid || !step2Valid) return;
+    setCreating(true);
+    try {
+      const result = await createAnalysis({
+        data: {
+          name: draft.name,
+          obra: draft.obra,
+          material: draft.material,
+          dateStart: draft.dateStart,
+          dateEnd: draft.dateEnd,
+          swellFactor: factor,
+          createdBy: userName,
+          tripsRows: preview.trips,
+          fuelingRows: preview.fueling,
+          dailyPartRows: preview.pdeRows,
+        },
+      });
+      toast.success("Análise criada", {
+        description: `${result.trips} viagens, ${result.fueling} abastecimentos e ${result.dailyParts} apontamentos PDE usados.`,
+      });
+      onSuccess(result.analysisId);
+      onClose();
+    } catch (err) {
+      toast.error("Erro ao criar análise", {
+        description: err instanceof Error ? err.message : "Tente novamente.",
+      });
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Criar Análise</DialogTitle>
+          <DialogDescription>
+            Informe o contexto, envie RCO, CMB e Parte Diária, confira o preview e confirme.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex gap-2 mb-4">
+          {["Dados", "Planilhas", "Preview", "Confirmar"].map((label, index) => (
+            <div
+              key={label}
+              className={`flex-1 rounded border px-3 py-2 text-xs font-black uppercase tracking-widest ${
+                step === index + 1
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border-low text-on-surface-variant"
+              }`}
+            >
+              {index + 1}. {label}
+            </div>
+          ))}
+        </div>
+
+        {step === 1 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="text-xs font-bold">
+              Nome da análise
+              <input
+                value={draft.name}
+                onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-bold">
+              Obra
+              <input
+                value={draft.obra}
+                onChange={(e) => setDraft((prev) => ({ ...prev, obra: e.target.value }))}
+                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-bold">
+              Material
+              <input
+                value={draft.material}
+                onChange={(e) => setDraft((prev) => ({ ...prev, material: e.target.value }))}
+                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-bold">
+              Fator de empolamento padrão
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={draft.swellFactor}
+                onChange={(e) => setDraft((prev) => ({ ...prev, swellFactor: e.target.value }))}
+                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-bold">
+              Início do período analisado
+              <input
+                type="date"
+                value={draft.dateStart}
+                onChange={(e) => setDraft((prev) => ({ ...prev, dateStart: e.target.value }))}
+                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-bold">
+              Fim do período analisado
+              <input
+                type="date"
+                value={draft.dateEnd}
+                onChange={(e) => setDraft((prev) => ({ ...prev, dateEnd: e.target.value }))}
+                className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              />
+            </label>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="space-y-4">
+            <div
+              className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+                dragging
+                  ? "border-primary bg-primary/5"
+                  : "border-border-low hover:border-primary/50 hover:bg-surface-highest/40"
+              }`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                handleSelected(e.dataTransfer.files);
+              }}
+              onClick={() => inputRef.current?.click()}
+            >
+              <Icon name="upload_file" className="text-4xl text-on-surface-variant/50 mb-3" />
+              <p className="text-sm font-black">Arraste RCO, CMB e PDE aqui</p>
+              <p className="text-xs text-on-surface-variant mt-1">
+                ou clique para selecionar os 3 XLSX
+              </p>
+              <input
+                ref={inputRef}
+                type="file"
+                accept=".xlsx"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) handleSelected(e.target.files);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <UploadCard
+                title="Planilha RCO"
+                loadedLabel="RCO carregado"
+                emptyLabel="Aguardando planilha de viagens/produção"
+                item={arquivoRCO}
+                uploadType="rco"
+                onFileSelect={handleFileSelect}
+                onRemove={() => setArquivoRCO(null)}
+              />
+              <UploadCard
+                title="Planilha CMB"
+                loadedLabel="CMB carregado"
+                emptyLabel="Aguardando planilha de abastecimentos/consumo"
+                item={arquivoCMB}
+                uploadType="cmb"
+                onFileSelect={handleFileSelect}
+                onRemove={() => setArquivoCMB(null)}
+              />
+              <UploadCard
+                title="Planilha PDE"
+                loadedLabel="PDE carregada"
+                emptyLabel="Aguardando Parte Diária de Equipamentos"
+                item={arquivoPDE}
+                uploadType="pde"
+                onFileSelect={handleFileSelect}
+                onRemove={() => setArquivoPDE(null)}
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-3 text-xs">
+              <span className={arquivoRCO ? "text-status-success" : "text-on-surface-variant"}>
+                {arquivoRCO ? "✓ RCO carregado" : "RCO pendente"}
+              </span>
+              <span className={arquivoCMB ? "text-status-success" : "text-on-surface-variant"}>
+                {arquivoCMB ? "✓ CMB carregado" : "CMB pendente"}
+              </span>
+              <span className={arquivoPDE ? "text-status-success" : "text-on-surface-variant"}>
+                {arquivoPDE ? "✓ PDE carregada" : "PDE pendente"}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {step === 3 && preview && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {[
+                ["Viagens encontradas", preview.trips.length],
+                ["Volume solto total", `${preview.looseM3.toFixed(2)} m³`],
+                ["Volume compactado estimado", `${preview.compactedM3.toFixed(2)} m³`],
+                ["Abastecimentos", preview.fueling.length],
+                ["Litros totais", `${preview.liters.toFixed(0)} L`],
+                ["Custo diesel", `R$ ${fmtBRL(preview.fuelCost)}`],
+                ["Horas PDE usadas", `${preview.pdeHoursUsed.toFixed(1)} h`],
+                ["Frotas PDE usadas", preview.pdeFleetsUsed.length],
+                ["Pendências PDE", preview.pdePending.length],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  className="rounded border border-border-low bg-surface-highest p-3"
+                >
+                  <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-black">
+                    {label}
+                  </p>
+                  <p className="text-lg font-black mt-1">{value}</p>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="rounded border border-border-low p-3">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                  Período encontrado
+                </p>
+                <p className="mt-1">
+                  {preview.dateStart || "—"} até {preview.dateEnd || "—"}
+                </p>
+              </div>
+              <div className="rounded border border-border-low p-3">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                  Equipamentos encontrados
+                </p>
+                <p className="mt-1">{preview.equipments.slice(0, 8).join(", ") || "—"}</p>
+              </div>
+              <div className="rounded border border-border-low p-3">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                  PDE
+                </p>
+                <p className="mt-1">
+                  {preview.pdeFleets.length} frotas encontradas · {preview.pdeFleetsUsed.length}{" "}
+                  usadas
+                </p>
+              </div>
+              <div className="rounded border border-border-low p-3">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                  Pendências de datas/frotas
+                </p>
+                <p className="mt-1">{preview.pdePending.slice(0, 4).join(", ") || "Nenhuma"}</p>
+              </div>
+              <div className="rounded border border-border-low p-3">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                  Obras encontradas
+                </p>
+                <p className="mt-1">{preview.obras.join(", ") || "—"}</p>
+              </div>
+              <div className="rounded border border-border-low p-3">
+                <p className="font-black uppercase tracking-widest text-on-surface-variant text-[10px]">
+                  Materiais encontrados
+                </p>
+                <p className="mt-1">{preview.materials.join(", ") || "—"}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 3 && !preview && (
+          <div className="rounded border border-status-warning/30 bg-status-warning/5 p-4 text-sm">
+            Envie planilhas RCO, CMB e PDE válidas para gerar o preview.
+          </div>
+        )}
+
+        {step === 4 && preview && (
+          <div className="rounded border border-border-low p-5">
+            <p className="text-sm font-black">Confirmar criação da análise</p>
+            <p className="text-xs text-on-surface-variant mt-2">
+              {draft.name} · {draft.obra} · {draft.material} · fator {factor.toFixed(2)}
+            </p>
+            <p className="text-xs text-on-surface-variant mt-1">
+              Serão vinculadas {preview.trips.length} viagens, {preview.fueling.length}{" "}
+              abastecimentos e {preview.pdeRowsUsed.length} apontamentos PDE usados a uma nova
+              análise independente.
+            </p>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={step === 1 ? onClose : () => setStep((s) => s - 1)}
+            disabled={creating}
+          >
+            {step === 1 ? "Cancelar" : "Voltar"}
+          </Button>
+          {step < 4 ? (
+            <Button
+              onClick={() => setStep((s) => s + 1)}
+              disabled={
+                (step === 1 && !step1Valid) ||
+                (step === 2 && !step2Valid) ||
+                (step === 3 && !preview)
+              }
+            >
+              Avançar
+            </Button>
+          ) : (
+            <Button onClick={handleCreate} disabled={creating || !preview}>
+              {creating ? "Criando..." : "Criar análise"}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+
+      {arquivoPendente && (
+        <Dialog open onOpenChange={() => setArquivoPendente(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Qual o tipo desta planilha?</DialogTitle>
+              <DialogDescription>
+                {arquivoPendente.file.name}
+                {arquivoPendente.reason ? ` · ${arquivoPendente.reason}` : ""}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => forceType("trips")} disabled={!!arquivoRCO}>
+                RCO
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => forceType("fueling")}
+                disabled={!!arquivoCMB}
+              >
+                CMB
+              </Button>
+              <Button variant="outline" onClick={() => forceType("pde")} disabled={!!arquivoPDE}>
+                PDE
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {pdeFallback && (
+        <Dialog open onOpenChange={() => setPdeFallback(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Configurar leitura da PDE</DialogTitle>
+              <DialogDescription>
+                {pdeFallback.file.name} · {pdeFallback.reason}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <label className="font-bold">
+                Linha inicial
+                <input
+                  value={pdeFallback.startRow}
+                  onChange={(e) =>
+                    setPdeFallback((prev) => prev && { ...prev, startRow: e.target.value })
+                  }
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2"
+                />
+              </label>
+              <label className="font-bold">
+                Coluna da data
+                <input
+                  value={pdeFallback.dateColumn}
+                  onChange={(e) =>
+                    setPdeFallback((prev) => prev && { ...prev, dateColumn: e.target.value })
+                  }
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2"
+                />
+              </label>
+              <label className="font-bold">
+                Coluna das horas
+                <input
+                  value={pdeFallback.hoursColumn}
+                  onChange={(e) =>
+                    setPdeFallback((prev) => prev && { ...prev, hoursColumn: e.target.value })
+                  }
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2"
+                />
+              </label>
+              <label className="font-bold">
+                Coluna da frota
+                <input
+                  value={pdeFallback.fleetColumn}
+                  onChange={(e) =>
+                    setPdeFallback((prev) => prev && { ...prev, fleetColumn: e.target.value })
+                  }
+                  placeholder="opcional"
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2"
+                />
+              </label>
+              <label className="font-bold">
+                Coluna da obra
+                <input
+                  value={pdeFallback.obraColumn}
+                  onChange={(e) =>
+                    setPdeFallback((prev) => prev && { ...prev, obraColumn: e.target.value })
+                  }
+                  placeholder="opcional"
+                  className="mt-1 w-full rounded border border-border-low bg-surface-highest px-3 py-2"
+                />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPdeFallback(null)}>
+                Cancelar
+              </Button>
+              <Button onClick={applyPdeFallback}>Aplicar</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </Dialog>
+  );
+}
+
+function UploadCard({
+  title,
+  loadedLabel,
+  emptyLabel,
+  item,
+  uploadType,
+  onFileSelect,
+  onRemove,
+}: {
+  title: string;
+  loadedLabel: string;
+  emptyLabel: string;
+  item: FileItem | null;
+  uploadType: UploadSlot;
+  onFileSelect: (type: UploadSlot, file: File) => void;
+  onRemove: () => void;
+}) {
+  const cardInputRef = useRef<HTMLInputElement>(null);
+  const rows: ParsedTrip[] = item?.result.type === "trips" ? item.result.rows : [];
+  const abastecimentos: ParsedFueling[] = item?.result.type === "fueling" ? item.result.rows : [];
+  const partes: ParsedDailyPart[] = item?.result.type === "pde" ? item.result.rows : [];
+  const liters = abastecimentos.reduce((sum, row) => sum + row.liters, 0);
+  const equipamentos = uniq(abastecimentos.map(vehicleKey));
+  const obras = uniq(rows.map((row) => row.obra));
+  const pdeFrotas = uniq(partes.map((row) => row.fleet));
+  const pdeHoras = partes.reduce((sum, row) => sum + row.hours, 0);
+
+  return (
+    <div
+      className={`rounded border p-3 min-h-[180px] ${
+        item ? "border-status-success/40 bg-status-success/5" : "border-border-low"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+            {title}
+          </p>
+          <p
+            className={`mt-1 text-xs font-bold ${item ? "text-status-success" : "text-on-surface-variant"}`}
+          >
+            {item ? `✓ ${loadedLabel}` : emptyLabel}
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <input
+            ref={cardInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onFileSelect(uploadType, file);
+              e.currentTarget.value = "";
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              cardInputRef.current?.click();
+            }}
+          >
+            {item ? "Enviar novamente" : "Selecionar"}
+          </Button>
+          {item && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={onRemove}
+            >
+              Remover
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {!item ? (
+        <div className="mt-6 flex items-center justify-center text-xs text-on-surface-variant">
+          Nenhum arquivo carregado
+        </div>
+      ) : (
+        <div className="mt-4 space-y-2 text-xs">
+          <div className="flex items-center gap-2">
+            <Icon name={fileIcon(item.result.type)} className="text-on-surface-variant" />
+            <span className="font-bold truncate">{item.file.name}</span>
+          </div>
+          {item.result.type === "trips" && (
+            <>
+              <p>{rows.length} viagens</p>
+              <p>Período: {filePeriod(rows)}</p>
+              <p className="text-on-surface-variant">
+                Obras: {obras.slice(0, 4).join(", ") || "—"}
+              </p>
+            </>
+          )}
+          {item.result.type === "fueling" && (
+            <>
+              <p>{abastecimentos.length} abastecimentos</p>
+              <p>Litros totais: {liters.toFixed(0)} L</p>
+              <p className="text-on-surface-variant">
+                Equipamentos: {equipamentos.slice(0, 4).join(", ") || "—"}
+              </p>
+            </>
+          )}
+          {item.result.type === "pde" && (
+            <>
+              <p>{partes.length} apontamentos de horas</p>
+              <p>Horas totais: {pdeHoras.toFixed(1)} h</p>
+              <p>Inconsistências: {item.result.warnings.length}</p>
+              <p className="text-on-surface-variant">
+                Frotas: {pdeFrotas.slice(0, 4).join(", ") || "—"}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
