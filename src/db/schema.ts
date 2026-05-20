@@ -161,14 +161,31 @@ export const storeDocuments = sqliteTable(
 export type DbEquipment = typeof equipment.$inferSelect;
 export type DbEquipmentInsert = typeof equipment.$inferInsert;
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue };
+
 export const productionAnalyses = sqliteTable("production_analyses", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   obra: text("obra").notNull().default(""),
   material: text("material").notNull().default(""),
+  tipoAnalise: text("tipo_analise").notNull().default("operacional"),
   dateStart: text("date_start").notNull(),
   dateEnd: text("date_end").notNull(),
   swellFactor: real("swell_factor").notNull().default(0.3),
+  metrics: text("metrics", { mode: "json" }).$type<JsonObject>().notNull().default({}),
+  aggregateMetrics: text("aggregate_metrics", { mode: "json" })
+    .$type<JsonObject[]>()
+    .notNull()
+    .default([]),
+  machineMetrics: text("machine_metrics", { mode: "json" })
+    .$type<JsonObject[]>()
+    .notNull()
+    .default([]),
+  charts: text("charts", { mode: "json" }).$type<JsonObject>().notNull().default({}),
+  audit: text("audit", { mode: "json" }).$type<JsonObject[]>().notNull().default([]),
+  context: text("context", { mode: "json" }).$type<JsonObject>().notNull().default({}),
   createdAt: text("created_at").notNull(),
   createdBy: text("created_by").notNull().default(""),
 });

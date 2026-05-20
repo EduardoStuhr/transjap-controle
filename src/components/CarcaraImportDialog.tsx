@@ -270,17 +270,6 @@ export function CarcaraImportDialog({
   const canGoPreview = contextValid && hasRco && hasCmb && hasPde && parseErrors.length === 0;
   const canGoConfirm = canGoPreview && !!preview;
 
-  useEffect(() => {
-    console.log("canGoPreview", {
-      hasRco,
-      hasCmb,
-      hasPde,
-      contextValid,
-      parseErrors,
-      currentStep: step,
-    });
-  }, [contextValid, hasCmb, hasPde, hasRco, parseErrors, step]);
-
   function canAccessStep(targetStep: number) {
     if (targetStep <= 1) return true;
     if (targetStep === 2) return contextValid;
@@ -510,36 +499,6 @@ export function CarcaraImportDialog({
 
   async function handleCreate() {
     if (!preview || !canGoConfirm) return;
-    const analysisPayload = {
-      id: `preview-${Date.now()}`,
-      name: draft.name,
-      dateStart: draft.dateStart,
-      dateEnd: draft.dateEnd,
-      obra: draft.obra,
-      material: draft.material,
-      equipment: preview.pdeRowsUsed,
-      trucks: uniq(preview.trips.map(vehicleKey)),
-      metrics: {
-        viagensTotais: preview.trips.length,
-        dieselConsumidoLitros: preview.liters,
-        horasEquipamentos: preview.pdeHoursUsed,
-        producaoSoltaM3: preview.looseM3,
-        producaoCompactadaM3: preview.compactedM3,
-        custoTotalCombustivel: preview.fuelCost,
-        consumoMedioLitroPorM3: preview.compactedM3 > 0 ? preview.liters / preview.compactedM3 : 0,
-        custoMedioRsPorLitro: preview.liters > 0 ? preview.fuelCost / preview.liters : 0,
-        faturamento: preview.trips.reduce((sum, row) => sum + row.total, 0),
-        margemBruta: preview.trips.reduce((sum, row) => sum + row.total, 0) - preview.fuelCost,
-      },
-      productionRows: preview.trips,
-      consumptionRows: preview.fueling,
-      equipmentRows: preview.pdeRowsUsed,
-      truckRows: preview.trips,
-      auditRows: preview.pdeRows,
-      createdAt: new Date().toISOString(),
-    };
-    console.log("confirmAnalysis payload", analysisPayload);
-    console.log("metrics", analysisPayload.metrics);
     setCreating(true);
     try {
       const result = await createAnalysis({

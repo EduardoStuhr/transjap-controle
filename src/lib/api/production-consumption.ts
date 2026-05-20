@@ -4,6 +4,7 @@ import { getDb } from "@/db/client";
 import { equipmentDailyParts, fueling, productionAnalyses, swellFactors, trips } from "@/db/schema";
 import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
+import { buildAnalysisSnapshot } from "@/lib/production-analytics";
 import type { ParsedDailyPart, ParsedFueling, ParsedTrip } from "@/lib/carcara-parser";
 import type {
   DbEquipmentDailyPart,
@@ -11,9 +12,15 @@ import type {
   DbProductionAnalysis,
   DbSwellFactor,
   DbTrip,
+  JsonObject,
 } from "@/db/schema";
 
-type DateFilters = { dateFrom?: string; dateTo?: string; analysisId?: string };
+type DateFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  analysisId?: string;
+  analysisIds?: string[];
+};
 type AnalysisFilters = { obra?: string; material?: string; dateFrom?: string; dateTo?: string };
 type ImportResult = { inserted: number; updated: number; total: number; batchId: string };
 
@@ -21,10 +28,12 @@ export type CreateAnalysisInput = {
   name: string;
   obra: string;
   material: string;
+  tipoAnalise?: string;
   dateStart: string;
   dateEnd: string;
   swellFactor: number;
   createdBy?: string;
+  context?: JsonObject;
   tripsRows: ParsedTrip[];
   fuelingRows: ParsedFueling[];
   dailyPartRows: ParsedDailyPart[];
@@ -168,9 +177,16 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     name: data.name.trim(),
     obra: data.obra.trim(),
     material: data.material.trim(),
+    tipoAnalise: data.tipoAnalise?.trim() || "operacional",
     dateStart: data.dateStart || range?.start || now.slice(0, 10),
     dateEnd: data.dateEnd || range?.end || data.dateStart || now.slice(0, 10),
     swellFactor: factor,
+    metrics: {},
+    aggregateMetrics: [],
+    machineMetrics: [],
+    charts: {},
+    audit: [],
+    context: data.context ?? {},
     createdAt: now,
     createdBy: data.createdBy ?? "",
   };
@@ -222,6 +238,21 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     });
   });
   const dailyPartRows = [...dailyRows, ...missingRows];
+  const snapshot = buildAnalysisSnapshot({
+    analysis,
+    trips: tripRows,
+    fueling: fuelRows,
+    dailyParts: dailyPartRows,
+  });
+  const analysisWithSnapshot: DbProductionAnalysis = {
+    ...analysis,
+    metrics: snapshot.metrics as unknown as JsonObject,
+    aggregateMetrics: snapshot.aggregateMetrics as unknown as JsonObject[],
+    machineMetrics: snapshot.machineMetrics as unknown as JsonObject[],
+    charts: snapshot.charts as unknown as JsonObject,
+    audit: snapshot.audit as unknown as JsonObject[],
+    context: snapshot.context as unknown as JsonObject,
+  };
   const productionRows = tripRows;
   const consumptionRows = fuelRows;
   const equipmentRows = dailyPartRows.filter((row) => row.usedInAnalysis);
@@ -230,24 +261,7 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
       productionRows.map((row) => row.prefix || row.vehicleId || row.plate).filter(Boolean),
     ),
   ];
-  const looseM3 = productionRows.reduce((sum, row) => sum + row.cubicMLoose, 0);
-  const compactedM3 = productionRows.reduce((sum, row) => sum + row.cubicMCompacted, 0);
-  const dieselLiters = consumptionRows.reduce((sum, row) => sum + row.liters, 0);
-  const fuelCost = consumptionRows.reduce((sum, row) => sum + row.total, 0);
-  const revenue = productionRows.reduce((sum, row) => sum + row.total, 0);
-  const hours = equipmentRows.reduce((sum, row) => sum + row.hours, 0);
-  const metrics = {
-    viagensTotais: productionRows.length,
-    dieselConsumidoLitros: dieselLiters,
-    horasEquipamentos: hours,
-    producaoSoltaM3: looseM3,
-    producaoCompactadaM3: compactedM3,
-    custoTotalCombustivel: fuelCost,
-    consumoMedioLitroPorM3: compactedM3 > 0 ? dieselLiters / compactedM3 : 0,
-    custoMedioRsPorLitro: dieselLiters > 0 ? fuelCost / dieselLiters : 0,
-    faturamento: revenue,
-    margemBruta: revenue - fuelCost,
-  };
+  const metrics = snapshot.metrics;
 
   return {
     id,
@@ -265,7 +279,7 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     truckRows: productionRows,
     auditRows: dailyPartRows,
     createdAt: now,
-    analysis,
+    analysis: analysisWithSnapshot,
     tripRows,
     fuelRows,
     dailyPartRows,
@@ -281,16 +295,33 @@ function filterByDate<T extends { datetime: string }>(rows: T[], filters: DateFi
 }
 
 export const listDailyParts = createServerFn({ method: "POST" })
-  .inputValidator((data: { analysisId: string }) => data)
+  .inputValidator((data: DateFilters) => data)
   .handler(async ({ data }): Promise<DbEquipmentDailyPart[]> => {
     const d1 = getOptionalD1();
-    if (!d1) return localDailyParts.filter((row) => row.analysisId === data.analysisId);
+    if (!d1) {
+      const ids = data.analysisIds?.filter(Boolean);
+      return localDailyParts.filter((row) => {
+        if (data.analysisId && row.analysisId !== data.analysisId) return false;
+        if (ids?.length && !ids.includes(row.analysisId)) return false;
+        if (data.dateFrom && row.date < data.dateFrom) return false;
+        if (data.dateTo && row.date > data.dateTo) return false;
+        return true;
+      });
+    }
     const db = getDb(d1);
-    return db
-      .select()
-      .from(equipmentDailyParts)
-      .where(eq(equipmentDailyParts.analysisId, data.analysisId))
-      .all();
+    const conditions = [];
+    const ids = data.analysisIds?.filter(Boolean);
+    if (data.analysisId) conditions.push(eq(equipmentDailyParts.analysisId, data.analysisId));
+    if (ids?.length) conditions.push(inArray(equipmentDailyParts.analysisId, ids));
+    if (data.dateFrom) conditions.push(gte(equipmentDailyParts.date, data.dateFrom));
+    if (data.dateTo) conditions.push(lte(equipmentDailyParts.date, data.dateTo));
+    return conditions.length
+      ? db
+          .select()
+          .from(equipmentDailyParts)
+          .where(and(...conditions))
+          .all()
+      : db.select().from(equipmentDailyParts).all();
   });
 
 export const listAnalyses = createServerFn({ method: "POST" })
@@ -347,13 +378,16 @@ export const listTrips = createServerFn({ method: "POST" })
     if (!d1) {
       const scoped = data.analysisId
         ? localTrips.filter((r) => r.analysisId === data.analysisId)
-        : localTrips;
+        : data.analysisIds?.length
+          ? localTrips.filter((r) => data.analysisIds?.includes(r.analysisId))
+          : localTrips;
       return filterByDate(scoped, data);
     }
 
     const db = getDb(d1);
     const conditions = [];
     if (data.analysisId) conditions.push(eq(trips.analysisId, data.analysisId));
+    if (data.analysisIds?.length) conditions.push(inArray(trips.analysisId, data.analysisIds));
     if (data.dateFrom) conditions.push(gte(trips.datetime, data.dateFrom));
     if (data.dateTo) conditions.push(lte(trips.datetime, `${data.dateTo}T23:59:59.999Z`));
     return conditions.length
@@ -372,13 +406,16 @@ export const listFueling = createServerFn({ method: "POST" })
     if (!d1) {
       const scoped = data.analysisId
         ? localFueling.filter((r) => r.analysisId === data.analysisId)
-        : localFueling;
+        : data.analysisIds?.length
+          ? localFueling.filter((r) => data.analysisIds?.includes(r.analysisId))
+          : localFueling;
       return filterByDate(scoped, data);
     }
 
     const db = getDb(d1);
     const conditions = [];
     if (data.analysisId) conditions.push(eq(fueling.analysisId, data.analysisId));
+    if (data.analysisIds?.length) conditions.push(inArray(fueling.analysisId, data.analysisIds));
     if (data.dateFrom) conditions.push(gte(fueling.datetime, data.dateFrom));
     if (data.dateTo) conditions.push(lte(fueling.datetime, `${data.dateTo}T23:59:59.999Z`));
     return conditions.length
@@ -495,7 +532,6 @@ export const createAnalysis = createServerFn({ method: "POST" })
     const id = `ANL-${Date.now().toString(36).toUpperCase()}`;
     const built = buildAnalysisFromImports(data, id, now);
     const { analysis, tripRows, fuelRows, dailyPartRows, metrics } = built;
-    console.log("metrics", metrics);
 
     const d1 = getOptionalD1();
     if (!d1) {
@@ -508,8 +544,8 @@ export const createAnalysis = createServerFn({ method: "POST" })
         trips: tripRows.length,
         fueling: fuelRows.length,
         dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
-        compactedM3: metrics.producaoCompactadaM3,
-        liters: metrics.dieselConsumidoLitros,
+        compactedM3: metrics.compactedM3,
+        liters: metrics.liters,
         metrics,
       };
     }
@@ -533,8 +569,8 @@ export const createAnalysis = createServerFn({ method: "POST" })
       trips: tripRows.length,
       fueling: fuelRows.length,
       dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
-      compactedM3: metrics.producaoCompactadaM3,
-      liters: metrics.dieselConsumidoLitros,
+      compactedM3: metrics.compactedM3,
+      liters: metrics.liters,
       metrics,
     };
   });

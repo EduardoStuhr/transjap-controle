@@ -4,14 +4,18 @@ import {
   Bar,
   BarChart as RechartsBarChart,
   CartesianGrid,
+  Cell,
   ComposedChart,
   Legend,
   Line,
   LineChart as RechartsLineChart,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
+  ZAxis,
 } from "recharts";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -30,6 +34,13 @@ import {
   listTrips,
 } from "@/lib/api/production-consumption";
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
+import {
+  AGGREGATE_TRIP_PRICE,
+  buildProductionAnalytics,
+  normalizeAggregatePrefix,
+  safeDivide,
+  type OperationalBubble,
+} from "@/lib/production-analytics";
 import type { DbEquipmentDailyPart, DbFueling, DbProductionAnalysis, DbTrip } from "@/db/schema";
 
 const CarcaraImportDialog = lazy(() =>
@@ -40,6 +51,12 @@ export const Route = createFileRoute("/producao-consumo")({ component: ProducaoC
 
 type TabId =
   | "overview"
+  | "daily"
+  | "accumulated"
+  | "efficiency"
+  | "financial"
+  | "comparison"
+  | "history"
   | "production"
   | "consumption"
   | "equipment"
@@ -49,7 +66,6 @@ type TabId =
   | "data";
 
 const PAGE_SIZE = 12;
-const AGGREGATE_TRIP_PRICE = 1.65;
 const CHART_YELLOW = "#f4c430";
 const CHART_BLUE = "#38bdf8";
 const CHART_GREEN = "#22c55e";
@@ -78,10 +94,6 @@ type TooltipPayload = {
   color?: string;
   payload?: Record<string, unknown>;
 };
-
-function safeDivide(numerator: number, denominator: number) {
-  return denominator > 0 ? numerator / denominator : 0;
-}
 
 function formatNumber(v: number, digits = 1) {
   return v.toLocaleString("pt-BR", {
@@ -117,7 +129,7 @@ function vehicleKey(row: { prefix: string; vehicleId: string; plate: string }) {
 }
 
 function aggregateKey(row: DbTrip) {
-  return row.prefix || row.vehicleId || row.plate || "Agregado sem identificação";
+  return normalizeAggregatePrefix(row.prefix || row.vehicleId || row.plate);
 }
 
 function ownEquipmentKey(row: { prefix: string; vehicleId: string; plate: string }) {
@@ -783,6 +795,296 @@ function ObraComparisonChart({
   );
 }
 
+function DieselHoursProductionChart({
+  data,
+  mode,
+  onMode,
+}: {
+  data: OperationalBubble[];
+  mode: "obra" | "equipment" | "analysis" | "period";
+  onMode: (mode: "obra" | "equipment" | "analysis" | "period") => void;
+}) {
+  return (
+    <div className="rounded border border-primary/40 bg-surface-container p-4 shadow-industrial">
+      <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <span className="text-[10px] font-black uppercase tracking-[0.28em] text-primary">
+            Indicador operacional central
+          </span>
+          <h3 className="mt-1 text-base font-black uppercase tracking-tight">
+            Diesel × Horas × Produção
+          </h3>
+          <p className="mt-1 text-xs text-on-surface-variant">
+            Eixo X horas trabalhadas, eixo Y m³ compactado, bolha litros consumidos.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1 rounded border border-border-low bg-surface-highest p-1">
+          {[
+            ["obra", "Obra"],
+            ["equipment", "Equip."],
+            ["analysis", "Análise"],
+            ["period", "Período"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onMode(id as "obra" | "equipment" | "analysis" | "period")}
+              className={`rounded px-2 py-1 text-[10px] font-black uppercase tracking-widest ${
+                mode === id ? "bg-primary text-on-primary" : "text-on-surface-variant"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="h-[420px]">
+        {data.length > 0 ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 12, right: 18, left: 0, bottom: 10 }}>
+              <CartesianGrid stroke={CHART_GRID} />
+              <XAxis
+                type="number"
+                dataKey="hours"
+                name="horas"
+                tick={{ fill: CHART_TEXT, fontSize: 11 }}
+                tickFormatter={(value) => `${formatNumber(Number(value), 0)}h`}
+              />
+              <YAxis
+                type="number"
+                dataKey="compactedM3"
+                name="m³ compactado"
+                tick={{ fill: CHART_TEXT, fontSize: 11 }}
+                tickFormatter={(value) => formatNumber(Number(value), 0)}
+              />
+              <ZAxis type="number" dataKey="z" range={[90, 900]} />
+              <Tooltip
+                cursor={{ strokeDasharray: "3 3", stroke: CHART_TEXT }}
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  const row = payload[0].payload as OperationalBubble;
+                  return (
+                    <TooltipShell label={row.label}>
+                      <TooltipLine label="Obra" value={row.obra || "—"} color={row.color} />
+                      <TooltipLine
+                        label="Equipamento"
+                        value={row.equipment || "—"}
+                        color={CHART_TEXT}
+                      />
+                      <TooltipLine
+                        label="Horas"
+                        value={`${formatNumber(row.hours, 1)} h`}
+                        color={CHART_GREEN}
+                      />
+                      <TooltipLine
+                        label="Litros"
+                        value={formatLiters(row.liters)}
+                        color={CHART_BLUE}
+                      />
+                      <TooltipLine
+                        label="m³ compactado"
+                        value={formatM3(row.compactedM3)}
+                        color={CHART_YELLOW}
+                      />
+                      <TooltipLine
+                        label="L/h"
+                        value={formatNumber(row.fuelPerHour, 2)}
+                        color={CHART_BLUE}
+                      />
+                      <TooltipLine
+                        label="m³/h"
+                        value={formatNumber(row.productionPerHour, 2)}
+                        color={CHART_GREEN}
+                      />
+                      <TooltipLine
+                        label="L/m³"
+                        value={formatNumber(row.fuelPerM3, 2)}
+                        color={CHART_ORANGE}
+                      />
+                      <TooltipLine
+                        label="Custo/m³"
+                        value={formatBRL(row.costPerM3)}
+                        color={CHART_RED}
+                      />
+                      <TooltipLine
+                        label="Eficiência"
+                        value={`${formatNumber(row.efficiencyPercent, 0)}%`}
+                        color={row.color}
+                      />
+                    </TooltipShell>
+                  );
+                }}
+              />
+              <Scatter data={data} name="Eficiência operacional">
+                {data.map((entry) => (
+                  <Cell key={entry.id} fill={entry.color} fillOpacity={0.82} stroke={entry.color} />
+                ))}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="flex h-full items-center justify-center rounded border border-border-low/60 bg-surface-low text-xs text-on-surface-variant">
+            Sem dados suficientes para cruzar diesel, horas e produção.
+          </div>
+        )}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-3 text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+        <span className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-[#22c55e]" />
+          eficiente
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-[#f4c430]" />
+          atenção
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]" />
+          alto consumo / baixa produção
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function OperationalAlertCard({ alerts }: { alerts: string[] }) {
+  return (
+    <div className="rounded border border-status-warning/50 bg-status-warning/10 p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-status-warning text-background">
+          <Icon name="warning" className="text-xl" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.28em] text-status-warning">
+            Alerta operacional
+          </p>
+          <div className="mt-2 grid gap-1 text-sm">
+            {alerts.map((alert) => (
+              <p key={alert} className="font-semibold text-on-surface">
+                {alert}
+              </p>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ObraRankingTable({
+  rows,
+}: {
+  rows: Array<{
+    obra: string;
+    compactedM3: number;
+    liters: number;
+    hours: number;
+    fuelPerM3: number;
+    productionPerHour: number;
+    operationalCostPerM3: number;
+    efficiencyPercent: number;
+  }>;
+}) {
+  return (
+    <Ranking
+      title="Ranking de obras"
+      rows={rows.map((row) => ({
+        obra: row.obra,
+        m3: formatNumber(row.compactedM3, 1),
+        diesel: formatNumber(row.liters, 0),
+        horas: formatNumber(row.hours, 1),
+        lm3: formatNumber(row.fuelPerM3, 2),
+        m3h: formatNumber(row.productionPerHour, 2),
+        custoM3: formatBRL(row.operationalCostPerM3),
+        eficiencia: `${formatNumber(row.efficiencyPercent, 0)}%`,
+      }))}
+      columns={[
+        { key: "obra", label: "Obra" },
+        { key: "m3", label: "m³ comp.", align: "right" },
+        { key: "diesel", label: "Diesel L", align: "right" },
+        { key: "horas", label: "Horas", align: "right" },
+        { key: "lm3", label: "L/m³", align: "right" },
+        { key: "m3h", label: "m³/h", align: "right" },
+        { key: "custoM3", label: "Custo/m³", align: "right" },
+        { key: "eficiencia", label: "Eficiência", align: "right" },
+      ]}
+    />
+  );
+}
+
+function AnalysisHistoryPanel({
+  analyses,
+  selectedIds,
+  onSelect,
+}: {
+  analyses: DbProductionAnalysis[];
+  selectedIds: string[];
+  onSelect: (ids: string[]) => void;
+}) {
+  return (
+    <div className="rounded border border-border-low bg-surface-container p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-[10px] font-black uppercase tracking-widest">Histórico acumulado</h3>
+          <p className="mt-1 text-xs text-on-surface-variant">
+            Cada análise permanece disponível para acumulado, comparação e auditoria.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs"
+          onClick={() => onSelect(analyses.map((analysis) => analysis.id))}
+          disabled={analyses.length === 0}
+        >
+          Todas
+        </Button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border-low text-on-surface-variant">
+              {["", "Análise", "Obra", "Material", "Período", "Criada em"].map((header) => (
+                <th key={header} className="py-2 text-left font-black uppercase tracking-widest">
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {analyses.map((analysis) => {
+              const selected = selectedIds.includes(analysis.id);
+              return (
+                <tr key={analysis.id} className="border-b border-border-low/40">
+                  <td className="py-2 pr-2">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        onSelect(
+                          selected
+                            ? selectedIds.filter((id) => id !== analysis.id)
+                            : [...selectedIds, analysis.id],
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="py-2 pr-4 font-semibold">{analysis.name}</td>
+                  <td className="py-2 pr-4">{analysis.obra || "—"}</td>
+                  <td className="py-2 pr-4">{analysis.material || "—"}</td>
+                  <td className="py-2 pr-4">
+                    {fmtDate(analysis.dateStart)} a {fmtDate(analysis.dateEnd)}
+                  </td>
+                  <td className="py-2 pr-4">{fmtDate(analysis.createdAt)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function EquipmentHoursChart({
   rows,
 }: {
@@ -907,19 +1209,20 @@ function Ranking({
 
 function AnalysesDialog({
   analyses,
-  selectedId,
+  selectedIds,
   onSelect,
   onClose,
 }: {
   analyses: DbProductionAnalysis[];
-  selectedId?: string;
-  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onSelect: (ids: string[]) => void;
   onClose: () => void;
 }) {
   const [obra, setObra] = useState("");
   const [material, setMaterial] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [draftIds, setDraftIds] = useState<string[]>(selectedIds);
   const obras = uniq(analyses.map((a) => a.obra));
   const materials = uniq(analyses.map((a) => a.material));
   const filtered = analyses.filter((analysis) => {
@@ -929,13 +1232,20 @@ function AnalysesDialog({
     if (dateTo && analysis.dateStart > dateTo) return false;
     return true;
   });
+  const toggle = (id: string) => {
+    setDraftIds((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    );
+  };
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Minhas análises</DialogTitle>
-          <DialogDescription>Filtre por obra, período e material.</DialogDescription>
+          <DialogDescription>
+            Selecione uma ou várias análises para histórico acumulado e comparativos.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <select
@@ -971,35 +1281,93 @@ function AnalysesDialog({
             className="rounded border border-border-low bg-surface-highest px-3 py-2 text-xs"
           />
         </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={() => setDraftIds(filtered.map((analysis) => analysis.id))}
+            disabled={filtered.length === 0}
+          >
+            Selecionar filtradas
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={() => setDraftIds([])}
+            disabled={draftIds.length === 0}
+          >
+            Limpar
+          </Button>
+          <span className="self-center text-xs text-on-surface-variant">
+            {draftIds.length} selecionada(s)
+          </span>
+        </div>
         <div className="max-h-96 overflow-y-auto space-y-2">
           {filtered.map((analysis) => (
-            <button
+            <div
               key={analysis.id}
-              type="button"
-              onClick={() => onSelect(analysis.id)}
               className={`w-full rounded border p-3 text-left transition-colors ${
-                selectedId === analysis.id
+                draftIds.includes(analysis.id)
                   ? "border-primary bg-primary/10"
                   : "border-border-low hover:bg-surface-highest"
               }`}
             >
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-black">{analysis.name}</p>
-                <span className="text-[10px] uppercase tracking-widest text-on-surface-variant">
-                  {fmtDate(analysis.createdAt)}
-                </span>
+              <div className="flex items-start justify-between gap-3">
+                <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={draftIds.includes(analysis.id)}
+                    onChange={() => toggle(analysis.id)}
+                    className="mt-1"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-black">{analysis.name}</span>
+                    <span className="mt-1 block text-xs text-on-surface-variant">
+                      {analysis.obra} · {analysis.material} · {fmtDate(analysis.dateStart)} a{" "}
+                      {fmtDate(analysis.dateEnd)}
+                    </span>
+                  </span>
+                </label>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-widest text-on-surface-variant">
+                    {fmtDate(analysis.createdAt)}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => {
+                      onSelect([analysis.id]);
+                      onClose();
+                    }}
+                  >
+                    Abrir
+                  </Button>
+                </div>
               </div>
-              <p className="text-xs text-on-surface-variant mt-1">
-                {analysis.obra} · {analysis.material} · {fmtDate(analysis.dateStart)} a{" "}
-                {fmtDate(analysis.dateEnd)}
-              </p>
-            </button>
+            </div>
           ))}
           {filtered.length === 0 && (
             <p className="py-8 text-center text-xs text-on-surface-variant">
               Nenhuma análise encontrada.
             </p>
           )}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border-low pt-3">
+          <Button variant="outline" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            onClick={() => {
+              onSelect(draftIds);
+              onClose();
+            }}
+            disabled={draftIds.length === 0}
+          >
+            Aplicar acumulado
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -1011,7 +1379,7 @@ function ProducaoConsumo() {
   const canCreate = user?.role === "administrador" || user?.role === "gestor";
 
   const [analyses, setAnalyses] = useState<DbProductionAnalysis[]>([]);
-  const [selectedAnalysisId, setSelectedAnalysisId] = useState<string>("");
+  const [selectedAnalysisIds, setSelectedAnalysisIds] = useState<string[]>([]);
   const [tripRows, setTripRows] = useState<DbTrip[]>([]);
   const [fuelRows, setFuelRows] = useState<DbFueling[]>([]);
   const [dailyPartRows, setDailyPartRows] = useState<DbEquipmentDailyPart[]>([]);
@@ -1029,21 +1397,33 @@ function ProducaoConsumo() {
   const [search, setSearch] = useState("");
   const [tripPage, setTripPage] = useState(0);
   const [fuelPage, setFuelPage] = useState(0);
-
-  const selectedAnalysis = analyses.find((analysis) => analysis.id === selectedAnalysisId) ?? null;
-
-  const loadAnalyses = useCallback(
-    async (nextSelected?: string) => {
-      const rows = (await listAnalyses({ data: {} })) as DbProductionAnalysis[];
-      setAnalyses(rows);
-      const target = nextSelected || selectedAnalysisId || rows[0]?.id || "";
-      setSelectedAnalysisId(target);
-    },
-    [selectedAnalysisId],
+  const [bubbleMode, setBubbleMode] = useState<"obra" | "equipment" | "analysis" | "period">(
+    "obra",
   );
 
+  const selectedAnalyses = analyses.filter((analysis) => selectedAnalysisIds.includes(analysis.id));
+  const selectedAnalysis = selectedAnalyses[0] ?? null;
+  const selectedAnalysisLabel =
+    selectedAnalyses.length > 1
+      ? `${selectedAnalyses.length} análises acumuladas`
+      : selectedAnalysis
+        ? `${selectedAnalysis.name} · ${selectedAnalysis.obra}`
+        : "Crie uma análise para começar";
+
+  const loadAnalyses = useCallback(async (nextSelected?: string | string[]) => {
+    const rows = (await listAnalyses({ data: {} })) as DbProductionAnalysis[];
+    setAnalyses(rows);
+    setSelectedAnalysisIds((current) => {
+      if (Array.isArray(nextSelected))
+        return nextSelected.filter((id) => rows.some((a) => a.id === id));
+      if (nextSelected) return [nextSelected];
+      const kept = current.filter((id) => rows.some((analysis) => analysis.id === id));
+      return kept.length ? kept : rows[0]?.id ? [rows[0].id] : [];
+    });
+  }, []);
+
   const loadData = useCallback(async () => {
-    if (!selectedAnalysisId) {
+    if (selectedAnalysisIds.length === 0) {
       setTripRows([]);
       setFuelRows([]);
       setDailyPartRows([]);
@@ -1052,9 +1432,9 @@ function ProducaoConsumo() {
     setLoading(true);
     try {
       const [tripsResult, fuelResult, dailyPartResult] = await Promise.all([
-        listTrips({ data: { analysisId: selectedAnalysisId } }),
-        listFueling({ data: { analysisId: selectedAnalysisId } }),
-        listDailyParts({ data: { analysisId: selectedAnalysisId } }),
+        listTrips({ data: { analysisIds: selectedAnalysisIds } }),
+        listFueling({ data: { analysisIds: selectedAnalysisIds } }),
+        listDailyParts({ data: { analysisIds: selectedAnalysisIds } }),
       ]);
       setTripRows(tripsResult as DbTrip[]);
       setFuelRows(fuelResult as DbFueling[]);
@@ -1064,7 +1444,7 @@ function ProducaoConsumo() {
     } finally {
       setLoading(false);
     }
-  }, [selectedAnalysisId]);
+  }, [selectedAnalysisIds]);
 
   useEffect(() => {
     loadAnalyses();
@@ -1129,11 +1509,6 @@ function ProducaoConsumo() {
       avgCostPerLiter: safeDivide(fuelCost, liters),
     };
   }, [filteredFueling, filteredTrips]);
-
-  useEffect(() => {
-    console.log("dashboard activeAnalysis", selectedAnalysis);
-    console.log("metrics", kpis);
-  }, [kpis, selectedAnalysis]);
 
   const daily = useMemo<DailyPoint[]>(() => {
     const map = new Map<string, DailyPoint>();
@@ -1351,6 +1726,19 @@ function ProducaoConsumo() {
       .sort((a, b) => b.liters - a.liters);
   }, [filteredDailyParts, filteredFueling]);
 
+  const operationalAnalytics = useMemo(
+    () =>
+      buildProductionAnalytics({
+        analyses: selectedAnalyses,
+        trips: filteredTrips,
+        fueling: filteredFueling,
+        dailyParts: filteredDailyParts,
+      }),
+    [filteredDailyParts, filteredFueling, filteredTrips, selectedAnalyses],
+  );
+  const operationalMetrics = operationalAnalytics.accumulatedMetrics;
+  const bubbleData = operationalAnalytics.operationalBubbles[bubbleMode];
+
   const auditAlerts = useMemo(() => {
     const aggregateNoVolume = aggregateProduction
       .filter((row) => row.trips > 0 && row.loose <= 0 && row.m3 <= 0)
@@ -1422,7 +1810,7 @@ function ProducaoConsumo() {
     setAnalysisType("all");
     setSearch("");
     await loadAnalyses(analysisId);
-    setSelectedAnalysisId(analysisId);
+    setSelectedAnalysisIds([analysisId]);
     setTab("overview");
   }
 
@@ -1430,10 +1818,24 @@ function ProducaoConsumo() {
     import("xlsx").then((XLSX) => {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([kpis]), "KPIs");
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet([operationalAnalytics.accumulatedMetrics]),
+        "Acumulado",
+      );
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(operationalAnalytics.obraRanking),
+        "Ranking obras",
+      );
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filteredTrips), "Viagens");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filteredFueling), "Abastecimentos");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filteredDailyParts), "PDE");
-      XLSX.writeFile(wb, `${selectedAnalysis?.name ?? "analise"}-producao-consumo.xlsx`);
+      const filename =
+        selectedAnalyses.length > 1
+          ? "acumulado-producao-consumo.xlsx"
+          : `${selectedAnalysis?.name ?? "analise"}-producao-consumo.xlsx`;
+      XLSX.writeFile(wb, filename);
     });
   }
 
@@ -1451,13 +1853,19 @@ function ProducaoConsumo() {
             Análises operacionais
           </span>
           <h1 className="text-3xl font-black uppercase tracking-tighter">Produção × Consumo</h1>
-          <p className="text-xs text-on-surface-variant mt-1">
-            {selectedAnalysis
-              ? `${selectedAnalysis.name} · ${selectedAnalysis.obra}`
-              : "Crie uma análise para começar"}
-          </p>
+          <p className="text-xs text-on-surface-variant mt-1">{selectedAnalysisLabel}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={() => setSelectedAnalysisIds(analyses.map((analysis) => analysis.id))}
+            disabled={empty}
+          >
+            <Icon name="stacked_line_chart" className="text-base mr-1" />
+            Acumulado geral
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1574,6 +1982,12 @@ function ProducaoConsumo() {
           <div className="mb-4 flex gap-2 overflow-x-auto border-b border-border-low">
             {[
               ["overview", "Visão geral"],
+              ["daily", "Diário"],
+              ["accumulated", "Acumulado"],
+              ["efficiency", "Eficiência"],
+              ["financial", "Financeiro"],
+              ["comparison", "Comparativo"],
+              ["history", "Histórico"],
               ["production", "Produção"],
               ["consumption", "Consumo"],
               ["equipment", "Equipamentos"],
@@ -1595,6 +2009,30 @@ function ProducaoConsumo() {
                 {label}
               </button>
             ))}
+          </div>
+
+          <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
+            <DieselHoursProductionChart
+              data={bubbleData}
+              mode={bubbleMode}
+              onMode={setBubbleMode}
+            />
+            <div className="space-y-4">
+              <OperationalAlertCard alerts={operationalAnalytics.alerts} />
+              <div className="grid grid-cols-2 gap-3">
+                <KpiCard
+                  label="Eficiência operacional"
+                  value={`${formatNumber(operationalMetrics.efficiencyPercent, 0)}%`}
+                  sub="Índice ponderando m³/h, L/m³ e L/h"
+                  icon="query_stats"
+                />
+                <KpiCard
+                  label="Índice produtividade obra"
+                  value={`${formatNumber(operationalMetrics.productivityIndex, 0)}%`}
+                  icon="speed"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
@@ -1647,6 +2085,31 @@ function ProducaoConsumo() {
               icon="speed"
             />
             <KpiCard
+              label="Diesel por hora"
+              value={`${formatNumber(operationalMetrics.fuelPerHour, 2)} L/h`}
+              icon="local_gas_station"
+            />
+            <KpiCard
+              label="m³ por hora"
+              value={`${formatNumber(operationalMetrics.productionPerHour, 2)} m³/h`}
+              icon="precision_manufacturing"
+            />
+            <KpiCard
+              label="Viagens por hora"
+              value={formatNumber(operationalMetrics.tripsPerHour, 2)}
+              icon="route"
+            />
+            <KpiCard
+              label="Custo operacional/h"
+              value={formatBRL(operationalMetrics.operationalCostPerHour)}
+              icon="payments"
+            />
+            <KpiCard
+              label="Custo operacional/m³"
+              value={formatBRL(operationalMetrics.operationalCostPerM3)}
+              icon="monitoring"
+            />
+            <KpiCard
               label="Custo médio R$/L"
               value={formatBRL(kpis.avgCostPerLiter)}
               icon="local_atm"
@@ -1662,6 +2125,181 @@ function ProducaoConsumo() {
               <TopEquipmentChart rows={equipmentConsumption} />
               <FinancialChart kpis={kpis} />
               <AverageConsumptionChart data={daily} />
+              <div className="lg:col-span-3">
+                <ObraRankingTable rows={operationalAnalytics.obraRanking} />
+              </div>
+            </div>
+          )}
+
+          {tab === "daily" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <ProductionConsumptionChart data={daily} />
+              <DailyProductionChart data={daily} />
+              <DailyFuelChart data={daily} />
+              <AverageConsumptionChart data={daily} />
+              <TopAggregatesChart rows={aggregateProduction} />
+              <TopEquipmentChart rows={equipmentConsumption} />
+            </div>
+          )}
+
+          {tab === "accumulated" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded border border-border-low bg-surface-container p-4">
+                <h3 className="text-[10px] font-black uppercase tracking-widest">
+                  Painel acumulado
+                </h3>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <KpiCard
+                    label="Análises"
+                    value={String(operationalMetrics.analysisCount)}
+                    icon="folder_open"
+                  />
+                  <KpiCard
+                    label="Obras"
+                    value={String(operationalMetrics.obraCount)}
+                    icon="location_city"
+                  />
+                  <KpiCard
+                    label="Materiais"
+                    value={String(operationalMetrics.materialCount)}
+                    icon="category"
+                  />
+                  <KpiCard
+                    label="Custo operacional"
+                    value={formatBRL(operationalMetrics.operationalCost)}
+                    icon="payments"
+                  />
+                </div>
+              </div>
+              <FinancialChart kpis={kpis} />
+              <div className="lg:col-span-2">
+                <ProductionConsumptionChart data={daily} />
+              </div>
+              <div className="lg:col-span-2">
+                <ObraRankingTable rows={operationalAnalytics.obraRanking} />
+              </div>
+            </div>
+          )}
+
+          {tab === "efficiency" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <EquipmentHoursChart rows={equipmentConsumption} />
+              <EquipmentLhChart rows={equipmentConsumption} />
+              <AverageConsumptionChart data={daily} />
+              <TopAggregatesChart rows={aggregateProduction} />
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Eficiência das máquinas próprias"
+                  rows={operationalAnalytics.machineMetrics.map((row) => ({
+                    equipamento: row.equipment,
+                    horas: formatNumber(row.hours, 1),
+                    litros: formatNumber(row.liters, 0),
+                    lh: formatNumber(row.fuelPerHour, 2),
+                    m3h: formatNumber(row.productionPerHour, 2),
+                    viagensH: formatNumber(row.tripsPerHour, 2),
+                    custoM3: formatBRL(row.costPerM3),
+                    eficiencia: `${formatNumber(row.efficiencyPercent, 0)}%`,
+                    status: row.status,
+                  }))}
+                  columns={[
+                    { key: "equipamento", label: "Equipamento" },
+                    { key: "horas", label: "Horas PDE", align: "right" },
+                    { key: "litros", label: "Litros", align: "right" },
+                    { key: "lh", label: "L/h", align: "right" },
+                    { key: "m3h", label: "m³/h", align: "right" },
+                    { key: "viagensH", label: "Viagens/h", align: "right" },
+                    { key: "custoM3", label: "Custo/m³", align: "right" },
+                    { key: "eficiencia", label: "Eficiência", align: "right" },
+                    { key: "status", label: "Status" },
+                  ]}
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Produtividade dos agregados"
+                  rows={operationalAnalytics.aggregateMetrics.map((row) => ({
+                    agregado: row.aggregate,
+                    viagens: row.trips,
+                    manha: formatNumber(row.hoursMorning, 1),
+                    tarde: formatNumber(row.hoursAfternoon, 1),
+                    horas: formatNumber(row.hoursTotal, 1),
+                    viagensH: formatNumber(row.tripsPerHour, 2),
+                    m3H: formatNumber(row.m3PerHour, 2),
+                    custoM3: formatBRL(row.aggregateCostPerM3),
+                    participacao: `${formatNumber(row.participation, 1)}%`,
+                  }))}
+                  columns={[
+                    { key: "agregado", label: "Agregado CB" },
+                    { key: "viagens", label: "Viagens", align: "right" },
+                    { key: "manha", label: "H manhã", align: "right" },
+                    { key: "tarde", label: "H tarde", align: "right" },
+                    { key: "horas", label: "H total", align: "right" },
+                    { key: "viagensH", label: "Viagens/h", align: "right" },
+                    { key: "m3H", label: "m³/h", align: "right" },
+                    { key: "custoM3", label: "Custo/m³", align: "right" },
+                    { key: "participacao", label: "%", align: "right" },
+                  ]}
+                />
+              </div>
+            </div>
+          )}
+
+          {tab === "financial" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <FinancialChart kpis={kpis} />
+              <DailyFuelCostChart data={daily} />
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Custo operacional por obra"
+                  rows={operationalAnalytics.obraRanking.map((row) => ({
+                    obra: row.obra,
+                    diesel: formatBRL(row.fuelCost),
+                    agregados: formatBRL(row.aggregateCost),
+                    operacional: formatBRL(row.operationalCost),
+                    margem: formatBRL(row.margin),
+                    custoM3: formatBRL(row.operationalCostPerM3),
+                    eficiencia: `${formatNumber(row.efficiencyPercent, 0)}%`,
+                  }))}
+                  columns={[
+                    { key: "obra", label: "Obra" },
+                    { key: "diesel", label: "Custo diesel", align: "right" },
+                    { key: "agregados", label: "Custo agregados", align: "right" },
+                    { key: "operacional", label: "Custo operacional", align: "right" },
+                    { key: "margem", label: "Margem", align: "right" },
+                    { key: "custoM3", label: "Custo/m³", align: "right" },
+                    { key: "eficiencia", label: "Eficiência", align: "right" },
+                  ]}
+                />
+              </div>
+            </div>
+          )}
+
+          {tab === "comparison" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <ObraComparisonChart rows={obraCompare} />
+              <DistributionChart
+                title="Produção por obra"
+                data={operationalAnalytics.obraRanking.map((row) => ({
+                  label: row.obra,
+                  value: row.compactedM3,
+                }))}
+                description="m³ compactado por obra no filtro atual."
+                color={CHART_YELLOW}
+              />
+              <div className="lg:col-span-2">
+                <ObraRankingTable rows={operationalAnalytics.obraRanking} />
+              </div>
+            </div>
+          )}
+
+          {tab === "history" && (
+            <div className="space-y-4">
+              <AnalysisHistoryPanel
+                analyses={analyses}
+                selectedIds={selectedAnalysisIds}
+                onSelect={setSelectedAnalysisIds}
+              />
+              <ProductionConsumptionChart data={daily} />
             </div>
           )}
 
@@ -1866,8 +2504,10 @@ function ProducaoConsumo() {
                 </ul>
               </div>
               <div className="rounded bg-surface-highest p-3 text-xs text-on-surface-variant">
-                Análise: {selectedAnalysis.name} · Fator aplicado na importação:{" "}
-                {selectedAnalysis.swellFactor.toFixed(2)} · ID: {selectedAnalysis.id}
+                Escopo: {selectedAnalysisLabel}
+                {selectedAnalyses.length === 1 && selectedAnalysis
+                  ? ` · Fator aplicado na importação: ${selectedAnalysis.swellFactor.toFixed(2)} · ID: ${selectedAnalysis.id}`
+                  : ` · ${selectedAnalyses.length} análises selecionadas`}
               </div>
             </div>
           )}
@@ -2014,11 +2654,10 @@ function ProducaoConsumo() {
       {showAnalyses && (
         <AnalysesDialog
           analyses={analyses}
-          selectedId={selectedAnalysisId}
+          selectedIds={selectedAnalysisIds}
           onClose={() => setShowAnalyses(false)}
-          onSelect={(id) => {
-            setSelectedAnalysisId(id);
-            setShowAnalyses(false);
+          onSelect={(ids) => {
+            setSelectedAnalysisIds(ids);
             setTab("overview");
           }}
         />
