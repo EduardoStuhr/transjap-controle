@@ -358,6 +358,130 @@ export async function parseCarcaraFile(
   return { type: "fueling", rows };
 }
 
+type CarcaraPdeLayout = {
+  headerRow: number;
+  dateCol: number;
+  hoursCol: number;
+  obraCol: number;
+  fleet: string;
+  fleetLabel: string;
+};
+
+/**
+ * Detecta o layout específico da PDE Carcará (TransJap).
+ * Assinatura única: linha contendo "DIA" na coluna A e "DATA" na coluna B.
+ */
+function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPdeLayout | null {
+  let headerRow = -1;
+  for (let i = 0; i < Math.min(15, aoa.length); i++) {
+    const row = aoa[i] || [];
+    const colA = normalizeHeader(row[0]);
+    const colB = normalizeHeader(row[1]);
+    if (colA === "dia" && colB === "data") {
+      headerRow = i;
+      break;
+    }
+  }
+  if (headerRow < 0) return null;
+
+  const header = (aoa[headerRow] || []).map(normalizeHeader);
+  const groupingRow = headerRow > 0 ? (aoa[headerRow - 1] || []).map(normalizeHeader) : [];
+
+  let hoursCol = -1;
+  for (let c = 0; c < groupingRow.length; c++) {
+    if (groupingRow[c] && groupingRow[c].includes("horas trabalhadas")) {
+      for (let cc = c; cc < Math.min(c + 5, header.length); cc++) {
+        if (header[cc] === "total") {
+          hoursCol = cc;
+          break;
+        }
+      }
+      break;
+    }
+  }
+  if (hoursCol < 0) hoursCol = 4;
+
+  let obraCol = -1;
+  for (let c = 0; c < Math.max(header.length, groupingRow.length); c++) {
+    if (header[c] === "obra" || groupingRow[c] === "obra") {
+      obraCol = c;
+      break;
+    }
+  }
+
+  let fleet = "";
+  let fleetLabel = "";
+  for (let i = 0; i < Math.min(10, aoa.length); i++) {
+    const row = aoa[i] || [];
+    for (let c = 0; c < row.length - 1; c++) {
+      if (normalizeHeader(row[c]) === "frota") {
+        const fleetValue = row[c + 1];
+        if (!isEmptyValue(fleetValue)) {
+          fleet = normalizeFleet(fleetValue);
+          const modelValue = row[c + 2];
+          fleetLabel = `${trim(fleetValue)}${modelValue ? ` — ${trim(modelValue)}` : ""}`;
+          break;
+        }
+      }
+    }
+    if (fleet) break;
+  }
+
+  if (!fleet) {
+    fleet = normalizeFleet(sheetName);
+    fleetLabel = sheetName;
+  }
+  if (!fleet) return null;
+
+  return { headerRow, dateCol: 1, hoursCol, obraCol, fleet, fleetLabel };
+}
+
+function parseCarcaraPdeSheet(
+  aoa: unknown[][],
+  sheetName: string,
+  layout: CarcaraPdeLayout,
+  rows: ParsedDailyPart[],
+  _warnings: PdeWarning[],
+  options?: { dateFrom?: string; dateTo?: string },
+) {
+  let consecutiveEmpty = 0;
+  const dataRows = aoa.slice(layout.headerRow + 1);
+
+  for (let lineIndex = 0; lineIndex < dataRows.length; lineIndex++) {
+    const row = dataRows[lineIndex];
+    const rowNumber = layout.headerRow + lineIndex + 2;
+
+    const rowEmpty = !row || row.every((c) => isEmptyValue(c));
+    if (rowEmpty) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty >= 20) break;
+      continue;
+    }
+    consecutiveEmpty = 0;
+
+    if (isSeparatorRow(row)) continue;
+
+    const dataOriginal = row[layout.dateCol];
+    const dataConvertida = safeParseDate(dataOriginal);
+    if (!dataConvertida) continue;
+
+    if (options?.dateFrom && dataConvertida < options.dateFrom) continue;
+    if (options?.dateTo && dataConvertida > options.dateTo) continue;
+
+    const horas = parsePdeHours(row[layout.hoursCol]);
+    if (horas == null || horas <= 0) continue;
+
+    rows.push({
+      fleet: layout.fleet,
+      fleetLabel: layout.fleetLabel,
+      date: dataConvertida,
+      obra: layout.obraCol >= 0 ? trim(row[layout.obraCol]) : "",
+      hours: horas,
+      sourceSheet: `${sheetName}#${rowNumber}`,
+    });
+  }
+}
+
 function findDailyPartHeaderRow(aoa: unknown[][]): number | null {
   let best = { rowIndex: -1, score: 0 };
   for (let i = 0; i < Math.min(25, aoa.length); i++) {
@@ -391,9 +515,36 @@ function isSeparatorRow(row: unknown[]) {
   return !text || /\b(total|totais|subtotal|cabecalho|cabeçalho|separador)\b/.test(text);
 }
 
+// FIX 2: blacklist de abas que não são equipamento individual
+const PDE_SHEET_BLACKLIST = [
+  "dados auxiliares",
+  "mes",
+  "mês",
+  "consumo litro diario",
+  "consumo litro diário",
+  "dias trabalhados",
+  "localizacao frotas",
+  "localização frotas",
+  "comparacao",
+  "comparação",
+];
+
+function shouldParsePdeSheet(name: string): boolean {
+  const n = name
+    .normalize("NFKD")
+    .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (PDE_SHEET_BLACKLIST.includes(n)) return false;
+  if (n.startsWith("resumo ")) return false;
+  return /\d+\s*-\s*\S/.test(n);
+}
+
 export async function parsePdeFile(
   file: File,
   mapping?: PdeColumnMapping,
+  options?: { dateFrom?: string; dateTo?: string; requiredFleets?: Set<string> },
 ): Promise<PdeParseResult> {
   const XLSX = await import("xlsx");
   const buf = await file.arrayBuffer();
@@ -403,8 +554,32 @@ export async function parsePdeFile(
 
   for (const sheetName of wb.SheetNames) {
     if (mapping?.sheetName && mapping.sheetName !== sheetName) continue;
+    // FIX 2: ignora abas que não são de equipamento individual
+    if (!mapping?.sheetName && !shouldParsePdeSheet(sheetName)) continue;
     const sheet = wb.Sheets[sheetName];
     const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null });
+
+    if (!mapping) {
+      const carcaraLayout = detectCarcaraPdeLayout(aoa, sheetName);
+      if (carcaraLayout) {
+        if (
+          options?.requiredFleets &&
+          options.requiredFleets.size > 0 &&
+          !options.requiredFleets.has(carcaraLayout.fleet)
+        ) {
+          continue;
+        }
+        parseCarcaraPdeSheet(aoa, sheetName, carcaraLayout, rows, warnings, options);
+        continue;
+      }
+    }
+
+    // filtra abas genéricas de frotas que não estão no CMB (só frotas próprias operam)
+    if (!mapping?.sheetName && options?.requiredFleets && options.requiredFleets.size > 0) {
+      const sheetFleetKey = normalizeFleet(sheetName);
+      if (!sheetFleetKey || !options.requiredFleets.has(sheetFleetKey)) continue;
+    }
+
     const headerRow = mapping ? Math.max(0, mapping.startRow - 1) : findDailyPartHeaderRow(aoa);
     if (headerRow == null) {
       warnings.push({
@@ -446,9 +621,24 @@ export async function parsePdeFile(
     }
 
     let validDatesInSheet = 0;
-    aoa.slice(headerRow + 1).forEach((row, lineIndex) => {
+    // FIX 3: parada precoce para linhas vazias consecutivas (células fantasma do Excel)
+    let consecutiveEmpty = 0;
+    const dataRows = aoa.slice(headerRow + 1);
+
+    for (let lineIndex = 0; lineIndex < dataRows.length; lineIndex++) {
+      const row = dataRows[lineIndex];
       const rowNumber = headerRow + lineIndex + 2;
-      if (!row || isSeparatorRow(row)) return;
+
+      const rowEmpty = !row || row.every((c) => isEmptyValue(c));
+      if (rowEmpty) {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= 20) break;
+        continue;
+      }
+      consecutiveEmpty = 0;
+
+      if (isSeparatorRow(row)) continue;
+
       try {
         const dataOriginal = row[dateIdx];
         const dataConvertida = safeParseDate(dataOriginal);
@@ -465,9 +655,14 @@ export async function parsePdeFile(
               reason: "Data inválida na PDE.",
             });
           }
-          return;
+          continue;
         }
         validDatesInSheet++;
+
+        // FIX 4: descarta linhas fora do período selecionado pelo usuário
+        if (options?.dateFrom && dataConvertida < options.dateFrom) continue;
+        if (options?.dateTo && dataConvertida > options.dateTo) continue;
+
         if (!frota) {
           warnings.push({
             sheet: sheetName,
@@ -475,7 +670,7 @@ export async function parsePdeFile(
             value: rawFleet,
             reason: "Frota não identificada.",
           });
-          return;
+          continue;
         }
         if (horas == null || horas <= 0) {
           warnings.push({
@@ -484,17 +679,8 @@ export async function parsePdeFile(
             value: row[hoursIdx],
             reason: "Horas inválidas ou ausentes.",
           });
-          return;
+          continue;
         }
-
-        console.log({
-          aba: sheetName,
-          linha: rowNumber,
-          dataOriginal,
-          dataConvertida,
-          horas,
-          frota,
-        });
 
         rows.push({
           fleet: frota,
@@ -512,7 +698,7 @@ export async function parsePdeFile(
           reason: err instanceof Error ? err.message : "Erro inesperado na linha PDE.",
         });
       }
-    });
+    }
 
     if (validDatesInSheet === 0) {
       warnings.push({
@@ -524,5 +710,55 @@ export async function parsePdeFile(
     }
   }
 
+  // avisa sobre frotas do CMB que não têm registro na PDE
+  if (options?.requiredFleets && options.requiredFleets.size > 0) {
+    const processedFleets = new Set(rows.map((r) => normalizeFleet(r.fleet)));
+    for (const required of options.requiredFleets) {
+      if (!processedFleets.has(required)) {
+        warnings.push({
+          sheet: "—",
+          row: 0,
+          value: required,
+          reason: `Frota ${required} foi abastecida (CMB) mas não tem registro na PDE no período.`,
+        });
+      }
+    }
+  }
+
   return { rows, warnings };
+}
+
+// Mantém a API usada pela UI; a leitura robusta da PDE roda pelo parser principal.
+export function parsePdeFileInWorker(
+  file: File,
+  mapping?: PdeColumnMapping,
+  options?: { dateFrom?: string; dateTo?: string; requiredFleets?: Set<string> },
+): Promise<PdeParseResult> {
+  return parsePdeFile(file, mapping, options);
+}
+
+/**
+ * Extrai frotas próprias a partir do CMB (abastecimento).
+ * Não usa o RCO: caminhões do RCO são agregados terceirizados e não têm PDE.
+ */
+export function extractRequiredFleets(opts: { fueling?: ParsedFueling[] }): Set<string> {
+  const fleets = new Set<string>();
+  for (const f of opts.fueling ?? []) {
+    const key = normalizeFleet(f.prefix) || normalizeFleet(f.vehicleId) || normalizeFleet(f.plate);
+    if (key) fleets.add(key);
+  }
+  return fleets;
+}
+
+/**
+ * Extrai o intervalo de datas do CMB para filtrar linhas da PDE fora do período.
+ */
+export function extractDateRangeFromFueling(
+  fueling?: ParsedFueling[],
+): { dateFrom: string; dateTo: string } | null {
+  const dates: string[] = [];
+  for (const f of fueling ?? []) if (f.datetime) dates.push(f.datetime.slice(0, 10));
+  if (dates.length === 0) return null;
+  dates.sort();
+  return { dateFrom: dates[0], dateTo: dates[dates.length - 1] };
 }

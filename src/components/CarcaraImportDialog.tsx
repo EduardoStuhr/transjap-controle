@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,9 @@ import {
   normalizeDateKey,
   normalizeFleet,
   parseCarcaraFile,
-  parsePdeFile,
+  parsePdeFileInWorker,
+  extractRequiredFleets,
+  extractDateRangeFromFueling,
 } from "@/lib/carcara-parser";
 import type {
   CarcaraFileType,
@@ -160,8 +162,22 @@ export function CarcaraImportDialog({
     return arquivoPDE?.result.type === "pde" ? arquivoPDE.result.rows : [];
   }, [arquivoPDE]);
 
+  const hasRco = arquivoRCO?.result.type === "trips";
+  const hasCmb = arquivoCMB?.result.type === "fueling";
+  const hasPde = arquivoPDE?.result.type === "pde";
+
+  const parseErrors = useMemo(
+    () =>
+      [
+        arquivoRCO?.result.type === "unknown" ? arquivoRCO.result.message : "",
+        arquivoCMB?.result.type === "unknown" ? arquivoCMB.result.message : "",
+        arquivoPDE?.result.type === "unknown" ? arquivoPDE.result.message : "",
+      ].filter(Boolean),
+    [arquivoCMB, arquivoPDE, arquivoRCO],
+  );
+
   const preview = useMemo<Preview | null>(() => {
-    if (!validFactor || trips.length === 0 || fueling.length === 0 || dailyParts.length === 0) {
+    if (!validFactor || !hasRco || !hasCmb || !hasPde) {
       return null;
     }
     const tripsInPeriod = trips.filter((row) => {
@@ -245,18 +261,57 @@ export function CarcaraImportDialog({
     draft.obra,
     factor,
     fueling,
+    hasCmb,
+    hasPde,
+    hasRco,
     trips,
     validFactor,
   ]);
 
-  const step1Valid =
+  const cmbRequiredFleets = useMemo(
+    () => extractRequiredFleets({ fueling: fueling.length > 0 ? fueling : undefined }),
+    [fueling],
+  );
+
+  function buildPdeOptions(overrideFueling?: ParsedFueling[]) {
+    const fuelingRows = overrideFueling ?? (fueling.length > 0 ? fueling : undefined);
+    const fleets = extractRequiredFleets({ fueling: fuelingRows });
+    const range = extractDateRangeFromFueling(fuelingRows);
+    return {
+      requiredFleets: fleets.size > 0 ? fleets : undefined,
+      dateFrom: range?.dateFrom ?? draft.dateStart,
+      dateTo: range?.dateTo ?? draft.dateEnd,
+    };
+  }
+
+  const contextValid = Boolean(
     draft.name.trim() &&
     draft.obra.trim() &&
     draft.material.trim() &&
     draft.dateStart &&
     draft.dateEnd &&
-    validFactor;
-  const step2Valid = !!arquivoRCO && !!arquivoCMB && !!arquivoPDE;
+    validFactor,
+  );
+  const canGoPreview = contextValid && hasRco && hasCmb && hasPde && parseErrors.length === 0;
+  const canGoConfirm = canGoPreview && !!preview;
+
+  useEffect(() => {
+    console.log("canGoPreview", {
+      hasRco,
+      hasCmb,
+      hasPde,
+      contextValid,
+      parseErrors,
+      currentStep: step,
+    });
+  }, [contextValid, hasCmb, hasPde, hasRco, parseErrors, step]);
+
+  function canAccessStep(targetStep: number) {
+    if (targetStep <= 1) return true;
+    if (targetStep === 2) return contextValid;
+    if (targetStep === 3) return canGoPreview;
+    return canGoConfirm;
+  }
 
   function applyParsedFile(item: FileItem, rcoAtual: FileItem | null, cmbAtual: FileItem | null) {
     if (item.result.type === "trips") {
@@ -308,7 +363,12 @@ export function CarcaraImportDialog({
         return;
       }
 
-      const parsed = await parsePdeFile(file);
+      if (!arquivoCMB) {
+        toast.info(
+          "Suba o CMB (abastecimento) primeiro para filtrar a PDE automaticamente. Processando PDE completa...",
+        );
+      }
+      const parsed = await parsePdeFileInWorker(file, undefined, buildPdeOptions());
       if (parsed.rows.length > 0) {
         setArquivoPDE({
           file,
@@ -351,7 +411,13 @@ export function CarcaraImportDialog({
       try {
         const result = await parseCarcaraFile(file);
         if (result.type === "unknown") {
-          const pdeRows = await parsePdeFile(file);
+          if (!cmbAtual) {
+            toast.info(
+              "Suba o CMB (abastecimento) primeiro para filtrar a PDE automaticamente. Processando PDE completa...",
+            );
+          }
+          const cmbFueling = cmbAtual?.result.type === "fueling" ? cmbAtual.result.rows : undefined;
+          const pdeRows = await parsePdeFileInWorker(file, undefined, buildPdeOptions(cmbFueling));
           if (pdeRows.rows.length > 0) {
             if (pdeAtual) {
               toast.error("Já existe uma planilha PDE carregada");
@@ -403,7 +469,12 @@ export function CarcaraImportDialog({
 
     try {
       if (type === "pde") {
-        const parsed = await parsePdeFile(file);
+        if (!arquivoCMB) {
+          toast.info(
+            "Suba o CMB (abastecimento) primeiro para filtrar a PDE automaticamente. Processando PDE completa...",
+          );
+        }
+        const parsed = await parsePdeFileInWorker(file, undefined, buildPdeOptions());
         if (parsed.rows.length > 0) {
           setArquivoPDE({
             file,
@@ -444,7 +515,7 @@ export function CarcaraImportDialog({
       obraColumn: pdeFallback.obraColumn || undefined,
     };
     try {
-      const parsed = await parsePdeFile(pdeFallback.file, mapping);
+      const parsed = await parsePdeFileInWorker(pdeFallback.file, mapping, buildPdeOptions());
       if (parsed.rows.length === 0) {
         toast.error(
           parsed.warnings[0]?.reason || "Não foi possível identificar datas válidas nesta aba.",
@@ -463,7 +534,7 @@ export function CarcaraImportDialog({
   }
 
   async function handleCreate() {
-    if (!preview || !step1Valid || !step2Valid) return;
+    if (!preview || !canGoConfirm) return;
     setCreating(true);
     try {
       const result = await createAnalysis({
@@ -505,18 +576,29 @@ export function CarcaraImportDialog({
         </DialogHeader>
 
         <div className="flex gap-2 mb-4">
-          {["Dados", "Planilhas", "Preview", "Confirmar"].map((label, index) => (
-            <div
-              key={label}
-              className={`flex-1 rounded border px-3 py-2 text-xs font-black uppercase tracking-widest ${
-                step === index + 1
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border-low text-on-surface-variant"
-              }`}
-            >
-              {index + 1}. {label}
-            </div>
-          ))}
+          {["Dados", "Planilhas", "Preview", "Confirmar"].map((label, index) => {
+            const targetStep = index + 1;
+            const enabled = canAccessStep(targetStep);
+            return (
+              <button
+                type="button"
+                key={label}
+                disabled={!enabled}
+                onClick={() => {
+                  if (enabled) setStep(targetStep);
+                }}
+                className={`flex-1 rounded border px-3 py-2 text-left text-xs font-black uppercase tracking-widest transition-colors ${
+                  step === index + 1
+                    ? "border-primary bg-primary/10 text-primary"
+                    : enabled
+                      ? "border-border-low text-on-surface-variant hover:border-primary/60 hover:text-on-surface"
+                      : "border-border-low text-on-surface-variant/40"
+                }`}
+              >
+                {index + 1}. {label}
+              </button>
+            );
+          })}
         </div>
 
         {step === 1 && (
@@ -634,15 +716,23 @@ export function CarcaraImportDialog({
                 onFileSelect={handleFileSelect}
                 onRemove={() => setArquivoCMB(null)}
               />
-              <UploadCard
-                title="Planilha PDE"
-                loadedLabel="PDE carregada"
-                emptyLabel="Aguardando Parte Diária de Equipamentos"
-                item={arquivoPDE}
-                uploadType="pde"
-                onFileSelect={handleFileSelect}
-                onRemove={() => setArquivoPDE(null)}
-              />
+              <div>
+                <UploadCard
+                  title="Planilha PDE"
+                  loadedLabel="PDE carregada"
+                  emptyLabel="Aguardando Parte Diária de Equipamentos"
+                  item={arquivoPDE}
+                  uploadType="pde"
+                  onFileSelect={handleFileSelect}
+                  onRemove={() => setArquivoPDE(null)}
+                />
+                {arquivoPDE && cmbRequiredFleets.size > 0 && (
+                  <p className="text-xs text-on-surface-variant mt-1 px-1">
+                    Filtrado para {cmbRequiredFleets.size} frota(s) própria(s) identificada(s) no
+                    CMB
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-3 text-xs">
@@ -762,15 +852,15 @@ export function CarcaraImportDialog({
             <Button
               onClick={() => setStep((s) => s + 1)}
               disabled={
-                (step === 1 && !step1Valid) ||
-                (step === 2 && !step2Valid) ||
-                (step === 3 && !preview)
+                (step === 1 && !contextValid) ||
+                (step === 2 && !canGoPreview) ||
+                (step === 3 && !canGoConfirm)
               }
             >
               Avançar
             </Button>
           ) : (
-            <Button onClick={handleCreate} disabled={creating || !preview}>
+            <Button onClick={handleCreate} disabled={creating || !canGoConfirm}>
               {creating ? "Criando..." : "Criar análise"}
             </Button>
           )}
