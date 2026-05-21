@@ -194,9 +194,7 @@ function Dashboard() {
           )}
         </div>
         <div className="bg-surface-container border border-border-low p-5 rounded-lg">
-          <h3 className="text-sm font-black uppercase tracking-widest mb-4">
-            Etapas em andamento
-          </h3>
+          <h3 className="text-sm font-black uppercase tracking-widest mb-4">Etapas em andamento</h3>
           {stepsInProgress.length > 0 ? (
             <div className="space-y-2">
               {stepsInProgress.slice(0, 3).map((step) => (
@@ -318,9 +316,7 @@ function Dashboard() {
                       {task.title}
                     </p>
                     <p className="text-[10px] text-on-surface-variant mt-1">
-                      {task.assignedTo.length > 0
-                        ? task.assignedTo.join(", ")
-                        : "Sem destinatário"}
+                      {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}
                     </p>
                   </button>
                 );

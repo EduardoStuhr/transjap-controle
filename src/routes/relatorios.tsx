@@ -106,8 +106,7 @@ function Relatorios() {
     return { total, completionPct, avgStepTime, topEquipments };
   }, [maintenances]);
 
-  const toggle = (key: ReportKey) =>
-    setOpenReport((current) => (current === key ? null : key));
+  const toggle = (key: ReportKey) => setOpenReport((current) => (current === key ? null : key));
 
   return (
     <AppLayout title="Relatórios">
@@ -217,18 +216,13 @@ function ReportList({
   emptyText: string;
 }) {
   if (rows.length === 0) {
-    return emptyText ? (
-      <p className="text-sm text-on-surface-variant">{emptyText}</p>
-    ) : null;
+    return emptyText ? <p className="text-sm text-on-surface-variant">{emptyText}</p> : null;
   }
 
   return (
     <ul className="space-y-2">
       {rows.map((row) => (
-        <li
-          key={row.label}
-          className="flex items-center justify-between gap-3 text-sm"
-        >
+        <li key={row.label} className="flex items-center justify-between gap-3 text-sm">
           <span className="text-on-surface truncate">{row.label}</span>
           <strong className="text-on-surface font-black">{row.value}</strong>
         </li>

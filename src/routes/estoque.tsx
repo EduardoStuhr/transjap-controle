@@ -172,23 +172,26 @@ function Estoque() {
   const selectedLocation = locations.find((location) => location.id === selectedLocationId) || null;
   const canWrite = currentRole !== "visualização";
 
-  const handleScan = useCallback((value: string) => {
-    const result = inventoryActions.resolveScan(value);
-    if (!result) {
-      toast.error("Código não encontrado", { description: value });
-      return;
-    }
+  const handleScan = useCallback(
+    (value: string) => {
+      const result = inventoryActions.resolveScan(value);
+      if (!result) {
+        toast.error("Código não encontrado", { description: value });
+        return;
+      }
 
-    if (result.type === "item") {
-      setSelectedItemId(result.item.id);
-      setMovementDraft((draft) => ({ ...draft, itemId: result.item.id }));
-      toast.success("Peça encontrada", { description: result.item.name });
-      return;
-    }
+      if (result.type === "item") {
+        setSelectedItemId(result.item.id);
+        setMovementDraft((draft) => ({ ...draft, itemId: result.item.id }));
+        toast.success("Peça encontrada", { description: result.item.name });
+        return;
+      }
 
-    setSelectedLocationId(result.location.id);
-    toast.success("Localização aberta", { description: result.location.name });
-  }, [inventoryActions]);
+      setSelectedLocationId(result.location.id);
+      toast.success("Localização aberta", { description: result.location.name });
+    },
+    [inventoryActions],
+  );
 
   const saveItem = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

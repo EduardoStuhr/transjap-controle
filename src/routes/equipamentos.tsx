@@ -3,10 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { useMemo, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  EquipmentDetailsPanel,
-  type EquipmentDetail,
-} from "@/components/EquipmentDetailsPanel";
+import { EquipmentDetailsPanel, type EquipmentDetail } from "@/components/EquipmentDetailsPanel";
 import {
   Dialog,
   DialogContent,
@@ -462,8 +459,8 @@ function Equipamentos() {
             <DialogTitle className="text-status-error">Excluir equipamento</DialogTitle>
             <DialogDescription>
               Você está prestes a excluir{" "}
-              <strong className="text-on-surface">{deleteTarget?.model}</strong>. Esta ação não
-              pode ser desfeita.
+              <strong className="text-on-surface">{deleteTarget?.model}</strong>. Esta ação não pode
+              ser desfeita.
             </DialogDescription>
           </DialogHeader>
 

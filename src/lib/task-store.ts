@@ -85,7 +85,9 @@ function normalizeResponses(value: unknown): TaskResponse[] {
       id: response.id || newId("RS"),
       author: response.author || "",
       text: response.text || "",
-      attachments: sanitizeAttachments(Array.isArray(response.attachments) ? response.attachments : []),
+      attachments: sanitizeAttachments(
+        Array.isArray(response.attachments) ? response.attachments : [],
+      ),
       timestamp: response.timestamp || displayDate(),
     };
   });
@@ -218,9 +220,11 @@ function getCachedState(queryClient: ReturnType<typeof useQueryClient>): TaskSta
 
 function newerThanLocal(remoteTask: TaskRecord | undefined, localTask: TaskRecord) {
   if (!remoteTask) return true;
-  return (localTask.updatedAt || localTask.createdAt).localeCompare(
-    remoteTask.updatedAt || remoteTask.createdAt,
-  ) > 0;
+  return (
+    (localTask.updatedAt || localTask.createdAt).localeCompare(
+      remoteTask.updatedAt || remoteTask.createdAt,
+    ) > 0
+  );
 }
 
 function useLocalTaskMigration(remoteState: TaskState | undefined, enabled: boolean) {

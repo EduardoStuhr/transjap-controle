@@ -128,10 +128,7 @@ export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: Sto
   );
 }
 
-export function exportMaintenanceAsCsv(
-  record: MaintenanceRecord,
-  movements: StockMovement[] = [],
-) {
+export function exportMaintenanceAsCsv(record: MaintenanceRecord, movements: StockMovement[] = []) {
   const totalCost =
     movements.reduce((sum, movement) => sum + movement.costImpact, 0) || record.totalCost;
 

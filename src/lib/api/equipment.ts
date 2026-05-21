@@ -157,10 +157,7 @@ export const updateEquipment = createServerFn({ method: "POST" })
       }
     }
 
-    await db
-      .update(equipmentTable)
-      .set(patch)
-      .where(eq(equipmentTable.id, data.id));
+    await db.update(equipmentTable).set(patch).where(eq(equipmentTable.id, data.id));
     return { ok: true };
   });
 

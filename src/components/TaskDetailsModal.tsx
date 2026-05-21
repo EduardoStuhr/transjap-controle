@@ -4,19 +4,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/AppLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  AttachmentUpload,
-  type AttachedFile,
-} from "@/components/AttachmentUpload";
+import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
 import { TASK_STATUS_CONFIG, type TaskRecord } from "@/lib/task-types";
 import { useAuthStore } from "@/lib/auth-store";
 import { formatEquipmentReference, resolveRecipients } from "@/lib/operational-options";
 import { useEquipmentStore } from "@/lib/equipment-store";
-import {
-  downloadAttachment,
-  exportTaskAsCsv,
-  exportTaskAsPdf,
-} from "@/lib/task-export";
+import { downloadAttachment, exportTaskAsCsv, exportTaskAsPdf } from "@/lib/task-export";
 
 interface TaskDetailsModalProps {
   open: boolean;
@@ -62,10 +55,7 @@ export function TaskDetailsModal({
   const [responseText, setResponseText] = useState("");
   const [responseAttachments, setResponseAttachments] = useState<AttachedFile[]>([]);
 
-  const recipients = useMemo(
-    () => (task ? resolveRecipients(task.assignedTo) : []),
-    [task],
-  );
+  const recipients = useMemo(() => (task ? resolveRecipients(task.assignedTo) : []), [task]);
   const isRecipient = Boolean(user && recipients.includes(user.name));
 
   if (!task) return null;
@@ -304,7 +294,9 @@ export function TaskDetailsModal({
                         </div>
                         <div>
                           <p className="font-bold text-sm text-on-surface">{response.author}</p>
-                          <p className="text-[10px] text-on-surface-variant">{response.timestamp}</p>
+                          <p className="text-[10px] text-on-surface-variant">
+                            {response.timestamp}
+                          </p>
                         </div>
                       </div>
                       <span className="text-[10px] font-black uppercase tracking-widest text-status-info bg-status-info/10 px-2 py-1 rounded">

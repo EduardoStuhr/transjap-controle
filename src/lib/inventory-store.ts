@@ -205,7 +205,9 @@ function useLocalInventoryMigration(remoteData: InventoryData | undefined, enabl
 
     const local = readStorage();
     const remoteItems = new Map(remoteData.items.map((item) => [item.id, item]));
-    const remoteLocations = new Map(remoteData.locations.map((location) => [location.id, location]));
+    const remoteLocations = new Map(
+      remoteData.locations.map((location) => [location.id, location]),
+    );
     const remoteMovements = new Set(remoteData.movements.map((movement) => movement.id));
 
     const items = local.items.filter((item) => newerByUpdatedAt(remoteItems.get(item.id), item));
@@ -228,7 +230,9 @@ function useLocalInventoryMigration(remoteData: InventoryData | undefined, enabl
       ...movements.map((movement) => {
         const item = local.items.find((candidate) => candidate.id === movement.itemId);
         return item
-          ? createInventoryMovement({ data: { item, movement: { ...movement, syncStatus: "synced" } } })
+          ? createInventoryMovement({
+              data: { item, movement: { ...movement, syncStatus: "synced" } },
+            })
           : updateInventoryMovement({ data: { ...movement, syncStatus: "synced" } });
       }),
     ])
@@ -374,7 +378,8 @@ export function useInventoryActions() {
     async saveItem(draft: InventoryDraft, id?: string) {
       const current = getCachedState(queryClient);
       const existing = current.items.find((item) => item.id === id);
-      const code = draft.internalCode.trim() || draft.sku.trim() || existing?.internalCode || newId("ITEM");
+      const code =
+        draft.internalCode.trim() || draft.sku.trim() || existing?.internalCode || newId("ITEM");
       const item: InventoryItem = {
         ...draft,
         id: id || newId("IT"),
@@ -494,10 +499,14 @@ export function useInventoryActions() {
 
 export const inventoryActions = {
   setRole: (): never => {
-    throw new Error("inventoryActions.setRole() foi removido. Use useInventoryActions().setRole().");
+    throw new Error(
+      "inventoryActions.setRole() foi removido. Use useInventoryActions().setRole().",
+    );
   },
   saveItem: (): never => {
-    throw new Error("inventoryActions.saveItem() foi removido. Use useInventoryActions().saveItem().");
+    throw new Error(
+      "inventoryActions.saveItem() foi removido. Use useInventoryActions().saveItem().",
+    );
   },
   saveLocation: (): never => {
     throw new Error(

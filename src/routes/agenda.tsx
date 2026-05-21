@@ -93,10 +93,13 @@ function Agenda() {
     [editingTaskId, visibleTasks],
   );
 
-  const handleCreateTask = useCallback(async (data: TaskModalData) => {
-    await taskActions.createTask(data);
-    setShowCreateModal(false);
-  }, [taskActions]);
+  const handleCreateTask = useCallback(
+    async (data: TaskModalData) => {
+      await taskActions.createTask(data);
+      setShowCreateModal(false);
+    },
+    [taskActions],
+  );
 
   const handleUpdateTask = useCallback(
     async (data: TaskModalData) => {
@@ -107,11 +110,14 @@ function Agenda() {
     [editingTaskId, taskActions],
   );
 
-  const openTaskDetails = useCallback((taskId: string) => {
-    void taskActions.markTaskViewed(taskId);
-    setSelectedTaskId(taskId);
-    setShowDetailsModal(true);
-  }, [taskActions]);
+  const openTaskDetails = useCallback(
+    (taskId: string) => {
+      void taskActions.markTaskViewed(taskId);
+      setSelectedTaskId(taskId);
+      setShowDetailsModal(true);
+    },
+    [taskActions],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -134,18 +140,24 @@ function Agenda() {
     setShowDetailsModal(false);
   }, []);
 
-  const approveRequest = useCallback(async (id: string) => {
-    const item = await taskActions.approveRequest(id);
-    if (!item) return;
-    toast.success("Solicitação aprovada", {
-      description: `${item.title} foi convertida em tarefa.`,
-    });
-  }, [taskActions]);
+  const approveRequest = useCallback(
+    async (id: string) => {
+      const item = await taskActions.approveRequest(id);
+      if (!item) return;
+      toast.success("Solicitação aprovada", {
+        description: `${item.title} foi convertida em tarefa.`,
+      });
+    },
+    [taskActions],
+  );
 
-  const rejectRequest = useCallback(async (id: string) => {
-    const item = await taskActions.rejectRequest(id);
-    toast.error("Solicitação recusada", { description: item?.title });
-  }, [taskActions]);
+  const rejectRequest = useCallback(
+    async (id: string) => {
+      const item = await taskActions.rejectRequest(id);
+      toast.error("Solicitação recusada", { description: item?.title });
+    },
+    [taskActions],
+  );
 
   return (
     <AppLayout>
@@ -245,7 +257,9 @@ function Agenda() {
         <div className="text-center py-12">
           <Icon name="task_alt" className="text-5xl text-on-surface-variant/30 mx-auto mb-3" />
           <p className="text-on-surface-variant">
-            {visibleTasks.length === 0 ? "Nenhuma tarefa cadastrada" : "Nenhuma tarefa neste filtro"}
+            {visibleTasks.length === 0
+              ? "Nenhuma tarefa cadastrada"
+              : "Nenhuma tarefa neste filtro"}
           </p>
         </div>
       )}

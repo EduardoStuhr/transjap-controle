@@ -432,9 +432,7 @@ export function TaskModal({
                   <div className="flex justify-between">
                     <dt className="text-on-surface-variant font-semibold">Destinatários:</dt>
                     <dd className="text-on-surface font-bold text-right">
-                      {formData.assignedTo.length > 0
-                        ? formData.assignedTo.join(", ")
-                        : "Nenhum"}
+                      {formData.assignedTo.length > 0 ? formData.assignedTo.join(", ") : "Nenhum"}
                     </dd>
                   </div>
                   <div className="flex justify-between">

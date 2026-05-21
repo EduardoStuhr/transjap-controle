@@ -62,7 +62,9 @@ export function formatEquipmentLabel(equipment: Pick<Equipment, "id" | "model">)
   return `FROTA ${equipment.id} - ${equipment.model}`;
 }
 
-export function buildEquipmentOptions(equipments: Pick<Equipment, "id" | "model">[]): EquipmentOption[] {
+export function buildEquipmentOptions(
+  equipments: Pick<Equipment, "id" | "model">[],
+): EquipmentOption[] {
   if (equipments.length > 0) {
     return equipments.map((equipment) => ({
       value: equipment.id,

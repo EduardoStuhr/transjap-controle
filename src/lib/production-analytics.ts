@@ -1354,7 +1354,8 @@ export function calcCostPerM3Stats(daily: { date: string; costPerM3: number }[])
     .map((d) => d.costPerM3)
     .sort((a, b) => a - b);
   if (sorted.length === 0) return { median: 0, p25: 0, p75: 0, outliers: [] };
-  const at = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+  const at = (p: number) =>
+    sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
   const p25 = at(0.25);
   const p75 = at(0.75);
   const median = at(0.5);
@@ -1386,7 +1387,14 @@ export function detectRisingCostAlerts(
 }
 
 export function buildTopConsumersByM3(opts: {
-  fueling: { fleet: string; fleetLabel: string; liters: number; cost: number; obra: string; date: string }[];
+  fueling: {
+    fleet: string;
+    fleetLabel: string;
+    liters: number;
+    cost: number;
+    obra: string;
+    date: string;
+  }[];
   dailyParts: { fleet: string; hours: number; obra: string; date: string }[];
   trips: { obra: string; date: string; cubicMCompacted: number }[];
 }): { fleet: string; fleetLabel: string; liters: number; m3Attributed: number; ratio: number }[] {
@@ -1406,7 +1414,8 @@ export function buildTopConsumersByM3(opts: {
   }
   const result = new Map<string, { fleetLabel: string; liters: number; m3Attributed: number }>();
   for (const f of opts.fueling) {
-    if (!result.has(f.fleet)) result.set(f.fleet, { fleetLabel: f.fleetLabel || f.fleet, liters: 0, m3Attributed: 0 });
+    if (!result.has(f.fleet))
+      result.set(f.fleet, { fleetLabel: f.fleetLabel || f.fleet, liters: 0, m3Attributed: 0 });
     result.get(f.fleet)!.liters += f.liters;
   }
   for (const [fleet, fleetMap] of hoursByFleetObraDate) {

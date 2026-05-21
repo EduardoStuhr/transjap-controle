@@ -21,8 +21,7 @@ interface AttachmentUploadProps {
   accept?: string;
 }
 
-export const DEFAULT_ATTACHMENT_ACCEPT =
-  "image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt";
+export const DEFAULT_ATTACHMENT_ACCEPT = "image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt";
 
 export function AttachmentUpload({
   files,

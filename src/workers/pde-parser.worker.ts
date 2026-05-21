@@ -8,9 +8,7 @@ type Msg = {
   dateTo?: string;
   requiredFleets?: Set<string>;
 };
-type Reply =
-  | { kind: "result"; result: PdeParseResult }
-  | { kind: "error"; message: string };
+type Reply = { kind: "result"; result: PdeParseResult } | { kind: "error"; message: string };
 
 self.onmessage = async (e: MessageEvent<Msg>) => {
   try {

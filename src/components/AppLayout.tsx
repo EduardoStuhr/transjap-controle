@@ -208,11 +208,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 </div>
               )}
             </div>
-            <img
-              src="/logo.png"
-              alt="TransJap"
-              className="md:hidden h-8 w-auto object-contain"
-            />
+            <img src="/logo.png" alt="TransJap" className="md:hidden h-8 w-auto object-contain" />
           </div>
 
           <div className="flex items-center gap-3">
@@ -239,20 +235,13 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 <div className="absolute right-0 top-12 w-80 max-h-96 overflow-y-auto bg-surface-container border border-border-low rounded-lg shadow-industrial-lg z-50 animate-fade-in">
                   <div className="p-3 border-b border-border-low flex items-center justify-between">
                     <span className="text-xs font-black uppercase tracking-widest">Alertas</span>
-                    <button
-                      type="button"
-                      onClick={() => setNotifOpen(false)}
-                      aria-label="Fechar"
-                    >
+                    <button type="button" onClick={() => setNotifOpen(false)} aria-label="Fechar">
                       <Icon name="close" className="text-on-surface-variant text-base" />
                     </button>
                   </div>
                   {totalAlertCount === 0 ? (
                     <div className="px-4 py-8 text-center">
-                      <Icon
-                        name="check_circle"
-                        className="text-3xl text-on-surface-variant/30"
-                      />
+                      <Icon name="check_circle" className="text-3xl text-on-surface-variant/30" />
                       <p className="text-xs text-on-surface-variant font-medium mt-2">
                         Nenhum alerta no momento
                       </p>
@@ -272,10 +261,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                               }}
                               className="w-full text-left px-4 py-3 hover:bg-surface-highest transition-colors flex items-start gap-3"
                             >
-                              <Icon
-                                name="report"
-                                className="text-status-error text-base mt-0.5"
-                              />
+                              <Icon name="report" className="text-status-error text-base mt-0.5" />
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-bold text-on-surface truncate">
                                   {task.title}

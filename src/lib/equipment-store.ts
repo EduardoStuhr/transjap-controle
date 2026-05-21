@@ -155,8 +155,7 @@ export function useEquipmentActions() {
 
   return {
     add: (draft: EquipmentDraft) => addMut.mutateAsync(draft),
-    update: (id: string, patch: Partial<EquipmentDraft>) =>
-      updateMut.mutateAsync({ id, patch }),
+    update: (id: string, patch: Partial<EquipmentDraft>) => updateMut.mutateAsync({ id, patch }),
     remove: (id: string) => removeMut.mutateAsync(id),
   };
 }
@@ -169,12 +168,18 @@ export function useEquipmentActions() {
  */
 export const equipmentActions = {
   add: (): never => {
-    throw new Error("equipmentActions.add() foi removido. Use useEquipmentActions().add() dentro de um componente React.");
+    throw new Error(
+      "equipmentActions.add() foi removido. Use useEquipmentActions().add() dentro de um componente React.",
+    );
   },
   update: (): never => {
-    throw new Error("equipmentActions.update() foi removido. Use useEquipmentActions().update() dentro de um componente React.");
+    throw new Error(
+      "equipmentActions.update() foi removido. Use useEquipmentActions().update() dentro de um componente React.",
+    );
   },
   remove: (): never => {
-    throw new Error("equipmentActions.remove() foi removido. Use useEquipmentActions().remove() dentro de um componente React.");
+    throw new Error(
+      "equipmentActions.remove() foi removido. Use useEquipmentActions().remove() dentro de um componente React.",
+    );
   },
 } as const;
