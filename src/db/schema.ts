@@ -273,3 +273,24 @@ export type DbFueling = typeof fueling.$inferSelect;
 export type DbEquipmentDailyPart = typeof equipmentDailyParts.$inferSelect;
 export type DbSwellFactor = typeof swellFactors.$inferSelect;
 export type DbProductionAnalysis = typeof productionAnalyses.$inferSelect;
+
+export const reminders = sqliteTable("reminders", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  kind: text("kind").notNull().default("reminder"),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  date: text("date").notNull(),
+  time: text("time"),
+  endTime: text("end_time"),
+  location: text("location").notNull().default(""),
+  color: text("color").notNull().default("blue"),
+  priority: text("priority").notNull().default("média"),
+  status: text("status").notNull().default("pendente"),
+  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export type DbReminder = typeof reminders.$inferSelect;
+export type DbReminderInsert = typeof reminders.$inferInsert;

@@ -21,6 +21,7 @@ import { useMaintenanceStore } from "@/lib/maintenance-store";
 const NAV = [
   { to: "/", label: "Dashboard", icon: "dashboard" },
   { to: "/agenda", label: "Agenda Operacional", icon: "calendar_today" },
+  { to: "/calendario", label: "Calendário", icon: "calendar_today" },
   { to: "/manutencao", label: "Manutenção", icon: "build" },
   { to: "/equipamentos", label: "Equipamentos", icon: "construction" },
   { to: "/producao-consumo", label: "Produção × Consumo", icon: "query_stats" },

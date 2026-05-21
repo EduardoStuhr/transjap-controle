@@ -62,6 +62,12 @@ function Agenda() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const createFromCalendar = window.sessionStorage.getItem("transjap:create-task");
+    if (createFromCalendar) {
+      window.sessionStorage.removeItem("transjap:create-task");
+      window.localStorage.removeItem("transjap:fleet-command:task-draft:create");
+      setShowCreateModal(true);
+    }
     const equipment = window.sessionStorage.getItem("transjap:prefill:task-equipment");
     if (!equipment) return;
     window.sessionStorage.removeItem("transjap:prefill:task-equipment");
@@ -106,6 +112,22 @@ function Agenda() {
     setSelectedTaskId(taskId);
     setShowDetailsModal(true);
   }, [taskActions]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const taskId = window.sessionStorage.getItem("transjap:open-task-id");
+    if (!taskId || !visibleTasks.some((task) => task.id === taskId)) return;
+    window.sessionStorage.removeItem("transjap:open-task-id");
+    openTaskDetails(taskId);
+  }, [openTaskDetails, visibleTasks]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const taskId = window.sessionStorage.getItem("transjap:edit-task-id");
+    if (!taskId || !visibleTasks.some((task) => task.id === taskId)) return;
+    window.sessionStorage.removeItem("transjap:edit-task-id");
+    setEditingTaskId(taskId);
+  }, [visibleTasks]);
 
   const handleEditFromDetails = useCallback((task: TaskRecord) => {
     setEditingTaskId(task.id);

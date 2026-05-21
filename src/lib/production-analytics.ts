@@ -1308,3 +1308,125 @@ export function buildPeriodLabel(date: string, scope: OperationalScope) {
   if (scope === "daily") return shortDate(date);
   return date;
 }
+
+export function calcEnergyEfficiency(opts: {
+  compactedM3: number;
+  liters: number;
+  previousCompactedM3?: number;
+  previousLiters?: number;
+}): { ratio: number; previous: number | null; delta: number | null } {
+  const ratio = opts.liters > 0 ? opts.compactedM3 / opts.liters : 0;
+  if (opts.previousLiters && opts.previousLiters > 0 && opts.previousCompactedM3 != null) {
+    const previous = opts.previousCompactedM3 / opts.previousLiters;
+    return { ratio, previous, delta: ratio - previous };
+  }
+  return { ratio, previous: null, delta: null };
+}
+
+export function buildDailyDieselByObra(fueling: { date: string; liters: number; obra: string }[]): {
+  data: Record<string, number | string>[];
+  obras: string[];
+} {
+  const obras = new Set<string>();
+  const byDate = new Map<string, Record<string, number>>();
+  for (const row of fueling) {
+    if (!row.date || !row.liters) continue;
+    const obra = row.obra || "Sem obra";
+    obras.add(obra);
+    if (!byDate.has(row.date)) byDate.set(row.date, {});
+    const day = byDate.get(row.date)!;
+    day[obra] = (day[obra] ?? 0) + row.liters;
+  }
+  const data = Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, values]) => ({ date, ...values }));
+  return { data, obras: Array.from(obras).sort() };
+}
+
+export function calcCostPerM3Stats(daily: { date: string; costPerM3: number }[]): {
+  median: number;
+  p25: number;
+  p75: number;
+  outliers: { date: string; costPerM3: number }[];
+} {
+  const sorted = daily
+    .filter((d) => d.costPerM3 > 0 && isFinite(d.costPerM3))
+    .map((d) => d.costPerM3)
+    .sort((a, b) => a - b);
+  if (sorted.length === 0) return { median: 0, p25: 0, p75: 0, outliers: [] };
+  const at = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+  const p25 = at(0.25);
+  const p75 = at(0.75);
+  const median = at(0.5);
+  const outliers = daily.filter((d) => d.costPerM3 > p75 && isFinite(d.costPerM3));
+  return { median, p25, p75, outliers };
+}
+
+export function detectRisingCostAlerts(
+  daily: { date: string; obra: string; costPerM3: number }[],
+): { obra: string; days: string[]; deltaPct: number }[] {
+  const byObra = new Map<string, { date: string; costPerM3: number }[]>();
+  for (const row of daily) {
+    if (!byObra.has(row.obra)) byObra.set(row.obra, []);
+    byObra.get(row.obra)!.push({ date: row.date, costPerM3: row.costPerM3 });
+  }
+  const alerts: { obra: string; days: string[]; deltaPct: number }[] = [];
+  for (const [obra, rows] of byObra) {
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+    if (rows.length < 3) continue;
+    const last3 = rows.slice(-3);
+    const allRising =
+      last3[0].costPerM3 < last3[1].costPerM3 && last3[1].costPerM3 < last3[2].costPerM3;
+    if (allRising && last3[0].costPerM3 > 0) {
+      const deltaPct = ((last3[2].costPerM3 - last3[0].costPerM3) / last3[0].costPerM3) * 100;
+      alerts.push({ obra, days: last3.map((d) => d.date), deltaPct });
+    }
+  }
+  return alerts.sort((a, b) => b.deltaPct - a.deltaPct);
+}
+
+export function buildTopConsumersByM3(opts: {
+  fueling: { fleet: string; fleetLabel: string; liters: number; cost: number; obra: string; date: string }[];
+  dailyParts: { fleet: string; hours: number; obra: string; date: string }[];
+  trips: { obra: string; date: string; cubicMCompacted: number }[];
+}): { fleet: string; fleetLabel: string; liters: number; m3Attributed: number; ratio: number }[] {
+  const hoursByObraDate = new Map<string, number>();
+  const hoursByFleetObraDate = new Map<string, Map<string, number>>();
+  for (const p of opts.dailyParts) {
+    const k = `${p.obra}|${p.date}`;
+    hoursByObraDate.set(k, (hoursByObraDate.get(k) ?? 0) + p.hours);
+    if (!hoursByFleetObraDate.has(p.fleet)) hoursByFleetObraDate.set(p.fleet, new Map());
+    const fleetMap = hoursByFleetObraDate.get(p.fleet)!;
+    fleetMap.set(k, (fleetMap.get(k) ?? 0) + p.hours);
+  }
+  const m3ByObraDate = new Map<string, number>();
+  for (const t of opts.trips) {
+    const k = `${t.obra}|${t.date}`;
+    m3ByObraDate.set(k, (m3ByObraDate.get(k) ?? 0) + t.cubicMCompacted);
+  }
+  const result = new Map<string, { fleetLabel: string; liters: number; m3Attributed: number }>();
+  for (const f of opts.fueling) {
+    if (!result.has(f.fleet)) result.set(f.fleet, { fleetLabel: f.fleetLabel || f.fleet, liters: 0, m3Attributed: 0 });
+    result.get(f.fleet)!.liters += f.liters;
+  }
+  for (const [fleet, fleetMap] of hoursByFleetObraDate) {
+    for (const [obraDate, hours] of fleetMap) {
+      const total = hoursByObraDate.get(obraDate) ?? 0;
+      const m3 = m3ByObraDate.get(obraDate) ?? 0;
+      if (total > 0 && m3 > 0 && result.has(fleet)) {
+        result.get(fleet)!.m3Attributed += (hours / total) * m3;
+      }
+    }
+  }
+  return Array.from(result.entries())
+    .map(([fleet, v]) => ({
+      fleet,
+      fleetLabel: v.fleetLabel,
+      liters: v.liters,
+      m3Attributed: v.m3Attributed,
+      ratio: v.liters > 0 ? v.m3Attributed / v.liters : 0,
+    }))
+    .filter((r) => r.liters > 0)
+    .sort((a, b) => b.liters - a.liters)
+    .slice(0, 10);
+}

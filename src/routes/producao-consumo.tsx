@@ -1,6 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  Area,
+  AreaChart,
   Bar,
   BarChart as RechartsBarChart,
   CartesianGrid,
@@ -9,6 +20,9 @@ import {
   Legend,
   Line,
   LineChart as RechartsLineChart,
+  Pie,
+  PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Scatter,
   ScatterChart,
@@ -36,11 +50,27 @@ import {
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import {
   AGGREGATE_TRIP_PRICE,
+  buildDailyDieselByObra,
   buildProductionAnalytics,
+  buildTopConsumersByM3,
+  calcCostPerM3Stats,
+  calcEnergyEfficiency,
+  detectRisingCostAlerts,
   normalizeAggregatePrefix,
   safeDivide,
   type OperationalBubble,
 } from "@/lib/production-analytics";
+import { ChartCard } from "@/components/charts/ChartCard";
+import { gradientAreaProps } from "@/components/charts/GradientArea";
+import { RichTooltip } from "@/components/charts/RichTooltip";
+import {
+  CHART_AXIS_PROPS,
+  CHART_COLORS,
+  CHART_GRID_PROPS,
+  CHART_LEGEND_STYLE,
+  CHART_SERIES_COLORS,
+  CHART_TOOLTIP_STYLE,
+} from "@/lib/chart-theme";
 import type { DbEquipmentDailyPart, DbFueling, DbProductionAnalysis, DbTrip } from "@/db/schema";
 
 const CarcaraImportDialog = lazy(() =>
@@ -66,13 +96,12 @@ type TabId =
   | "data";
 
 const PAGE_SIZE = 12;
-const CHART_YELLOW = "#f4c430";
-const CHART_BLUE = "#38bdf8";
-const CHART_GREEN = "#22c55e";
-const CHART_RED = "#ef4444";
-const CHART_ORANGE = "#fb923c";
-const CHART_GRID = "rgba(255,255,255,0.12)";
-const CHART_TEXT = "#c9c1a8";
+const CHART_YELLOW = CHART_COLORS.production;
+const CHART_BLUE = CHART_COLORS.consumption;
+const CHART_GREEN = CHART_COLORS.revenue;
+const CHART_RED = CHART_COLORS.cost;
+const CHART_ORANGE = CHART_COLORS.warning;
+const CHART_TEXT = CHART_AXIS_PROPS.tick.fill;
 
 type DailyPoint = {
   date: string;
@@ -150,6 +179,18 @@ function shortDate(key: string) {
   return `${d}/${m}`;
 }
 
+function weekdayIndex(key: string) {
+  const [year, month, day] = key.split("-").map(Number);
+  if (!year || !month || !day) return 0;
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function hourKey(value: unknown) {
+  const text = String(value ?? "");
+  const match = text.match(/(?:T|\s)(\d{2}):/);
+  return match ? Math.min(23, Math.max(0, Number(match[1]))) : 0;
+}
+
 function compacted(row: DbTrip) {
   return row.cubicMCompacted || row.cubicMLoose / (1 + row.swellFactorApplied);
 }
@@ -159,12 +200,20 @@ function KpiCard({
   value,
   sub,
   icon,
+  tone,
 }: {
   label: string;
   value: string;
   sub?: string;
   icon: string;
+  tone?: "warning" | "success";
 }) {
+  const valueClass =
+    tone === "warning"
+      ? "mt-2 text-xl font-black leading-none text-status-warning"
+      : tone === "success"
+        ? "mt-2 text-xl font-black leading-none text-[#22c55e]"
+        : "mt-2 text-xl font-black leading-none";
   return (
     <div
       className="rounded border border-border-low bg-surface-container p-3 min-h-[104px]"
@@ -176,45 +225,15 @@ function KpiCard({
         </p>
         <Icon name={icon} className="text-lg text-primary" />
       </div>
-      <p className="mt-2 text-xl font-black leading-none">{value}</p>
+      <p className={valueClass}>{value}</p>
       {sub && <p className="mt-2 text-xs text-on-surface-variant">{sub}</p>}
-    </div>
-  );
-}
-
-function ChartCard({
-  title,
-  description,
-  hasData,
-  children,
-}: {
-  title: string;
-  description: string;
-  hasData: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded border border-border-low bg-surface-container p-4">
-      <div className="mb-3">
-        <h3 className="text-[10px] font-black uppercase tracking-widest">{title}</h3>
-        <p className="mt-1 text-xs text-on-surface-variant">{description}</p>
-      </div>
-      <div className="h-[320px]">
-        {hasData ? (
-          children
-        ) : (
-          <div className="flex h-full items-center justify-center rounded border border-border-low/60 bg-surface-low text-xs text-on-surface-variant">
-            Sem dados suficientes para este gráfico.
-          </div>
-        )}
-      </div>
     </div>
   );
 }
 
 function TooltipShell({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="rounded border border-border-low bg-surface-highest p-3 text-xs shadow-xl">
+    <div style={CHART_TOOLTIP_STYLE as CSSProperties}>
       <p className="mb-2 font-black text-on-surface">{label}</p>
       <div className="space-y-1 text-on-surface-variant">{children}</div>
     </div>
@@ -268,14 +287,30 @@ function GenericTooltip({
   if (!active || !payload?.length) return null;
   return (
     <TooltipShell label={label ?? "Dados"}>
-      {payload.map((item) => (
-        <TooltipLine
-          key={`${item.name}-${String(item.value)}`}
-          label={item.name ?? "Valor"}
-          value={typeof item.value === "number" ? formatNumber(item.value, 2) : String(item.value)}
-          color={item.color ?? CHART_YELLOW}
-        />
-      ))}
+      {payload.map((item) => {
+        const name = String(item.name ?? "Valor");
+        const value = Number(item.value ?? 0);
+        const formatted =
+          typeof item.value !== "number"
+            ? String(item.value)
+            : name.includes("m³")
+              ? formatM3(value)
+              : name.toLowerCase().includes("litro")
+                ? formatLiters(value)
+                : name.includes("R$") || name.toLowerCase().includes("custo")
+                  ? formatBRL(value)
+                  : name.toLowerCase().includes("hora")
+                    ? `${formatNumber(value, 1)} h`
+                    : formatNumber(value, 2);
+        return (
+          <TooltipLine
+            key={`${item.name}-${String(item.value)}`}
+            label={name}
+            value={formatted}
+            color={item.color ?? CHART_YELLOW}
+          />
+        );
+      })}
     </TooltipShell>
   );
 }
@@ -289,23 +324,23 @@ function ProductionConsumptionChart({ data }: { data: DailyPoint[] }) {
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
           <YAxis
             yAxisId="m3"
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            {...CHART_AXIS_PROPS}
             tickFormatter={(value) => formatNumber(Number(value), 0)}
             label={{ value: "m³", angle: -90, position: "insideLeft", fill: CHART_TEXT }}
           />
           <YAxis
             yAxisId="liters"
             orientation="right"
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            {...CHART_AXIS_PROPS}
             tickFormatter={(value) => formatNumber(Number(value), 0)}
             label={{ value: "litros", angle: 90, position: "insideRight", fill: CHART_TEXT }}
           />
           <Tooltip content={<DailyTooltip />} />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
           <Bar
             yAxisId="m3"
             dataKey="m3"
@@ -337,11 +372,11 @@ function DailyProductionChart({ data }: { data: DailyPoint[] }) {
     >
       <ResponsiveContainer width="100%" height="100%">
         <RechartsBarChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
+          <YAxis {...CHART_AXIS_PROPS} />
           <Tooltip content={<DailyTooltip />} />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
           <Bar dataKey="m3" name="m³ compactado" fill={CHART_YELLOW} radius={[4, 4, 0, 0]} />
           <Bar dataKey="loose" name="m³ solto" fill={CHART_ORANGE} radius={[4, 4, 0, 0]} />
         </RechartsBarChart>
@@ -359,11 +394,11 @@ function DailyFuelChart({ data }: { data: DailyPoint[] }) {
     >
       <ResponsiveContainer width="100%" height="100%">
         <RechartsLineChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
+          <YAxis {...CHART_AXIS_PROPS} />
           <Tooltip content={<DailyTooltip />} />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
           <Line
             type="monotone"
             dataKey="liters"
@@ -387,9 +422,9 @@ function AverageConsumptionChart({ data }: { data: DailyPoint[] }) {
     >
       <ResponsiveContainer width="100%" height="100%">
         <RechartsLineChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
+          <YAxis {...CHART_AXIS_PROPS} />
           <Tooltip
             content={({ active, payload, label }) => {
               if (!active || !payload?.length) return null;
@@ -411,12 +446,12 @@ function AverageConsumptionChart({ data }: { data: DailyPoint[] }) {
               );
             }}
           />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
           <Line
             type="monotone"
             dataKey="litersPerM3"
             name="L/m³"
-            stroke={CHART_GREEN}
+            stroke={CHART_COLORS.efficiency}
             strokeWidth={3}
             dot={{ r: 3 }}
           />
@@ -435,21 +470,21 @@ function DailyFuelCostChart({ data }: { data: DailyPoint[] }) {
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
           <YAxis
             yAxisId="cost"
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            {...CHART_AXIS_PROPS}
             tickFormatter={(value) => `R$ ${formatNumber(Number(value), 0)}`}
           />
           <YAxis
             yAxisId="m3"
             orientation="right"
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
+            {...CHART_AXIS_PROPS}
             tickFormatter={(value) => `R$ ${formatNumber(Number(value), 2)}`}
           />
           <Tooltip content={<DailyTooltip />} />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
           <Bar
             yAxisId="cost"
             dataKey="cost"
@@ -462,7 +497,7 @@ function DailyFuelCostChart({ data }: { data: DailyPoint[] }) {
             type="monotone"
             dataKey="costPerM3"
             name="R$/m³"
-            stroke={CHART_YELLOW}
+            stroke={CHART_RED}
             strokeWidth={3}
           />
         </ComposedChart>
@@ -495,14 +530,9 @@ function TopAggregatesChart({
           layout="vertical"
           margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
         >
-          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis
-            dataKey="aggregate"
-            type="category"
-            width={92}
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
-          />
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis type="number" {...CHART_AXIS_PROPS} />
+          <YAxis dataKey="aggregate" type="category" width={92} {...CHART_AXIS_PROPS} />
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
@@ -560,14 +590,9 @@ function TopEquipmentChart({
           layout="vertical"
           margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
         >
-          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis
-            dataKey="equipment"
-            type="category"
-            width={92}
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
-          />
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis type="number" {...CHART_AXIS_PROPS} />
+          <YAxis dataKey="equipment" type="category" width={92} {...CHART_AXIS_PROPS} />
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
@@ -620,12 +645,9 @@ function FinancialChart({
     >
       <ResponsiveContainer width="100%" height="100%">
         <RechartsBarChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
-            tickFormatter={(v) => `R$ ${formatNumber(Number(v), 0)}`}
-          />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
+          <YAxis {...CHART_AXIS_PROPS} tickFormatter={(v) => `R$ ${formatNumber(Number(v), 0)}`} />
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
@@ -643,8 +665,8 @@ function FinancialChart({
               );
             }}
           />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
-          <Bar dataKey="faturamento" name="Faturamento" fill={CHART_YELLOW} radius={[4, 4, 0, 0]} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
+          <Bar dataKey="faturamento" name="Faturamento" fill={CHART_GREEN} radius={[4, 4, 0, 0]} />
           <Bar
             dataKey="combustivel"
             name="Custo combustível"
@@ -654,7 +676,7 @@ function FinancialChart({
           <Bar
             dataKey="agregados"
             name="Custo agregados"
-            fill={CHART_ORANGE}
+            fill={CHART_COLORS.aggregate}
             radius={[4, 4, 0, 0]}
           />
           <Bar
@@ -702,14 +724,9 @@ function DistributionChart({
           layout="vertical"
           margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
         >
-          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis
-            dataKey="label"
-            type="category"
-            width={110}
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
-          />
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis type="number" {...CHART_AXIS_PROPS} />
+          <YAxis dataKey="label" type="category" width={110} {...CHART_AXIS_PROPS} />
           <Tooltip content={<GenericTooltip />} />
           <Bar dataKey="value" name="m³ compactado" fill={color} radius={[0, 4, 4, 0]} />
         </RechartsBarChart>
@@ -751,10 +768,10 @@ function ObraComparisonChart({
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={rows} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke={CHART_GRID} vertical={false} />
-          <XAxis dataKey="obra" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis yAxisId="m3" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis yAxisId="liters" orientation="right" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="obra" {...CHART_AXIS_PROPS} />
+          <YAxis yAxisId="m3" {...CHART_AXIS_PROPS} />
+          <YAxis yAxisId="liters" orientation="right" {...CHART_AXIS_PROPS} />
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
@@ -773,7 +790,7 @@ function ObraComparisonChart({
               );
             }}
           />
-          <Legend wrapperStyle={{ color: CHART_TEXT, fontSize: 12 }} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
           <Bar
             yAxisId="m3"
             dataKey="m3"
@@ -792,6 +809,494 @@ function ObraComparisonChart({
         </ComposedChart>
       </ResponsiveContainer>
     </ChartCard>
+  );
+}
+
+function ProductionAreaChart({
+  data,
+  totalCompacted,
+}: {
+  data: Array<{
+    date: string;
+    label: string;
+    "m³ compactado": number;
+    "m³ solto": number;
+    viagens: number;
+  }>;
+  totalCompacted: number;
+}) {
+  const gradient = gradientAreaProps("grad-production-daily", CHART_COLORS.production);
+  return (
+    <ChartCard
+      title="Produção compactada · diária"
+      description="m³ compactado movimentado por dia no período selecionado."
+      badge={{ label: `${formatNumber(totalCompacted, 0)} m³ no período`, tone: "success" }}
+      hasData={data.some((row) => row["m³ compactado"] > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          {gradient.defs}
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="label" {...CHART_AXIS_PROPS} />
+          <YAxis {...CHART_AXIS_PROPS} />
+          <Tooltip
+            content={
+              <RichTooltip
+                titleFormatter={(_, payload) => {
+                  const row = payload[0]?.payload as { date?: string } | undefined;
+                  return row?.date ? fmtDate(row.date) : "Dia";
+                }}
+                formatters={{
+                  "m³ compactado": (v) => formatNumber(v, 1),
+                  "m³ solto": (v) => formatNumber(v, 1),
+                  viagens: (v) => formatNumber(v, 0),
+                }}
+                units={{ "m³ compactado": "m³", "m³ solto": "m³" }}
+              />
+            }
+          />
+          <Area
+            type="monotone"
+            dataKey="m³ compactado"
+            name="m³ compactado"
+            stroke={CHART_COLORS.production}
+            strokeWidth={2}
+            fill={gradient.fillId}
+            activeDot={{ r: 4 }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function ObraDonutChart({ data }: { data: Array<{ name: string; value: number }> }) {
+  return (
+    <ChartCard
+      title="Distribuição por obra"
+      description="Top obras por m³ compactado, com o restante agrupado em outros."
+      height={280}
+      hasData={data.some((row) => row.value > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            dataKey="value"
+            nameKey="name"
+            innerRadius={62}
+            outerRadius={98}
+            paddingAngle={2}
+            labelLine={false}
+          >
+            {data.map((entry, i) => (
+              <Cell key={entry.name} fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip
+            content={
+              <RichTooltip
+                titleFormatter={(_, payload) =>
+                  String(payload[0]?.payload?.name ?? "Distribuição por obra")
+                }
+                formatters={{ value: (v) => formatNumber(v, 1) }}
+                units={{ value: "m³" }}
+              />
+            }
+          />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
+        </PieChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function ProductionHeatmap({
+  data,
+}: {
+  data: Array<{ dayIndex: number; hour: number; m3: number; trips: number }>;
+}) {
+  const days = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  const hours = Array.from({ length: 24 }, (_, i) => i);
+  const bySlot = new Map(data.map((row) => [`${row.dayIndex}-${row.hour}`, row]));
+  const max = Math.max(1, ...data.map((row) => row.m3));
+
+  return (
+    <ChartCard
+      title="Mapa de calor operacional"
+      description="Produção por dia da semana e hora para identificar picos de operação."
+      height={300}
+      hasData={data.some((row) => row.m3 > 0)}
+    >
+      <div className="h-full overflow-x-auto">
+        <div className="min-w-[760px]">
+          <div
+            className="grid items-center gap-1 text-[10px] text-on-surface-variant"
+            style={{ gridTemplateColumns: "56px repeat(24, minmax(22px, 1fr))" }}
+          >
+            <span />
+            {hours.map((hour) => (
+              <span key={hour} className="text-center">
+                {hour}
+              </span>
+            ))}
+          </div>
+          <div className="mt-2 space-y-1">
+            {days.map((day, dayIndex) => (
+              <div
+                key={day}
+                className="grid items-center gap-1"
+                style={{ gridTemplateColumns: "56px repeat(24, minmax(22px, 1fr))" }}
+              >
+                <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                  {day}
+                </span>
+                {hours.map((hour) => {
+                  const slot = bySlot.get(`${dayIndex}-${hour}`);
+                  const intensity = slot ? slot.m3 / max : 0;
+                  return (
+                    <div
+                      key={`${day}-${hour}`}
+                      title={`${day} ${hour}:00 · ${formatM3(slot?.m3 ?? 0)} · ${formatNumber(
+                        slot?.trips ?? 0,
+                        0,
+                      )} viagens`}
+                      className="h-8 rounded border border-white/5 transition-opacity hover:opacity-90"
+                      style={{
+                        backgroundColor:
+                          intensity > 0 ? CHART_COLORS.production : "rgba(255,255,255,0.035)",
+                        opacity: intensity > 0 ? 0.16 + intensity * 0.78 : 1,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </ChartCard>
+  );
+}
+
+function EquipmentScatterChart({
+  data,
+}: {
+  data: Array<{
+    equipment: string;
+    hours: number;
+    liters: number;
+    m3Attributed: number;
+    fuelPerHour: number;
+  }>;
+}) {
+  return (
+    <ChartCard
+      title="Horas × litros por frota"
+      description="Cada ponto representa uma frota; o tamanho acompanha m³ atribuído."
+      hasData={data.some((row) => row.hours > 0 || row.liters > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <ScatterChart margin={{ top: 12, right: 18, left: 0, bottom: 10 }}>
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis
+            type="number"
+            dataKey="hours"
+            name="horas PDE"
+            {...CHART_AXIS_PROPS}
+            tickFormatter={(value) => `${formatNumber(Number(value), 0)}h`}
+          />
+          <YAxis
+            type="number"
+            dataKey="liters"
+            name="litros diesel"
+            {...CHART_AXIS_PROPS}
+            tickFormatter={(value) => formatNumber(Number(value), 0)}
+          />
+          <ZAxis type="number" dataKey="m3Attributed" name="m³ atribuído" range={[70, 720]} />
+          <Tooltip
+            cursor={{ strokeDasharray: "3 3", stroke: CHART_TEXT }}
+            content={
+              <RichTooltip
+                titleFormatter={(_, payload) => String(payload[0]?.payload?.equipment ?? "Frota")}
+                formatters={{
+                  "horas PDE": (v) => formatNumber(v, 1),
+                  "litros diesel": (v) => formatNumber(v, 0),
+                  "m³ atribuído": (v) => formatNumber(v, 1),
+                }}
+                units={{ "horas PDE": "h", "litros diesel": "L", "m³ atribuído": "m³" }}
+              />
+            }
+          />
+          <Scatter data={data} name="Frotas">
+            {data.map((entry, i) => (
+              <Cell
+                key={entry.equipment}
+                fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
+                fillOpacity={0.82}
+              />
+            ))}
+          </Scatter>
+        </ScatterChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function costHeatColor(value: number, min: number, max: number) {
+  const ratio = max > min ? (value - min) / (max - min) : 0;
+  if (ratio > 0.66) return CHART_COLORS.cost;
+  if (ratio > 0.33) return CHART_COLORS.warning;
+  return CHART_COLORS.aggregate;
+}
+
+function AggregateTripsCostChart({
+  data,
+}: {
+  data: Array<{ aggregate: string; trips: number; m3: number; costPerM3: number }>;
+}) {
+  const costs = data.map((row) => row.costPerM3).filter((value) => Number.isFinite(value));
+  const min = Math.min(...costs, 0);
+  const max = Math.max(...costs, 0);
+
+  return (
+    <ChartCard
+      title="Viagens por agregado"
+      description="Top 10 agregados; a cor indica R$/m³ médio no período."
+      hasData={data.some((row) => row.trips > 0)}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 18, left: 18, bottom: 4 }}
+        >
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis type="number" {...CHART_AXIS_PROPS} />
+          <YAxis dataKey="aggregate" type="category" width={92} {...CHART_AXIS_PROPS} />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload as (typeof data)[number];
+              return (
+                <TooltipShell label={row.aggregate}>
+                  <TooltipLine
+                    label="Viagens"
+                    value={formatNumber(row.trips, 0)}
+                    color={CHART_COLORS.aggregate}
+                  />
+                  <TooltipLine
+                    label="m³ compactado"
+                    value={formatM3(row.m3)}
+                    color={CHART_YELLOW}
+                  />
+                  <TooltipLine
+                    label="R$/m³ médio"
+                    value={formatBRL(row.costPerM3)}
+                    color={CHART_RED}
+                  />
+                </TooltipShell>
+              );
+            }}
+          />
+          <Bar dataKey="trips" name="viagens" radius={[0, 4, 4, 0]}>
+            {data.map((entry) => (
+              <Cell
+                key={entry.aggregate}
+                fill={costHeatColor(entry.costPerM3, min, max)}
+                fillOpacity={0.9}
+              />
+            ))}
+          </Bar>
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function AggregateTimelineChart({
+  data,
+  aggregates,
+}: {
+  data: Record<string, number | string>[];
+  aggregates: string[];
+}) {
+  const units = Object.fromEntries(aggregates.map((aggregate) => [aggregate, "m³"]));
+  const formatters = Object.fromEntries(
+    aggregates.map((aggregate) => [aggregate, (v: number) => formatNumber(v, 1)]),
+  );
+
+  return (
+    <ChartCard
+      title="m³ transportado por dia"
+      description="Linha temporal dos cinco agregados com maior volume compactado."
+      hasData={data.length > 0 && aggregates.length > 0}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsLineChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 4 }}>
+          <CartesianGrid {...CHART_GRID_PROPS} />
+          <XAxis dataKey="date" {...CHART_AXIS_PROPS} />
+          <YAxis {...CHART_AXIS_PROPS} />
+          <Tooltip content={<RichTooltip formatters={formatters} units={units} />} />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
+          {aggregates.map((aggregate, i) => (
+            <Line
+              key={aggregate}
+              type="monotone"
+              dataKey={aggregate}
+              name={aggregate}
+              stroke={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
+              strokeWidth={2}
+              dot={{ r: 2 }}
+            />
+          ))}
+        </RechartsLineChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function DivergentAuditChart({
+  title,
+  description,
+  data,
+}: {
+  title: string;
+  description: string;
+  data: Array<{
+    label: string;
+    cmb: number;
+    pde: number;
+    cmbRaw: number;
+    pdeRaw: number;
+    gap: number;
+  }>;
+}) {
+  return (
+    <ChartCard title={title} description={description} hasData={data.length > 0}>
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsBarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 8, right: 18, left: 18, bottom: 4 }}
+        >
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis
+            type="number"
+            {...CHART_AXIS_PROPS}
+            tickFormatter={(value) => formatNumber(Math.abs(Number(value)), 0)}
+          />
+          <YAxis dataKey="label" type="category" width={96} {...CHART_AXIS_PROPS} />
+          <ReferenceLine x={0} stroke="rgba(255,255,255,0.24)" />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0].payload as (typeof data)[number];
+              return (
+                <TooltipShell label={row.label}>
+                  <TooltipLine
+                    label="Registros CMB"
+                    value={formatNumber(row.cmbRaw, 0)}
+                    color={CHART_COLORS.consumption}
+                  />
+                  <TooltipLine
+                    label="Registros PDE"
+                    value={formatNumber(row.pdeRaw, 0)}
+                    color={CHART_COLORS.cost}
+                  />
+                  <TooltipLine
+                    label="Gap CMB - PDE"
+                    value={formatNumber(row.gap, 0)}
+                    color={row.gap === 0 ? CHART_COLORS.neutral : CHART_COLORS.warning}
+                  />
+                </TooltipShell>
+              );
+            }}
+          />
+          <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
+          <Bar dataKey="cmb" name="CMB" fill={CHART_COLORS.consumption} radius={[0, 4, 4, 0]} />
+          <Bar dataKey="pde" name="PDE" fill={CHART_COLORS.cost} radius={[4, 0, 0, 4]} />
+        </RechartsBarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function MiniAreaSparkline({
+  title,
+  data,
+  color,
+  unit,
+  formatter,
+}: {
+  title: string;
+  data: Array<{ label: string; date: string; value: number }>;
+  color: string;
+  unit: string;
+  formatter: (value: number) => string;
+}) {
+  const gradient = gradientAreaProps(`grad-spark-${title.replace(/\W+/g, "-")}`, color);
+  return (
+    <ChartCard title={title} height={116} hasData={data.some((row) => row.value > 0)}>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 0 }}>
+          {gradient.defs}
+          <Tooltip
+            content={
+              <RichTooltip
+                titleFormatter={(_, payload) => {
+                  const row = payload[0]?.payload as { date?: string } | undefined;
+                  return row?.date ? fmtDate(row.date) : "Dia";
+                }}
+                formatters={{ [title]: formatter }}
+                units={{ [title]: unit }}
+              />
+            }
+          />
+          <Area
+            type="monotone"
+            dataKey="value"
+            name={title}
+            stroke={color}
+            strokeWidth={2}
+            fill={gradient.fillId}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
+function DataSparklines({
+  data,
+}: {
+  data: Array<{ label: string; date: string; m3: number; liters: number; cost: number }>;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      <MiniAreaSparkline
+        title="m³ compactado"
+        data={data.map((row) => ({ label: row.label, date: row.date, value: row.m3 }))}
+        color={CHART_COLORS.production}
+        unit="m³"
+        formatter={(value) => formatNumber(value, 1)}
+      />
+      <MiniAreaSparkline
+        title="litros diesel"
+        data={data.map((row) => ({ label: row.label, date: row.date, value: row.liters }))}
+        color={CHART_COLORS.consumption}
+        unit="L"
+        formatter={(value) => formatNumber(value, 0)}
+      />
+      <MiniAreaSparkline
+        title="custo diesel"
+        data={data.map((row) => ({ label: row.label, date: row.date, value: row.cost }))}
+        color={CHART_COLORS.cost}
+        unit=""
+        formatter={(value) => formatBRL(value)}
+      />
+    </div>
   );
 }
 
@@ -842,19 +1347,19 @@ function DieselHoursProductionChart({
         {data.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <ScatterChart margin={{ top: 12, right: 18, left: 0, bottom: 10 }}>
-              <CartesianGrid stroke={CHART_GRID} />
+              <CartesianGrid {...CHART_GRID_PROPS} />
               <XAxis
                 type="number"
                 dataKey="hours"
                 name="horas"
-                tick={{ fill: CHART_TEXT, fontSize: 11 }}
+                {...CHART_AXIS_PROPS}
                 tickFormatter={(value) => `${formatNumber(Number(value), 0)}h`}
               />
               <YAxis
                 type="number"
                 dataKey="compactedM3"
                 name="m³ compactado"
-                tick={{ fill: CHART_TEXT, fontSize: 11 }}
+                {...CHART_AXIS_PROPS}
                 tickFormatter={(value) => formatNumber(Number(value), 0)}
               />
               <ZAxis type="number" dataKey="z" range={[90, 900]} />
@@ -1103,14 +1608,9 @@ function EquipmentHoursChart({
           layout="vertical"
           margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
         >
-          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis
-            dataKey="equipment"
-            type="category"
-            width={92}
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
-          />
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis type="number" {...CHART_AXIS_PROPS} />
+          <YAxis dataKey="equipment" type="category" width={92} {...CHART_AXIS_PROPS} />
           <Tooltip content={<GenericTooltip />} />
           <Bar dataKey="hours" name="horas PDE" fill={CHART_GREEN} radius={[0, 4, 4, 0]} />
         </RechartsBarChart>
@@ -1137,14 +1637,9 @@ function EquipmentLhChart({
           layout="vertical"
           margin={{ top: 8, right: 16, left: 18, bottom: 4 }}
         >
-          <CartesianGrid stroke={CHART_GRID} horizontal={false} />
-          <XAxis type="number" tick={{ fill: CHART_TEXT, fontSize: 11 }} />
-          <YAxis
-            dataKey="equipment"
-            type="category"
-            width={92}
-            tick={{ fill: CHART_TEXT, fontSize: 11 }}
-          />
+          <CartesianGrid {...CHART_GRID_PROPS} horizontal={false} />
+          <XAxis type="number" {...CHART_AXIS_PROPS} />
+          <YAxis dataKey="equipment" type="category" width={92} {...CHART_AXIS_PROPS} />
           <Tooltip content={<GenericTooltip />} />
           <Bar dataKey="lh" name="L/h" fill={CHART_BLUE} radius={[0, 4, 4, 0]} />
         </RechartsBarChart>
@@ -1564,6 +2059,30 @@ function ProducaoConsumo() {
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [filteredFueling, filteredTrips]);
 
+  const productionAreaData = useMemo(
+    () =>
+      daily.map((row) => ({
+        date: row.date,
+        label: row.label,
+        "m³ compactado": row.m3,
+        "m³ solto": row.loose,
+        viagens: row.trips,
+      })),
+    [daily],
+  );
+
+  const sparklineData = useMemo(
+    () =>
+      daily.map((row) => ({
+        date: row.date,
+        label: row.label,
+        m3: row.m3,
+        liters: row.liters,
+        cost: row.cost,
+      })),
+    [daily],
+  );
+
   const aggregateProduction = useMemo(() => {
     const map = new Map<
       string,
@@ -1613,6 +2132,37 @@ function ProducaoConsumo() {
       .sort((a, b) => b.trips - a.trips || b.m3 - a.m3);
   }, [filteredTrips]);
 
+  const aggregateTripsCostData = useMemo(
+    () =>
+      aggregateProduction.slice(0, 10).map((row) => ({
+        aggregate: row.aggregate,
+        trips: row.trips,
+        m3: row.m3,
+        costPerM3: row.m3 > 0 ? row.totalPay / row.m3 : 0,
+      })),
+    [aggregateProduction],
+  );
+
+  const aggregateTimeline = useMemo(() => {
+    const aggregates = aggregateProduction.slice(0, 5).map((row) => row.aggregate);
+    const byDate = new Map<string, Record<string, number | string>>();
+    for (const trip of filteredTrips) {
+      const aggregate = aggregateKey(trip);
+      if (!aggregates.includes(aggregate)) continue;
+      const date = dateKey(trip.datetime);
+      if (!date) continue;
+      const row = byDate.get(date) ?? { date: shortDate(date) };
+      row[aggregate] = Number(row[aggregate] ?? 0) + compacted(trip);
+      byDate.set(date, row);
+    }
+    return {
+      aggregates,
+      data: Array.from(byDate.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, row]) => row),
+    };
+  }, [aggregateProduction, filteredTrips]);
+
   const materialDistribution = useMemo(() => {
     const map = new Map<string, number>();
     filteredTrips.forEach((row) =>
@@ -1624,6 +2174,35 @@ function ProducaoConsumo() {
     return [...map.entries()]
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value);
+  }, [filteredTrips]);
+
+  const obraDistribution = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const trip of filteredTrips) {
+      const obra = trip.obra || "Sem obra";
+      map.set(obra, (map.get(obra) ?? 0) + compacted(trip));
+    }
+    const sorted = Array.from(map.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+    const top = sorted.slice(0, 5);
+    const other = sorted.slice(5).reduce((sum, row) => sum + row.value, 0);
+    return other > 0 ? [...top, { name: "Outros", value: other }] : top;
+  }, [filteredTrips]);
+
+  const productionHeatmap = useMemo(() => {
+    const map = new Map<string, { dayIndex: number; hour: number; m3: number; trips: number }>();
+    for (const trip of filteredTrips) {
+      const date = dateKey(trip.datetime);
+      const dayIndex = weekdayIndex(date);
+      const hour = hourKey(trip.datetime);
+      const key = `${dayIndex}-${hour}`;
+      const current = map.get(key) ?? { dayIndex, hour, m3: 0, trips: 0 };
+      current.m3 += compacted(trip);
+      current.trips += 1;
+      map.set(key, current);
+    }
+    return Array.from(map.values());
   }, [filteredTrips]);
 
   const obraCompare = useMemo(() => {
@@ -1739,6 +2318,21 @@ function ProducaoConsumo() {
   const operationalMetrics = operationalAnalytics.accumulatedMetrics;
   const bubbleData = operationalAnalytics.operationalBubbles[bubbleMode];
 
+  const equipmentScatterData = useMemo(
+    () =>
+      operationalAnalytics.machineMetrics
+        .map((row) => ({
+          equipment: row.label || row.equipment,
+          hours: row.hours,
+          liters: row.liters,
+          m3Attributed: row.allocatedCompactedM3,
+          fuelPerHour: row.fuelPerHour,
+        }))
+        .sort((a, b) => b.liters - a.liters)
+        .slice(0, 30),
+    [operationalAnalytics.machineMetrics],
+  );
+
   const auditAlerts = useMemo(() => {
     const aggregateNoVolume = aggregateProduction
       .filter((row) => row.trips > 0 && row.loose <= 0 && row.m3 <= 0)
@@ -1784,6 +2378,146 @@ function ProducaoConsumo() {
       ),
     };
   }, [filteredDailyParts, filteredFueling]);
+
+  const auditDivergenceByDate = useMemo(() => {
+    const map = new Map<string, { date: string; cmbRaw: number; pdeRaw: number }>();
+    const ensure = (date: string) => {
+      const current = map.get(date) ?? { date, cmbRaw: 0, pdeRaw: 0 };
+      map.set(date, current);
+      return current;
+    };
+    for (const row of filteredFueling) {
+      const date = dateKey(row.datetime);
+      if (date) ensure(date).cmbRaw += 1;
+    }
+    for (const row of filteredDailyParts) {
+      if (row.date) ensure(row.date).pdeRaw += 1;
+    }
+    return Array.from(map.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((row) => ({
+        label: shortDate(row.date),
+        cmb: row.cmbRaw,
+        pde: -row.pdeRaw,
+        cmbRaw: row.cmbRaw,
+        pdeRaw: row.pdeRaw,
+        gap: row.cmbRaw - row.pdeRaw,
+      }));
+  }, [filteredDailyParts, filteredFueling]);
+
+  const crossAuditDivergenceByFleet = useMemo(() => {
+    const map = new Map<string, { label: string; cmbDates: Set<string>; pdeDates: Set<string> }>();
+    const ensure = (fleet: string) => {
+      const key = fleet || "SEM_FROTA";
+      const current = map.get(key) ?? {
+        label: key,
+        cmbDates: new Set<string>(),
+        pdeDates: new Set<string>(),
+      };
+      map.set(key, current);
+      return current;
+    };
+    for (const fuel of filteredFueling) {
+      const date = dateKey(fuel.datetime);
+      if (date) ensure(ownEquipmentKey(fuel)).cmbDates.add(date);
+    }
+    for (const part of filteredDailyParts) {
+      if (part.date) ensure(part.fleet).pdeDates.add(part.date);
+    }
+    return Array.from(map.values())
+      .map((row) => {
+        const cmbRaw = row.cmbDates.size;
+        const pdeRaw = row.pdeDates.size;
+        return {
+          label: row.label,
+          cmb: cmbRaw,
+          pde: -pdeRaw,
+          cmbRaw,
+          pdeRaw,
+          gap: cmbRaw - pdeRaw,
+        };
+      })
+      .sort(
+        (a, b) => Math.abs(b.gap) - Math.abs(a.gap) || b.cmbRaw + b.pdeRaw - (a.cmbRaw + a.pdeRaw),
+      )
+      .slice(0, 12);
+  }, [filteredDailyParts, filteredFueling]);
+
+  const dailyCostByObra = useMemo(() => {
+    const costByKey = new Map<string, number>();
+    const m3ByKey = new Map<string, number>();
+    for (const row of filteredFueling) {
+      const k = `${dateKey(row.datetime)}|${row.obra || "Sem obra"}`;
+      costByKey.set(k, (costByKey.get(k) ?? 0) + row.total);
+    }
+    for (const row of filteredTrips) {
+      const k = `${dateKey(row.datetime)}|${row.obra || "Sem obra"}`;
+      m3ByKey.set(k, (m3ByKey.get(k) ?? 0) + compacted(row));
+    }
+    return Array.from(costByKey.keys()).map((k) => {
+      const [date, obra] = k.split("|");
+      const cost = costByKey.get(k) ?? 0;
+      const m3 = m3ByKey.get(k) ?? 0;
+      return { date, obra, costPerM3: m3 > 0 ? cost / m3 : 0 };
+    });
+  }, [filteredFueling, filteredTrips]);
+
+  const risingAlerts = useMemo(() => detectRisingCostAlerts(dailyCostByObra), [dailyCostByObra]);
+
+  const costStats = useMemo(
+    () => calcCostPerM3Stats(daily.map((d) => ({ date: d.date, costPerM3: d.costPerM3 }))),
+    [daily],
+  );
+
+  const efficiency = useMemo(() => {
+    const half = Math.floor(daily.length / 2);
+    const prev = daily.slice(0, half);
+    const curr = daily.length >= 2 ? daily.slice(half) : daily;
+    return calcEnergyEfficiency({
+      compactedM3: curr.reduce((s, d) => s + d.m3, 0),
+      liters: curr.reduce((s, d) => s + d.liters, 0),
+      previousCompactedM3: daily.length >= 2 ? prev.reduce((s, d) => s + d.m3, 0) : undefined,
+      previousLiters: daily.length >= 2 ? prev.reduce((s, d) => s + d.liters, 0) : undefined,
+    });
+  }, [daily]);
+
+  const { data: stackedDieselData, obras: obrasInStack } = useMemo(
+    () =>
+      buildDailyDieselByObra(
+        filteredFueling.map((f) => ({
+          date: dateKey(f.datetime),
+          liters: f.liters,
+          obra: f.obra || "Sem obra",
+        })),
+      ),
+    [filteredFueling],
+  );
+
+  const topConsumers = useMemo(
+    () =>
+      buildTopConsumersByM3({
+        fueling: filteredFueling.map((f) => ({
+          fleet: ownEquipmentKey(f),
+          fleetLabel: f.prefix || f.vehicleId || f.plate || "",
+          liters: f.liters,
+          cost: f.total,
+          obra: f.obra || "Sem obra",
+          date: dateKey(f.datetime),
+        })),
+        dailyParts: filteredDailyParts.map((p) => ({
+          fleet: p.fleet,
+          hours: p.hours,
+          obra: p.obra || "Sem obra",
+          date: p.date,
+        })),
+        trips: filteredTrips.map((t) => ({
+          obra: t.obra || "Sem obra",
+          date: dateKey(t.datetime),
+          cubicMCompacted: compacted(t),
+        })),
+      }),
+    [filteredFueling, filteredDailyParts, filteredTrips],
+  );
 
   const searchedTrips = filteredTrips.filter((row) =>
     [row.prefix, row.plate, row.obra, row.material, row.driver]
@@ -2118,6 +2852,65 @@ function ProducaoConsumo() {
 
           {tab === "overview" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {risingAlerts.length > 0 && (
+                <div className="lg:col-span-3 border-l-4 border-status-warning bg-status-warning/10 p-4 rounded">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Icon name="trending_up" className="text-status-warning" />
+                    <h3 className="font-black uppercase tracking-wider text-sm">
+                      Custo subindo 3 dias seguidos
+                    </h3>
+                  </div>
+                  <ul className="space-y-2 text-sm">
+                    {risingAlerts.slice(0, 5).map((alert) => (
+                      <li key={alert.obra} className="flex justify-between">
+                        <span>
+                          <strong>{alert.obra}</strong> · {alert.days.join(" → ")}
+                        </span>
+                        <span className="text-status-warning font-bold">
+                          +{formatNumber(alert.deltaPct, 1)}%
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <KpiCard
+                icon="eco"
+                label="Eficiência energética"
+                value={`${formatNumber(efficiency.ratio, 2)} m³/L`}
+                sub={
+                  efficiency.delta != null
+                    ? `${efficiency.delta > 0 ? "+" : ""}${formatNumber(efficiency.delta, 2)} vs período anterior`
+                    : "sem comparativo"
+                }
+                tone={efficiency.delta != null && efficiency.delta < 0 ? "warning" : "success"}
+              />
+              <div className="lg:col-span-2 rounded border border-border-low bg-surface-container p-4">
+                <h3 className="text-[10px] font-black uppercase tracking-widest mb-3">
+                  R$/m³ — faixa típica
+                </h3>
+                <p className="text-2xl font-bold">
+                  {formatBRL(costStats.p25)} – {formatBRL(costStats.p75)}
+                </p>
+                <p className="text-xs text-on-surface-variant mt-1">
+                  mediana: {formatBRL(costStats.median)}
+                </p>
+                {costStats.outliers.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-border-low">
+                    <p className="text-xs text-status-warning font-bold mb-2">
+                      {costStats.outliers.length} dia(s) acima da faixa
+                    </p>
+                    <ul className="text-xs space-y-1">
+                      {costStats.outliers.slice(0, 3).map((o) => (
+                        <li key={o.date} className="flex justify-between">
+                          <span>{fmtDate(o.date)}</span>
+                          <span className="text-status-warning">{formatBRL(o.costPerM3)}/m³</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
               <div className="lg:col-span-2">
                 <ProductionConsumptionChart data={daily} />
               </div>
@@ -2294,24 +3087,28 @@ function ProducaoConsumo() {
 
           {tab === "history" && (
             <div className="space-y-4">
+              <ProductionConsumptionChart data={daily} />
               <AnalysisHistoryPanel
                 analyses={analyses}
                 selectedIds={selectedAnalysisIds}
                 onSelect={setSelectedAnalysisIds}
               />
-              <ProductionConsumptionChart data={daily} />
             </div>
           )}
 
           {tab === "production" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <DailyProductionChart data={daily} />
+              <ProductionAreaChart data={productionAreaData} totalCompacted={kpis.compactedM3} />
+              <ObraDonutChart data={obraDistribution} />
+              <div className="lg:col-span-2">
+                <ProductionHeatmap data={productionHeatmap} />
+              </div>
               <TopAggregatesChart rows={aggregateProduction} />
               <DistributionChart
                 title="Distribuição por material"
                 data={materialDistribution}
                 description="Volume compactado agrupado por material da RCO."
-                color={CHART_GREEN}
+                color={CHART_COLORS.production}
               />
               <ObraComparisonChart rows={obraCompare} />
               <div className="lg:col-span-2">
@@ -2373,6 +3170,43 @@ function ProducaoConsumo() {
               <TopEquipmentChart rows={equipmentConsumption} />
               <DailyFuelCostChart data={daily} />
               <div className="lg:col-span-2">
+                <ChartCard
+                  title="Diesel diário por obra"
+                  description="Litros consumidos por dia, separados por obra"
+                  hasData={stackedDieselData.length > 0}
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RechartsBarChart
+                      data={stackedDieselData}
+                      margin={{ top: 10, right: 8, left: 0, bottom: 4 }}
+                    >
+                      <CartesianGrid {...CHART_GRID_PROPS} />
+                      <XAxis dataKey="date" {...CHART_AXIS_PROPS} />
+                      <YAxis {...CHART_AXIS_PROPS} />
+                      <Tooltip
+                        content={
+                          <RichTooltip
+                            formatters={Object.fromEntries(
+                              obrasInStack.map((obra) => [obra, (v: number) => formatNumber(v, 0)]),
+                            )}
+                            units={Object.fromEntries(obrasInStack.map((obra) => [obra, "L"]))}
+                          />
+                        }
+                      />
+                      <Legend wrapperStyle={CHART_LEGEND_STYLE as CSSProperties} />
+                      {obrasInStack.map((obra, i) => (
+                        <Bar
+                          key={obra}
+                          dataKey={obra}
+                          stackId="diesel"
+                          fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
+                        />
+                      ))}
+                    </RechartsBarChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+              </div>
+              <div className="lg:col-span-2">
                 <DataTable
                   title={`Abastecimentos importados · ${searchedFueling.length}`}
                   headers={["Data", "Equipamento", "Obra", "Litros", "R$/L", "Total"]}
@@ -2395,6 +3229,7 @@ function ProducaoConsumo() {
           {tab === "equipment" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <EquipmentHoursChart rows={equipmentConsumption} />
+              <EquipmentScatterChart data={equipmentScatterData} />
               <EquipmentLhChart rows={equipmentConsumption} />
               <div className="lg:col-span-2">
                 <Ranking
@@ -2438,13 +3273,35 @@ function ProducaoConsumo() {
                   ]}
                 />
               </div>
+              <div className="lg:col-span-2">
+                <Ranking
+                  title="Top 10 consumidores por m³ atribuível"
+                  rows={topConsumers.map((c) => ({
+                    frota: c.fleetLabel || c.fleet,
+                    litros: formatNumber(c.liters, 0),
+                    m3: formatNumber(c.m3Attributed, 1),
+                    ratio: formatNumber(c.ratio, 2),
+                  }))}
+                  columns={[
+                    { key: "frota", label: "Frota" },
+                    { key: "litros", label: "Litros", align: "right" },
+                    { key: "m3", label: "m³ atribuído", align: "right" },
+                    { key: "ratio", label: "m³/L", align: "right" },
+                  ]}
+                />
+              </div>
             </div>
           )}
 
           {tab === "trucks" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <TopAggregatesChart rows={aggregateProduction} />
+              <AggregateTripsCostChart data={aggregateTripsCostData} />
+              <AggregateTimelineChart
+                data={aggregateTimeline.data}
+                aggregates={aggregateTimeline.aggregates}
+              />
               <FinancialChart kpis={kpis} />
+              <TopAggregatesChart rows={aggregateProduction} />
               <div className="lg:col-span-2">
                 <Ranking
                   title="Produção por agregado"
@@ -2472,42 +3329,52 @@ function ProducaoConsumo() {
           )}
 
           {tab === "audit" && (
-            <div className="rounded border border-border-low bg-surface-container p-5 text-sm space-y-3">
-              <h3 className="font-black uppercase tracking-widest text-xs">Auditoria da análise</h3>
-              <p>
-                <strong>volume_compactado</strong> = volume_caçamba ÷ (1 + fator_empolamento)
-              </p>
-              <p>
-                <strong>custo_combustivel</strong> = litros × preço médio diesel
-              </p>
-              <p>
-                <strong>custo_agregado</strong> = viagens RCO × R$ {AGGREGATE_TRIP_PRICE.toFixed(2)}
-              </p>
-              <p>
-                <strong>custo_por_m3</strong> = custo_combustivel ÷ volume_compactado
-              </p>
-              <p>
-                <strong>faturamento</strong> = receita informada na RCO, quando existir
-              </p>
-              <p>
-                <strong>margem_operacional</strong> = faturamento - custo_combustivel -
-                custo_agregado
-              </p>
-              <div className="rounded border border-border-low bg-surface-highest p-3 text-xs">
-                <p className="font-black uppercase tracking-widest text-on-surface-variant">
-                  Alertas operacionais
+            <div className="space-y-4">
+              <DivergentAuditChart
+                title="Divergência CMB × PDE por dia"
+                description="Barras divergentes mostram registros CMB em azul e PDE em vermelho por data."
+                data={auditDivergenceByDate}
+              />
+              <div className="rounded border border-border-low bg-surface-container p-5 text-sm space-y-3">
+                <h3 className="font-black uppercase tracking-widest text-xs">
+                  Auditoria da análise
+                </h3>
+                <p>
+                  <strong>volume_compactado</strong> = volume_caçamba ÷ (1 + fator_empolamento)
                 </p>
-                <ul className="mt-2 list-disc space-y-1 pl-4 text-on-surface-variant">
-                  {auditAlerts.map((alert) => (
-                    <li key={alert}>{alert}</li>
-                  ))}
-                </ul>
-              </div>
-              <div className="rounded bg-surface-highest p-3 text-xs text-on-surface-variant">
-                Escopo: {selectedAnalysisLabel}
-                {selectedAnalyses.length === 1 && selectedAnalysis
-                  ? ` · Fator aplicado na importação: ${selectedAnalysis.swellFactor.toFixed(2)} · ID: ${selectedAnalysis.id}`
-                  : ` · ${selectedAnalyses.length} análises selecionadas`}
+                <p>
+                  <strong>custo_combustivel</strong> = litros × preço médio diesel
+                </p>
+                <p>
+                  <strong>custo_agregado</strong> = viagens RCO × R${" "}
+                  {AGGREGATE_TRIP_PRICE.toFixed(2)}
+                </p>
+                <p>
+                  <strong>custo_por_m3</strong> = custo_combustivel ÷ volume_compactado
+                </p>
+                <p>
+                  <strong>faturamento</strong> = receita informada na RCO, quando existir
+                </p>
+                <p>
+                  <strong>margem_operacional</strong> = faturamento - custo_combustivel -
+                  custo_agregado
+                </p>
+                <div className="rounded border border-border-low bg-surface-highest p-3 text-xs">
+                  <p className="font-black uppercase tracking-widest text-on-surface-variant">
+                    Alertas operacionais
+                  </p>
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-on-surface-variant">
+                    {auditAlerts.map((alert) => (
+                      <li key={alert}>{alert}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded bg-surface-highest p-3 text-xs text-on-surface-variant">
+                  Escopo: {selectedAnalysisLabel}
+                  {selectedAnalyses.length === 1 && selectedAnalysis
+                    ? ` · Fator aplicado na importação: ${selectedAnalysis.swellFactor.toFixed(2)} · ID: ${selectedAnalysis.id}`
+                    : ` · ${selectedAnalyses.length} análises selecionadas`}
+                </div>
               </div>
             </div>
           )}
@@ -2536,6 +3403,11 @@ function ProducaoConsumo() {
                   icon="event_busy"
                 />
               </div>
+              <DivergentAuditChart
+                title="Divergência CMB × PDE por frota"
+                description="Dias com abastecimento aparecem em azul; dias com Parte Diária aparecem em vermelho."
+                data={crossAuditDivergenceByFleet}
+              />
               <div className="rounded border border-border-low bg-surface-container p-4 text-xs text-on-surface-variant">
                 <p>
                   Frotas com abastecimento e sem Parte Diária:{" "}
@@ -2597,6 +3469,7 @@ function ProducaoConsumo() {
                 placeholder="Buscar por agregado, equipamento, obra, material..."
                 className="w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-sm"
               />
+              <DataSparklines data={sparklineData} />
               <DataTable
                 title={`Viagens importadas · ${searchedTrips.length}`}
                 headers={[
