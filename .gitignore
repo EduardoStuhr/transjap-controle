@@ -1,3 +1,4 @@
+cat > .gitignore << 'EOF'
 # Logs
 logs
 *.log
@@ -7,6 +8,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependências e builds
 node_modules
 dist
 dist-ssr
@@ -14,19 +16,55 @@ dist-ssr
 .vinxi
 .tanstack/**
 .nitro
-*.local
+.cache/
+.turbo/
+.next/
+.vercel/
 
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
 
-# Editor directories and files
+# Variáveis de ambiente
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Credenciais e chaves
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# Bancos de dados locais e backups
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+backup-*.sql
+dump-*.sql
+.drizzle/
+
+# Arquivos locais diversos
+*.local
+
+# Editor / IDE
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+EOF
