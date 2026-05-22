@@ -155,7 +155,7 @@ export function CalendarGrid({
               key={dateStr}
               type="button"
               onClick={() => onSelectDay(dateStr)}
-              className={`group min-h-32 rounded-xl border p-2 text-left transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:bg-surface-bright/65 hover:shadow-industrial sm:min-h-36 ${
+              className={`group relative min-h-32 overflow-hidden rounded-xl border p-2 pt-3 text-left transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:bg-surface-bright/65 hover:shadow-industrial sm:min-h-36 ${
                 isSelected
                   ? "border-primary bg-primary/10 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.55)]"
                   : isToday
@@ -165,6 +165,10 @@ export function CalendarGrid({
                       : "border-border-low/60 bg-surface-highest/30"
               }`}
             >
+              {dayItems.length > 0 && (
+                <span className="absolute left-3 right-3 top-0 h-1 rounded-b-full bg-primary/80 shadow-[0_0_12px_rgba(255,215,0,0.45)]" />
+              )}
+
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div>
                   {viewMode === "day" && (

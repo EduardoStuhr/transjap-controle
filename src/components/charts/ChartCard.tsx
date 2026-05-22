@@ -1,20 +1,31 @@
 import type { ReactNode } from "react";
 
+type SizeType = "sm" | "md" | "lg" | "full";
+
 type Props = {
   title: string;
   description?: string;
   badge?: { label: string; tone?: "success" | "warning" | "info" };
-  height?: number;
+  size?: SizeType;
+  height?: number; // override size if provided
   hasData?: boolean;
   emptyMessage?: string;
   children: ReactNode;
+};
+
+const SIZE_TO_HEIGHT: Record<SizeType, number> = {
+  sm: 220,
+  md: 280,
+  lg: 340,
+  full: 380,
 };
 
 export function ChartCard({
   title,
   description,
   badge,
-  height = 320,
+  size = "md",
+  height,
   hasData = true,
   emptyMessage = "Sem dados suficientes para este gráfico.",
   children,
@@ -25,6 +36,9 @@ export function ChartCard({
       : badge?.tone === "success"
         ? "bg-status-success/15 text-status-success"
         : "bg-status-info/15 text-status-info";
+
+  // Use provided height or size-based height
+  const chartHeight = height ?? SIZE_TO_HEIGHT[size];
 
   return (
     <div className="rounded-lg border border-border-low bg-surface-container p-6">
@@ -41,7 +55,7 @@ export function ChartCard({
           </span>
         )}
       </div>
-      <div style={{ width: "100%", height }}>
+      <div style={{ width: "100%", height: chartHeight }}>
         {hasData ? (
           children
         ) : (

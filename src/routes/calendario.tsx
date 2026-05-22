@@ -203,7 +203,7 @@ function CalendarPage() {
   const [viewMode, setViewMode] = useState<CalendarViewMode>("month");
   const [filter, setFilter] = useState<CalendarFilter>("all");
   const [search, setSearch] = useState("");
-  const [selectedDay, setSelectedDay] = useState<string | null>(todayIso());
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
   const [personalDialogKind, setPersonalDialogKind] = useState<"reminder" | "event" | null>(null);
 
@@ -270,6 +270,8 @@ function CalendarPage() {
       if (viewMode === "day") next.setUTCDate(current.getUTCDate() + direction);
       return next;
     });
+    setSelectedDay(null);
+    setFocusedItemId(null);
   };
 
   const goToday = () => {
@@ -452,19 +454,7 @@ function CalendarPage() {
         </div>
       </div>
 
-      <CalendarGrid
-        anchorDate={anchorDate}
-        viewMode={viewMode}
-        items={filteredItems}
-        selectedDate={selectedDay}
-        onSelectDay={(date) => {
-          setSelectedDay(date);
-          setFocusedItemId(null);
-        }}
-        onSelectItem={selectItem}
-      />
-
-      {selectedDay && user && (
+      {selectedDay && user && selectedItems.length > 0 && (
         <DayDetailsPanel
           date={selectedDay}
           items={selectedItems}
@@ -481,6 +471,18 @@ function CalendarPage() {
           onDeleteTask={deleteTask}
         />
       )}
+
+      <CalendarGrid
+        anchorDate={anchorDate}
+        viewMode={viewMode}
+        items={filteredItems}
+        selectedDate={selectedDay}
+        onSelectDay={(date) => {
+          setSelectedDay(date);
+          setFocusedItemId(null);
+        }}
+        onSelectItem={selectItem}
+      />
 
       {user && personalDialogKind && (
         <ReminderDialog

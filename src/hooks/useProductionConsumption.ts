@@ -53,14 +53,40 @@ export function useDashboardFilters(storageKey = "dashboard_filters") {
 
 /**
  * Hook para gerenciar seleção de análises
+ * Persiste em localStorage automaticamente
  */
-export function useAnalysisSelection(analyses: DbProductionAnalysis[], initialIds?: string[]) {
+export function useAnalysisSelection(
+  analyses: DbProductionAnalysis[],
+  storageKey = "dashboard_selectedAnalysisIds",
+) {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
-    if (!initialIds || initialIds.length === 0) {
-      return analyses.length > 0 ? [analyses[0].id] : [];
+    if (typeof window === "undefined") return [];
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      const ids = JSON.parse(stored) as string[];
+      const validIds = ids.filter((id) => analyses.some((a) => a.id === id));
+      if (validIds.length > 0) return validIds;
     }
-    return initialIds.filter((id) => analyses.some((a) => a.id === id));
+    // Fallback to first analysis if none stored or all are invalid
+    return analyses.length > 0 ? [analyses[0].id] : [];
   });
+
+  // Persist whenever selectedIds changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(storageKey, JSON.stringify(selectedIds));
+    }
+  }, [selectedIds, storageKey]);
+
+  const updateSelectedIds = useCallback(
+    (ids: string[] | ((current: string[]) => string[])) => {
+      setSelectedIds((current) => {
+        const next = typeof ids === "function" ? ids(current) : ids;
+        return next;
+      });
+    },
+    [],
+  );
 
   const selectedAnalyses = useMemo(
     () => analyses.filter((a) => selectedIds.includes(a.id)),
@@ -79,7 +105,7 @@ export function useAnalysisSelection(analyses: DbProductionAnalysis[], initialId
 
   return {
     selectedIds,
-    setSelectedIds,
+    setSelectedIds: updateSelectedIds,
     selectedAnalyses,
     primaryAnalysis,
     isMultipleSelected,
@@ -137,30 +163,49 @@ export function useFilteredData(
 
 /**
  * Hook para gerenciar estado de abas
+ * Persiste em localStorage automaticamente
  */
-export function useDashboardTabs(initialTab = "overview") {
-  const [activeTab, setActiveTab] = useState(initialTab);
-
+export function useDashboardTabs(storageKey = "dashboard_activeTab") {
   const tabs = [
     { id: "overview", label: "Visão Geral" },
-    { id: "daily", label: "Diário" },
-    { id: "accumulated", label: "Acumulado" },
+    { id: "production", label: "Produção" },
+    { id: "consumption", label: "Consumo Diesel" },
+    { id: "trucks", label: "Agregados" },
+    { id: "equipment", label: "Equipamentos Próprios" },
     { id: "efficiency", label: "Eficiência" },
     { id: "financial", label: "Financeiro" },
-    { id: "production", label: "Produção" },
-    { id: "consumption", label: "Consumo" },
-    { id: "equipment", label: "Equipamentos" },
-    { id: "trucks", label: "Agregados" },
+    { id: "accumulated", label: "Acumulado" },
     { id: "comparison", label: "Comparativo" },
-    { id: "history", label: "Histórico" },
     { id: "audit", label: "Auditoria" },
+    { id: "history", label: "Histórico" },
     { id: "crossAudit", label: "Cruzamento" },
     { id: "data", label: "Dados" },
   ];
 
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (typeof window === "undefined") return "overview";
+    const stored = localStorage.getItem(storageKey);
+    // Validate stored tab exists in tabs list
+    if (stored && tabs.some((t) => t.id === stored)) {
+      return stored;
+    }
+    return "overview";
+  });
+
+  // Persist whenever activeTab changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(storageKey, activeTab);
+    }
+  }, [activeTab, storageKey]);
+
+  const handleTabChange = useCallback((newTab: string) => {
+    setActiveTab(newTab);
+  }, []);
+
   return {
     activeTab,
-    setActiveTab,
+    setActiveTab: handleTabChange,
     tabs,
   };
 }

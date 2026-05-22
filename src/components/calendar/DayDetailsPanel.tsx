@@ -1,16 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { DbReminder } from "@/db/schema";
 import { Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { ReminderDialog } from "@/components/calendar/ReminderDialog";
 import {
   CALENDAR_TYPE_META,
@@ -115,6 +108,11 @@ export function DayDetailsPanel({
   const queryClient = useQueryClient();
   const [activeItemId, setActiveItemId] = useState<string | null>(focusedItemId ?? null);
   const [editingReminder, setEditingReminder] = useState<DbReminder | null>(null);
+
+  useEffect(() => {
+    setActiveItemId(focusedItemId ?? null);
+  }, [date, focusedItemId]);
+
   const activeItem = useMemo(
     () => items.find((item) => item.id === (activeItemId ?? focusedItemId)) ?? items[0] ?? null,
     [activeItemId, focusedItemId, items],
@@ -184,117 +182,134 @@ export function DayDetailsPanel({
     deletePersonalItem(item);
   };
 
+  if (items.length === 0) return null;
+
   return (
     <>
-      <Sheet open onOpenChange={(open) => !open && onClose()}>
-        <SheetContent className="w-full overflow-y-auto border-border-low bg-surface-container p-0 sm:max-w-2xl">
-          <div className="sticky top-0 z-10 border-b border-border-low bg-surface-container/95 p-6 backdrop-blur">
-            <SheetHeader className="pr-8">
-              <SheetTitle className="text-on-surface">Agenda de {formatDate(date)}</SheetTitle>
-              <SheetDescription>
-                {items.length} item(ns) entre tarefas, lembretes, eventos e pendências.
-              </SheetDescription>
-            </SheetHeader>
-          </div>
-
-          <div className="grid gap-4 p-6 lg:grid-cols-[260px_1fr]">
-            <div className="max-h-[calc(100vh-180px)] space-y-2 overflow-y-auto pr-1">
-              {items.length === 0 ? (
-                <p className="rounded-xl border border-border-low bg-surface-highest p-4 text-sm text-on-surface-variant">
-                  Nenhum item neste dia.
-                </p>
-              ) : (
-                items.map((item) => (
-                  <ItemRow
-                    key={item.id}
-                    item={item}
-                    active={item.id === activeItem?.id}
-                    onClick={() => setActiveItemId(item.id)}
-                  />
-                ))
-              )}
-            </div>
-
-            {activeItem ? (
-              <div className="rounded-2xl border border-border-low bg-surface-highest p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <span
-                      className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-black uppercase tracking-widest ${CALENDAR_TYPE_META[activeItem.type].bg} ${CALENDAR_TYPE_META[activeItem.type].text}`}
-                    >
-                      <Icon name={CALENDAR_TYPE_META[activeItem.type].icon} className="text-sm" />
-                      {CALENDAR_TYPE_META[activeItem.type].label}
-                    </span>
-                    <h3 className="mt-3 text-xl font-black text-on-surface">{activeItem.title}</h3>
-                    {activeItem.description && (
-                      <p className="mt-2 text-sm leading-relaxed text-on-surface-variant">
-                        {activeItem.description}
-                      </p>
-                    )}
-                  </div>
+      <section className="mb-4 overflow-hidden rounded-2xl border border-primary/30 bg-surface-container/95 shadow-industrial animate-fade-in">
+        <div className="border-b border-border-low bg-gradient-to-r from-primary/12 via-surface-container to-surface-container p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.25em] text-primary">
+                Agenda de {formatDate(date)}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-black text-primary">
+                  <Icon name="event_note" className="text-base" />
+                  {items.length} item(ns)
+                </span>
+                {activeItem && (
                   <span
-                    className={`rounded px-2 py-1 text-[10px] font-bold ${priorityMeta(activeItem.priority).className}`}
+                    className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-black ${CALENDAR_TYPE_META[activeItem.type].bg} ${CALENDAR_TYPE_META[activeItem.type].border} ${CALENDAR_TYPE_META[activeItem.type].text}`}
                   >
-                    {priorityMeta(activeItem.priority).label}
+                    <Icon name={CALENDAR_TYPE_META[activeItem.type].icon} className="text-base" />
+                    {CALENDAR_TYPE_META[activeItem.type].label}
                   </span>
-                </div>
-
-                <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                  <DetailBlock label="Horário" value={fullTime(activeItem)} />
-                  <DetailBlock label="Status" value={activeItem.status} />
-                  <DetailBlock label="Criado por" value={activeItem.createdBy || "Você"} />
-                  <DetailBlock label="Responsável" value={activeItem.assignedTo.join(", ")} />
-                  <DetailBlock label="Local" value={activeItem.location ?? ""} />
-                  <DetailBlock label="Data" value={formatDate(activeItem.date)} />
-                </div>
-
-                <div className="mt-6 flex flex-wrap gap-2">
-                  {activeItem.source === "task" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onOpenTask(activeItem.sourceId)}
-                    >
-                      <Icon name="open_in_new" className="text-base" />
-                      Abrir
-                    </Button>
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleComplete(activeItem)}
-                    disabled={completeMutation.isPending}
-                  >
-                    <Icon
-                      name={activeItem.completed ? "radio_button_unchecked" : "check_circle"}
-                      className="text-base"
-                    />
-                    {activeItem.completed ? "Reabrir" : "Concluir"}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleEdit(activeItem)}>
-                    <Icon name="edit" className="text-base" />
-                    Editar
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleEdit(activeItem)}>
-                    <Icon name="event_repeat" className="text-base" />
-                    Reagendar
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-status-error/30 text-status-error hover:bg-status-error/10"
-                    onClick={() => handleDelete(activeItem)}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Icon name="delete" className="text-base" />
-                    Excluir
-                  </Button>
-                </div>
+                )}
               </div>
-            ) : null}
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Fechar destaque da data"
+              onClick={onClose}
+            >
+              <Icon name="close" />
+            </Button>
           </div>
-        </SheetContent>
-      </Sheet>
+        </div>
+
+        <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(240px,320px)_1fr]">
+          <div className="grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-1">
+            {items.map((item) => (
+              <ItemRow
+                key={item.id}
+                item={item}
+                active={item.id === activeItem?.id}
+                onClick={() => setActiveItemId(item.id)}
+              />
+            ))}
+          </div>
+
+          {activeItem ? (
+            <div className="rounded-xl border border-border-low bg-surface-highest p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-black uppercase tracking-widest ${CALENDAR_TYPE_META[activeItem.type].bg} ${CALENDAR_TYPE_META[activeItem.type].text}`}
+                  >
+                    <Icon name={CALENDAR_TYPE_META[activeItem.type].icon} className="text-sm" />
+                    {CALENDAR_TYPE_META[activeItem.type].label}
+                  </span>
+                  <h3 className="mt-3 text-xl font-black text-on-surface">{activeItem.title}</h3>
+                  {activeItem.description && (
+                    <p className="mt-2 text-sm leading-relaxed text-on-surface-variant">
+                      {activeItem.description}
+                    </p>
+                  )}
+                </div>
+                <span
+                  className={`rounded px-2 py-1 text-[10px] font-bold ${priorityMeta(activeItem.priority).className}`}
+                >
+                  {priorityMeta(activeItem.priority).label}
+                </span>
+              </div>
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <DetailBlock label="Horário" value={fullTime(activeItem)} />
+                <DetailBlock label="Status" value={activeItem.status} />
+                <DetailBlock label="Criado por" value={activeItem.createdBy || "Você"} />
+                <DetailBlock label="Responsável" value={activeItem.assignedTo.join(", ")} />
+                <DetailBlock label="Local" value={activeItem.location ?? ""} />
+                <DetailBlock label="Data" value={formatDate(activeItem.date)} />
+              </div>
+
+              <div className="mt-6 flex flex-wrap gap-2">
+                {activeItem.source === "task" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onOpenTask(activeItem.sourceId)}
+                  >
+                    <Icon name="open_in_new" className="text-base" />
+                    Abrir
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleComplete(activeItem)}
+                  disabled={completeMutation.isPending}
+                >
+                  <Icon
+                    name={activeItem.completed ? "radio_button_unchecked" : "check_circle"}
+                    className="text-base"
+                  />
+                  {activeItem.completed ? "Reabrir" : "Concluir"}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => handleEdit(activeItem)}>
+                  <Icon name="edit" className="text-base" />
+                  Editar
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => handleEdit(activeItem)}>
+                  <Icon name="event_repeat" className="text-base" />
+                  Reagendar
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-status-error/30 text-status-error hover:bg-status-error/10"
+                  onClick={() => handleDelete(activeItem)}
+                  disabled={deleteMutation.isPending}
+                >
+                  <Icon name="delete" className="text-base" />
+                  Excluir
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </section>
 
       {editingReminder && (
         <ReminderDialog
