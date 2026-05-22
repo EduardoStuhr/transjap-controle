@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 export type AuthUser = {
   id: string;
-  name: "Eduardo" | "Davi" | "Luiz" | "Jean";
+  name: "Eduardo" | "Davi" | "Luiz" | "Jean" | "Reginaldo";
   role: "administrador" | "gestor";
 };
 
@@ -18,6 +18,7 @@ const LOCAL_USERS: Array<AuthUser & { password: string }> = [
   { id: "usr-davi", name: "Davi", role: "administrador", password: "123" },
   { id: "usr-luiz", name: "Luiz", role: "gestor", password: "123" },
   { id: "usr-jean", name: "Jean", role: "gestor", password: "123" },
+  { id: "usr-reginaldo", name: "Reginaldo", role: "gestor", password: "123" },
 ];
 
 export const AUTH_USER_OPTIONS = LOCAL_USERS.map(({ password: _password, ...user }) => user);
