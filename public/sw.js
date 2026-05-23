@@ -1,5 +1,14 @@
-const CACHE_NAME = "transjap-fleet-command-v1";
-const APP_SHELL = ["/", "/estoque", "/manutencao", "/manifest.webmanifest", "/pwa-icon.svg"];
+const CACHE_NAME = "transjap-manager-v2";
+const APP_SHELL = [
+  "/",
+  "/login",
+  "/estoque",
+  "/manutencao",
+  "/manifest.webmanifest",
+  "/apple-touch-icon.png",
+  "/pwa-icon-192.png",
+  "/pwa-icon-512.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -20,19 +29,26 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
+  const { request } = event;
+
+  if (request.mode === "navigate") {
+    event.respondWith(fetch(request).catch(() => caches.match("/") || Response.error()));
+    return;
+  }
+
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return response;
-      })
-      .catch(() =>
-        caches.match(event.request).then((cached) => {
-          if (cached) return cached;
-          if (event.request.mode === "navigate") return caches.match("/");
-          return Response.error();
-        }),
-      ),
+    caches.match(request).then((cached) => {
+      const network = fetch(request)
+        .then((response) => {
+          if (response.ok && response.type === "basic") {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => cached || Response.error());
+
+      return cached || network;
+    }),
   );
 });

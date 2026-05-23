@@ -15,6 +15,8 @@ import {
 import { createReminder, updateReminder } from "@/lib/api/reminders";
 
 type CalendarPersonalKind = "reminder" | "event";
+type ReminderPriority = DbReminder["priority"];
+type ReminderStatus = DbReminder["status"];
 
 type Props = {
   open: boolean;
@@ -30,11 +32,11 @@ function inferKind(reminder: DbReminder | null | undefined, fallback: CalendarPe
   return fallback;
 }
 
-function defaultStatus(kind: CalendarPersonalKind) {
+function defaultStatus(kind: CalendarPersonalKind): ReminderStatus {
   return kind === "event" ? "agendado" : "pendente";
 }
 
-function defaultPriority(kind: CalendarPersonalKind) {
+function defaultPriority(kind: CalendarPersonalKind): ReminderPriority {
   return kind === "event" ? "alta" : "média";
 }
 
@@ -262,7 +264,10 @@ export function ReminderDialog({
               <select
                 value={form.priority}
                 onChange={(event) =>
-                  setForm((current) => ({ ...current, priority: event.target.value }))
+                  setForm((current) => ({
+                    ...current,
+                    priority: event.target.value as ReminderPriority,
+                  }))
                 }
                 className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
               >
@@ -278,7 +283,10 @@ export function ReminderDialog({
               <select
                 value={form.status}
                 onChange={(event) =>
-                  setForm((current) => ({ ...current, status: event.target.value }))
+                  setForm((current) => ({
+                    ...current,
+                    status: event.target.value as ReminderStatus,
+                  }))
                 }
                 className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
               >

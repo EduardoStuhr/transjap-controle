@@ -308,8 +308,12 @@ export const reminders = sqliteTable("reminders", {
   endTime: text("end_time"),
   location: text("location").notNull().default(""),
   color: text("color", { enum: ["blue", "purple", "green"] }).notNull().default("blue"),
-  priority: text("priority", { enum: ["baixa", "média", "alta"] }).notNull().default("média"),
-  status: text("status", { enum: ["pendente", "concluído"] }).notNull().default("pendente"),
+  priority: text("priority", { enum: ["baixa", "média", "alta", "urgente"] })
+    .notNull()
+    .default("média"),
+  status: text("status", { enum: ["pendente", "agendado", "em andamento", "concluído"] })
+    .notNull()
+    .default("pendente"),
   completed: integer("completed", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

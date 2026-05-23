@@ -10,7 +10,7 @@ type Props = {
   height?: number; // override size if provided
   hasData?: boolean;
   emptyMessage?: string;
-  children: ReactNode;
+  children?: ReactNode;
 };
 
 const SIZE_TO_HEIGHT: Record<SizeType, number> = {

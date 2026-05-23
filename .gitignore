@@ -67,4 +67,15 @@ dump-*.sql
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Android / Capacitor
+android/.gradle/
+android/local.properties
+android/keystore.properties
+android/**/build/
+android/app/release/
+android/app/debug/
+*.jks
+*.keystore
+!android/gradle/wrapper/gradle-wrapper.jar
 EOF

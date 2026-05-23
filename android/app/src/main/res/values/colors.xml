@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="transjap_black">#05070C</color>
+    <color name="transjap_blue">#163E80</color>
+    <color name="transjap_blue_light">#5C91E6</color>
+    <color name="colorPrimary">#163E80</color>
+    <color name="colorPrimaryDark">#05070C</color>
+    <color name="colorAccent">#5C91E6</color>
+</resources>

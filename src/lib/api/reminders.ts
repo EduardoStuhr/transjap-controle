@@ -1,22 +1,27 @@
 import { createServerFn } from "@tanstack/react-start";
 import { and, eq, gte, lte } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { reminders, type DbReminder } from "@/db/schema";
+import { reminders, type DbReminder, type DbReminderInsert } from "@/db/schema";
 import { getOptionalD1 } from "@/lib/cf-env";
 import { getCurrentUser } from "@/lib/auth-store";
 
+type ReminderKind = DbReminder["kind"];
+type ReminderColor = DbReminder["color"];
+type ReminderPriority = DbReminder["priority"];
+type ReminderStatus = DbReminder["status"];
+
 type ReminderDraft = {
   userId: string;
-  kind?: string;
+  kind?: ReminderKind;
   title: string;
   description?: string;
   date: string;
   time?: string;
   endTime?: string;
   location?: string;
-  color?: string;
-  priority?: string;
-  status?: string;
+  color?: ReminderColor;
+  priority?: ReminderPriority;
+  status?: ReminderStatus;
 };
 
 type ReminderFilters = {
@@ -26,16 +31,16 @@ type ReminderFilters = {
 };
 
 type ReminderPatch = Partial<{
-  kind: string;
+  kind: ReminderKind;
   title: string;
   description: string;
   date: string;
   time: string | null;
   endTime: string | null;
   location: string;
-  color: string;
-  priority: string;
-  status: string;
+  color: ReminderColor;
+  priority: ReminderPriority;
+  status: ReminderStatus;
   completed: boolean;
 }>;
 
@@ -105,19 +110,20 @@ export const createReminder = createServerFn({ method: "POST" })
 
     const d1 = getOptionalD1();
     const now = new Date().toISOString();
-    const row = {
+    const kind: ReminderKind = data.kind ?? "reminder";
+    const row: DbReminder = {
       id: `RM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       userId: user.id,
-      kind: data.kind || "reminder",
+      kind,
       title,
       description: (data.description ?? "").trim(),
       date: data.date,
       time: data.time || null,
       endTime: data.endTime || null,
       location: (data.location ?? "").trim(),
-      color: data.color || (data.kind === "event" ? "purple" : "green"),
-      priority: data.priority || "média",
-      status: data.status || "pendente",
+      color: data.color ?? (kind === "event" ? "purple" : "green"),
+      priority: data.priority ?? "média",
+      status: data.status ?? "pendente",
       completed: false,
       createdAt: now,
       updatedAt: now,
@@ -137,7 +143,7 @@ export const updateReminder = createServerFn({ method: "POST" })
   .inputValidator((args: { userId: string; id: string; patch: ReminderPatch }) => args)
   .handler(async ({ data }) => {
     const user = requireUser(data.userId);
-    const patch = {
+    const patch: Partial<DbReminderInsert> = {
       ...cleanPatch(data.patch),
       updatedAt: new Date().toISOString(),
     };
