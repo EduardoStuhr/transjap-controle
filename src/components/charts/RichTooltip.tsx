@@ -1,78 +1,114 @@
-import type { CSSProperties } from "react";
-import { CHART_TOOLTIP_STYLE } from "@/lib/chart-theme";
+/**
+ * RichTooltip — tooltip Recharts unificado (VIZ-1)
+ * - Tipografia mono nos valores
+ * - Unidade exibida ao lado do número
+ * - Formatadores por dataKey opcionais
+ */
 
 type TooltipEntry = {
   name?: string;
   value?: unknown;
   color?: string;
+  fill?: string;
   dataKey?: string | number;
-  unit?: string;
   payload?: Record<string, unknown>;
 };
 
 type RichTooltipProps = {
   active?: boolean;
   payload?: TooltipEntry[];
-  label?: string;
-  formatters?: Record<string, (v: number) => string>;
+  label?: string | number;
   units?: Record<string, string>;
-  titleFormatter?: (label: string | undefined, payload: TooltipEntry[]) => string;
+  format?: Record<string, (v: number) => string>;
 };
 
-function entryKey(entry: TooltipEntry) {
-  return String(entry.name ?? entry.dataKey ?? "Valor");
-}
-
-function numericValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
+const defaultFormat = (v: number) =>
+  Number.isFinite(v) ? Number(v).toLocaleString("pt-BR") : String(v);
 
 export function RichTooltip({
   active,
   payload,
   label,
-  formatters = {},
   units = {},
-  titleFormatter,
+  format = {},
 }: RichTooltipProps) {
   if (!active || !payload?.length) return null;
-  const fallbackTitle = String(payload[0]?.payload?.name ?? payload[0]?.payload?.label ?? "Dados");
-  const title = titleFormatter ? titleFormatter(label, payload) : label || fallbackTitle;
 
   return (
-    <div style={CHART_TOOLTIP_STYLE as CSSProperties}>
-      <div className="mb-2 font-bold">{title}</div>
-      {payload.map((entry, i) => {
-        const name = entryKey(entry);
-        const dataKey = String(entry.dataKey ?? name);
-        const value = numericValue(entry.value);
-        const formatter = formatters[name] ?? formatters[dataKey];
-        const formatted =
-          value != null && formatter
-            ? formatter(value)
-            : typeof entry.value === "number"
-              ? String(entry.value)
-              : String(entry.value ?? "—");
-        const unit = units[name] ?? units[dataKey] ?? entry.unit;
-
+    <div
+      style={{
+        background: "var(--bg-2)",
+        border: "1px solid var(--line)",
+        borderRadius: 6,
+        padding: "8px 10px",
+        fontSize: 11,
+        boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+        minWidth: 140,
+      }}
+    >
+      {label != null && (
+        <div
+          style={{
+            color: "var(--fg-3)",
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            marginBottom: 6,
+          }}
+        >
+          {String(label)}
+        </div>
+      )}
+      {payload.map((p, i) => {
+        const key = String(p.dataKey ?? p.name ?? i);
+        const fn = format[key] ?? defaultFormat;
+        const unit = units[key] ?? "";
+        const num = typeof p.value === "number" ? p.value : Number(p.value);
+        const formatted = Number.isFinite(num) ? fn(num) : String(p.value ?? "—");
         return (
-          <div key={`${name}-${i}`} className="flex items-center justify-between gap-4 py-0.5">
-            <span className="flex items-center gap-2">
+          <div
+            key={`${key}-${i}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              justifyContent: "space-between",
+              padding: "2px 0",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                color: "var(--fg-2)",
+              }}
+            >
               <span
                 style={{
                   width: 8,
                   height: 8,
-                  background: entry.color,
+                  background: p.color || p.fill,
                   borderRadius: 2,
                   display: "inline-block",
                 }}
               />
-              {name}
-            </span>
-            <span style={{ fontFamily: "monospace" }}>
+              {p.name ?? key}
+            </div>
+            <div
+              style={{
+                fontFamily: "JetBrains Mono, ui-monospace, monospace",
+                color: "var(--fg)",
+                fontWeight: 600,
+              }}
+            >
               {formatted}
-              {unit && <span className="ml-1 opacity-60">{unit}</span>}
-            </span>
+              {unit && (
+                <span style={{ color: "var(--fg-3)", fontWeight: 400, marginLeft: 4 }}>
+                  {unit}
+                </span>
+              )}
+            </div>
           </div>
         );
       })}

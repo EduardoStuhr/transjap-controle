@@ -26,6 +26,7 @@ import {
 } from "@/lib/operational-options";
 import { daysSinceBrDate } from "@/lib/urgency";
 import { useEquipmentStore } from "@/lib/equipment-store";
+import { formatBrDate } from "@/lib/utils";
 
 export const Route = createFileRoute("/manutencao")({ component: Manutencao });
 
@@ -655,7 +656,7 @@ function MaintenanceCard({
         </div>
         <div className="flex justify-between">
           <dt>Criado em:</dt>
-          <dd className="font-bold text-on-surface">{record.createdAt}</dd>
+          <dd className="font-bold text-on-surface">{formatBrDate(record.createdAt)}</dd>
         </div>
         <div className="flex justify-between gap-2">
           <dt>Item / Componente:</dt>

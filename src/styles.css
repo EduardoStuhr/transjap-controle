@@ -162,6 +162,41 @@
 
   --shadow-industrial: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
   --shadow-industrial-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+
+  /* === OKLCH palette (VIZ-1 — template app_transjap) ============== */
+  /* Surfaces warm dark — barro/areia escuro */
+  --bg-0: oklch(0.15 0.008 70);
+  --bg-1: oklch(0.185 0.008 70);
+  --bg-2: oklch(0.22 0.008 70);
+  --bg-3: oklch(0.265 0.008 70);
+  --bg-4: oklch(0.32 0.008 70);
+
+  --line: oklch(0.30 0.008 70);
+  --line-soft: oklch(0.25 0.008 70);
+
+  --fg: oklch(0.96 0.008 90);
+  --fg-2: oklch(0.78 0.008 90);
+  --fg-3: oklch(0.60 0.008 90);
+  --fg-4: oklch(0.45 0.008 90);
+
+  --accent: oklch(0.86 0.18 92);
+  --accent-2: oklch(0.74 0.17 78);
+  --accent-soft: oklch(0.86 0.18 92 / 0.14);
+
+  --ok: oklch(0.78 0.14 152);
+  --warn: oklch(0.82 0.16 70);
+  --danger: oklch(0.70 0.20 25);
+  --info: oklch(0.75 0.13 230);
+
+  --c1: oklch(0.86 0.18 92);    /* yellow — produção */
+  --c2: oklch(0.74 0.13 220);   /* steel — diesel */
+  --c3: oklch(0.72 0.13 150);   /* mint — eficiência */
+  --c4: oklch(0.74 0.16 30);    /* terracotta — custo */
+  --c5: oklch(0.68 0.10 300);   /* muted violet */
+  --c6: oklch(0.85 0.06 90);    /* sand — volume solto */
+
+  --radius: 8px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.18);
 }
 
 @layer base {
@@ -281,4 +316,13 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* Mono numerals (tabular-nums) for chart values & KPIs */
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-feature-settings: "tnum";
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
 }

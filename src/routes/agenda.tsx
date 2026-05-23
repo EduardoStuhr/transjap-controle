@@ -140,6 +140,15 @@ function Agenda() {
     setShowDetailsModal(false);
   }, []);
 
+  const handleDeleteTask = useCallback(
+    async (task: TaskRecord) => {
+      await taskActions.removeTask(task.id);
+      setSelectedTaskId(null);
+      setShowDetailsModal(false);
+    },
+    [taskActions],
+  );
+
   const approveRequest = useCallback(
     async (id: string) => {
       const item = await taskActions.approveRequest(id);
@@ -301,6 +310,7 @@ function Agenda() {
             onAddComment={taskActions.addComment}
             onAddResponse={taskActions.addResponse}
             onEdit={handleEditFromDetails}
+            onDelete={handleDeleteTask}
           />
         )}
       </Suspense>

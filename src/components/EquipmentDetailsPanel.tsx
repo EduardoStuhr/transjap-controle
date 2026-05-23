@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AttachedFile } from "@/components/AttachmentUpload";
 import { toast } from "sonner";
 import type { Equipment } from "@/lib/equipment-store";
+import { formatBrDate } from "@/lib/utils";
 
 export interface MaintenanceRecord {
   id: string;
@@ -155,7 +156,7 @@ export function EquipmentDetailsPanel({
                     Última Manutenção
                   </p>
                   <p className="text-sm font-bold text-on-surface">
-                    {equipment.lastMaintenance || "—"}
+                    {formatBrDate(equipment.lastMaintenance)}
                   </p>
                 </div>
 
@@ -191,7 +192,7 @@ export function EquipmentDetailsPanel({
                         Data de Aquisição
                       </dt>
                       <dd className="text-sm font-mono text-on-surface mt-1">
-                        {equipment.acquisitionDate}
+                        {formatBrDate(equipment.acquisitionDate)}
                       </dd>
                     </div>
                   )}
@@ -243,7 +244,7 @@ export function EquipmentDetailsPanel({
                     type="button"
                     onClick={() =>
                       toast(record.type, {
-                        description: `${record.status} em ${record.date}`,
+                        description: `${record.status} em ${formatBrDate(record.date)}`,
                       })
                     }
                     className="w-full text-left border border-border-low rounded-lg p-4 hover:bg-surface-high transition-colors group"
@@ -270,8 +271,12 @@ export function EquipmentDetailsPanel({
                     </div>
                     <p className="text-sm text-on-surface-variant mb-2">{record.description}</p>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-on-surface-variant">Realizado: {record.date}</span>
-                      <span className="text-on-surface-variant">Prazo: {record.deadline}</span>
+                      <span className="text-on-surface-variant">
+                        Realizado: {formatBrDate(record.date)}
+                      </span>
+                      <span className="text-on-surface-variant">
+                        Prazo: {formatBrDate(record.deadline)}
+                      </span>
                     </div>
                   </button>
                 ))}

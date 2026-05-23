@@ -38,7 +38,7 @@ export function MyAnalysesDialog({
   selectedIds,
   onClose,
   onSelect,
-}: MyAnalysesDialogProps): JSX.Element | null {
+}: MyAnalysesDialogProps) {
   const [obra, setObra] = useState("");
   const [material, setMaterial] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -225,7 +225,7 @@ export function AnalysisHistoryPanel({
   analyses,
   selectedIds,
   onSelect,
-}: AnalysisHistoryPanelProps): JSX.Element {
+}: AnalysisHistoryPanelProps) {
   return (
     <div className="rounded border border-border-low bg-surface-container p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

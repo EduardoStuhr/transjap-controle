@@ -454,35 +454,52 @@ function CalendarPage() {
         </div>
       </div>
 
-      {selectedDay && user && selectedItems.length > 0 && (
-        <DayDetailsPanel
-          date={selectedDay}
-          items={selectedItems}
-          reminders={reminders}
-          userId={user.id}
-          focusedItemId={focusedItemId}
-          onClose={() => {
-            setSelectedDay(null);
+      {selectedDay && user && selectedItems.length > 0 ? (
+        <div className="grid gap-4 items-start lg:grid-cols-[1fr_minmax(320px,460px)]">
+          <div className="min-w-0">
+            <CalendarGrid
+              anchorDate={anchorDate}
+              viewMode={viewMode}
+              items={filteredItems}
+              selectedDate={selectedDay}
+              onSelectDay={(date) => {
+                setSelectedDay(date);
+                setFocusedItemId(null);
+              }}
+              onSelectItem={selectItem}
+            />
+          </div>
+          <div className="min-w-0 lg:sticky lg:top-4">
+            <DayDetailsPanel
+              date={selectedDay}
+              items={selectedItems}
+              reminders={reminders}
+              userId={user.id}
+              focusedItemId={focusedItemId}
+              onClose={() => {
+                setSelectedDay(null);
+                setFocusedItemId(null);
+              }}
+              onOpenTask={openTask}
+              onCompleteTask={completeTask}
+              onEditTask={editTask}
+              onDeleteTask={deleteTask}
+            />
+          </div>
+        </div>
+      ) : (
+        <CalendarGrid
+          anchorDate={anchorDate}
+          viewMode={viewMode}
+          items={filteredItems}
+          selectedDate={selectedDay}
+          onSelectDay={(date) => {
+            setSelectedDay(date);
             setFocusedItemId(null);
           }}
-          onOpenTask={openTask}
-          onCompleteTask={completeTask}
-          onEditTask={editTask}
-          onDeleteTask={deleteTask}
+          onSelectItem={selectItem}
         />
       )}
-
-      <CalendarGrid
-        anchorDate={anchorDate}
-        viewMode={viewMode}
-        items={filteredItems}
-        selectedDate={selectedDay}
-        onSelectDay={(date) => {
-          setSelectedDay(date);
-          setFocusedItemId(null);
-        }}
-        onSelectItem={selectItem}
-      />
 
       {user && personalDialogKind && (
         <ReminderDialog

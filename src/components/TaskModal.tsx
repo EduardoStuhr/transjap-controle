@@ -26,6 +26,7 @@ import {
   type EquipmentOption,
 } from "@/lib/operational-options";
 import { useEquipmentStore } from "@/lib/equipment-store";
+import { formatBrDate } from "@/lib/utils";
 
 export interface TaskModalData extends TaskInput {
   title: string;
@@ -442,7 +443,7 @@ export function TaskModal({
                   <div className="flex justify-between">
                     <dt className="text-on-surface-variant font-semibold">Prazo:</dt>
                     <dd className="text-on-surface font-bold">
-                      {formData.deadline || "Sem prazo"}
+                      {formData.deadline ? formatBrDate(formData.deadline) : "Sem prazo"}
                     </dd>
                   </div>
                 </dl>

@@ -30,10 +30,7 @@ const NAV = [
   { to: "/perfil", label: "Perfil", icon: "account_circle" },
 ] as const;
 
-// Routes restricted to specific roles; absent = all authenticated users
-const NAV_ROLES: Partial<Record<(typeof NAV)[number]["to"], string[]>> = {
-  "/producao-consumo": ["administrador", "gestor"],
-};
+// Todas as rotas são acessíveis a qualquer usuário autenticado.
 
 export function Icon({
   name,
@@ -387,8 +384,6 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
       </div>
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex overflow-x-auto scrollbar-hide border-t border-border-low bg-surface-low/95 backdrop-blur px-2 py-2 gap-1">
         {NAV.map((item) => {
-          const allowedRoles = NAV_ROLES[item.to];
-          if (allowedRoles && !allowedRoles.includes(user?.role ?? "")) return null;
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link
@@ -454,8 +449,6 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
       </div>
       <nav className="mt-6 flex flex-col flex-1 px-4 gap-1">
         {NAV.map((item) => {
-          const allowedRoles = NAV_ROLES[item.to];
-          if (allowedRoles && !allowedRoles.includes(user?.role ?? "")) return null;
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link

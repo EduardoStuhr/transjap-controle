@@ -5,6 +5,7 @@ import { equipmentDailyParts, fueling, productionAnalyses, swellFactors, trips }
 import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import { buildAnalysisSnapshot } from "@/lib/production-analytics";
+import { recalculateFuelAttribution } from "@/lib/fuel-attribution";
 import type { ParsedDailyPart, ParsedFueling, ParsedTrip } from "@/lib/carcara-parser";
 import type {
   DbEquipmentDailyPart,
@@ -564,6 +565,22 @@ export const createAnalysis = createServerFn({ method: "POST" })
       await db.insert(equipmentDailyParts).values(dailyPartRows.slice(i, i + INSERT_CHUNK));
     }
 
+    const affectedFleets = Array.from(
+      new Set(
+        [
+          ...fuelRows.map((r) => normalizeFleet(r.prefix || r.vehicleId || r.plate)),
+          ...dailyPartRows.map((r) => normalizeFleet(r.fleet)),
+        ].filter(Boolean),
+      ),
+    );
+    if (affectedFleets.length > 0) {
+      try {
+        await recalculateFuelAttribution(db, { fleets: affectedFleets, deleteFirst: true });
+      } catch (err) {
+        console.error("[fuel-attribution] recalc on createAnalysis failed", err);
+      }
+    }
+
     return {
       analysisId: id,
       trips: tripRows.length,
@@ -734,6 +751,21 @@ export const importFueling = createServerFn({ method: "POST" })
             importedAt: sql`excluded.imported_at`,
           },
         });
+    }
+
+    const affectedFleets = Array.from(
+      new Set(
+        fuelRows
+          .map((r) => normalizeFleet(r.prefix || r.vehicleId || r.plate))
+          .filter(Boolean),
+      ),
+    );
+    if (affectedFleets.length > 0) {
+      try {
+        await recalculateFuelAttribution(db, { fleets: affectedFleets, deleteFirst: true });
+      } catch (err) {
+        console.error("[fuel-attribution] recalc on importFueling failed", err);
+      }
     }
 
     return {

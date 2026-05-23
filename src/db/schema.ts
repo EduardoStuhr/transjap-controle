@@ -1,9 +1,9 @@
-import { primaryKey, sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { primaryKey, sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
-  role: text("role").notNull(), // "administrador" | "gestor" | "operador"
+  role: text("role", { enum: ["administrador"] }).notNull(),
   passwordHash: text("password_hash").notNull(),
   createdAt: text("created_at").notNull(),
 });
@@ -13,8 +13,8 @@ export const equipment = sqliteTable("equipment", {
   model: text("model").notNull(),
   icon: text("icon").notNull(),
   hours: integer("hours").notNull().default(0),
-  status: text("status").notNull(), // "Operação" | "Manutenção" | "Parado"
-  tone: text("tone").notNull(),
+  status: text("status", { enum: ["Operação", "Manutenção", "Parado"] }).notNull(),
+  tone: text("tone", { enum: ["success", "warning", "error"] }).notNull(),
   location: text("location").notNull(),
   lastMaintenance: text("last_maintenance").notNull(),
   seriesNumber: text("series_number"),
@@ -31,9 +31,19 @@ export const tasks = sqliteTable("tasks", {
   equipment: text("equipment").notNull().default(""),
   assignedTo: text("assigned_to", { mode: "json" }).$type<string[]>().notNull(),
   sector: text("sector").notNull(),
-  priority: text("priority").notNull(),
+  priority: text("priority", { enum: ["Baixa", "Média", "Alta", "Urgente"] }).notNull(),
   deadline: text("deadline"),
-  status: text("status").notNull(),
+  status: text("status", {
+    enum: [
+      "Não visualizado",
+      "Visualizado",
+      "Em andamento",
+      "Aguardando peças",
+      "Aguardando aprovação",
+      "Concluído",
+      "Atrasado",
+    ],
+  }).notNull(),
   createdBy: text("created_by").notNull().default(""),
   attachments: text("attachments", { mode: "json" }).$type<unknown[]>().notNull().default([]),
   viewedBy: text("viewed_by", { mode: "json" })
@@ -108,8 +118,19 @@ export const inventoryMovements = sqliteTable("inventory_movements", {
 export const maintenanceRecords = sqliteTable("maintenance_records", {
   id: text("id").primaryKey(),
   equipment: text("equipment").notNull(),
-  type: text("type").notNull(),
-  status: text("status").notNull(),
+  type: text("type", {
+    enum: [
+      "Preventiva",
+      "Corretiva",
+      "Inspeção",
+      "Troca de óleo",
+      "Hidráulica",
+      "Mecânica",
+    ],
+  }).notNull(),
+  status: text("status", {
+    enum: ["Aberta", "Em andamento", "Concluída", "Atrasada"],
+  }).notNull(),
   item: text("item").notNull().default(""),
   serviceDescription: text("service_description").notNull().default(""),
   submittedBy: text("submitted_by").notNull().default(""),
@@ -125,7 +146,9 @@ export const maintenanceSteps = sqliteTable("maintenance_steps", {
     .references(() => maintenanceRecords.id, { onDelete: "cascade" }),
   stepIndex: integer("step_index").notNull(),
   label: text("label").notNull(),
-  status: text("status").notNull(),
+  status: text("status", {
+    enum: ["pendente", "em_andamento", "concluida"],
+  }).notNull(),
   startedAt: text("started_at"),
   completedAt: text("completed_at"),
   durationMinutes: integer("duration_minutes").notNull().default(0),
@@ -277,16 +300,16 @@ export type DbProductionAnalysis = typeof productionAnalyses.$inferSelect;
 export const reminders = sqliteTable("reminders", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
-  kind: text("kind").notNull().default("reminder"),
+  kind: text("kind", { enum: ["reminder", "event"] }).notNull().default("reminder"),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
   date: text("date").notNull(),
   time: text("time"),
   endTime: text("end_time"),
   location: text("location").notNull().default(""),
-  color: text("color").notNull().default("blue"),
-  priority: text("priority").notNull().default("média"),
-  status: text("status").notNull().default("pendente"),
+  color: text("color", { enum: ["blue", "purple", "green"] }).notNull().default("blue"),
+  priority: text("priority", { enum: ["baixa", "média", "alta"] }).notNull().default("média"),
+  status: text("status", { enum: ["pendente", "concluído"] }).notNull().default("pendente"),
   completed: integer("completed", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
@@ -294,3 +317,27 @@ export const reminders = sqliteTable("reminders", {
 
 export type DbReminder = typeof reminders.$inferSelect;
 export type DbReminderInsert = typeof reminders.$inferInsert;
+
+export const fuelAttribution = sqliteTable(
+  "fuel_attribution",
+  {
+    id: text("id").primaryKey(),
+    fleet: text("fleet").notNull(),
+    fleetLabel: text("fleet_label").notNull().default(""),
+    date: text("date").notNull(),
+    obra: text("obra").notNull().default(""),
+    hoursWorked: real("hours_worked").notNull(),
+    litersAttributed: real("liters_attributed").notNull(),
+    costAttributed: real("cost_attributed").notNull(),
+    sourceFuelingId: text("source_fueling_id"),
+    calculatedAt: text("calculated_at").notNull(),
+  },
+  (table) => ({
+    idxFleetDate: index("idx_fuelattr_fleet_date").on(table.fleet, table.date),
+    idxDate: index("idx_fuelattr_date").on(table.date),
+    idxObra: index("idx_fuelattr_obra").on(table.obra),
+  }),
+);
+
+export type DbFuelAttribution = typeof fuelAttribution.$inferSelect;
+export type DbFuelAttributionInsert = typeof fuelAttribution.$inferInsert;

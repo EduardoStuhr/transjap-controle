@@ -56,7 +56,7 @@ export function ProductionConsumptionCompactChart({
   hasData,
 }: BaseChartProps & {
   data: ProductionConsumptionData[];
-}): JSX.Element {
+}) {
   return (
     <ChartCard title={title} description={description} hasData={hasData} height={height}>
       <ResponsiveContainer width="100%" height="100%">
@@ -119,7 +119,7 @@ export function SimpleBarChart({
   nameKey?: string;
   color?: string;
   layout?: "vertical" | "horizontal";
-}): JSX.Element {
+}) {
   const isVertical = layout === "vertical";
   const marginLeft = isVertical ? 120 : 0;
 
@@ -170,7 +170,7 @@ export function DieselHoursProductionScatterChart({
   height = 340,
 }: BaseChartProps & {
   data: DieselHoursProductionPoint[];
-}): JSX.Element {
+}) {
   return (
     <ChartCard title={title} description={description} hasData={hasData} height={height}>
       <ResponsiveContainer width="100%" height="100%">
@@ -216,7 +216,7 @@ export function DistributionPieChart({
   height = 280,
 }: BaseChartProps & {
   data: PieChartData[];
-}): JSX.Element {
+}) {
   return (
     <ChartCard title={title} description={description} hasData={hasData} height={height}>
       <ResponsiveContainer width="100%" height="100%">
@@ -260,7 +260,7 @@ export function ProductionAreaCompactChart({
   data: AreaChartData[];
   valueKey?: string;
   color?: string;
-}): JSX.Element {
+}) {
   return (
     <ChartCard title={title} description={description} hasData={hasData} height={height}>
       <ResponsiveContainer width="100%" height="100%">
@@ -297,7 +297,7 @@ export function EmptyChartState({
   title: string;
   message: string;
   suggestion?: string;
-}): JSX.Element {
+}) {
   return (
     <div className="rounded border border-border-low bg-surface-container p-6 text-center">
       <div className="mb-3 text-4xl opacity-30">📊</div>
@@ -312,6 +312,6 @@ export function EmptyChartState({
  * Grid responsivo para layout de gráficos
  * Adapta-se automaticamente para mobile, tablet e desktop
  */
-export function ChartGrid({ children }: { children: ReactNode }): JSX.Element {
+export function ChartGrid({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">{children}</div>;
 }

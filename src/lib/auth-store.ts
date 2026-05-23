@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 export type AuthUser = {
   id: string;
   name: "Eduardo" | "Davi" | "Luiz" | "Jean" | "Reginaldo";
-  role: "administrador" | "gestor";
+  role: "administrador";
 };
 
 type AuthState = {
@@ -14,11 +14,11 @@ type AuthState = {
 const STORAGE_KEY = "transjap:fleet-command:auth:v1";
 
 const LOCAL_USERS: Array<AuthUser & { password: string }> = [
-  { id: "usr-eduardo", name: "Eduardo", role: "gestor", password: "123" },
-  { id: "usr-davi", name: "Davi", role: "administrador", password: "123" },
-  { id: "usr-luiz", name: "Luiz", role: "gestor", password: "123" },
-  { id: "usr-jean", name: "Jean", role: "gestor", password: "123" },
-  { id: "usr-reginaldo", name: "Reginaldo", role: "gestor", password: "123" },
+  { id: "usr-eduardo", name: "Eduardo", role: "administrador", password: "Transjap2026*" },
+  { id: "usr-davi", name: "Davi", role: "administrador", password: "Transjap2026*" },
+  { id: "usr-luiz", name: "Luiz", role: "administrador", password: "Transjap2026*" },
+  { id: "usr-jean", name: "Jean", role: "administrador", password: "Transjap2026*" },
+  { id: "usr-reginaldo", name: "Reginaldo", role: "administrador", password: "Transjap2026*" },
 ];
 
 export const AUTH_USER_OPTIONS = LOCAL_USERS.map(({ password: _password, ...user }) => user);

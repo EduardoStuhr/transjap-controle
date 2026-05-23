@@ -1,6 +1,8 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/AppLayout";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,9 +13,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Icon } from "@/components/AppLayout";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
 import { TASK_STATUS_CONFIG, type TaskRecord } from "@/lib/task-types";
 import { useAuthStore } from "@/lib/auth-store";
@@ -22,10 +21,9 @@ import { useEquipmentStore } from "@/lib/equipment-store";
 import { downloadAttachment, exportTaskAsCsv, exportTaskAsPdf } from "@/lib/task-export";
 import { formatBrDate } from "@/lib/utils";
 
-interface TaskDetailsModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+interface TaskDetailsPanelProps {
   task: TaskRecord | null;
+  onClose: () => void;
   onAddComment: (
     taskId: string,
     comment: { author: string; text: string },
@@ -52,15 +50,14 @@ function formatViewedAt(iso?: string) {
   }
 }
 
-export function TaskDetailsModal({
-  open,
-  onOpenChange,
+export function TaskDetailsPanel({
   task,
+  onClose,
   onAddComment,
   onAddResponse,
   onEdit,
   onDelete,
-}: TaskDetailsModalProps) {
+}: TaskDetailsPanelProps) {
   const user = useAuthStore((snapshot) => snapshot.user);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const [commentAuthor, setCommentAuthor] = useState("");
@@ -74,24 +71,14 @@ export function TaskDetailsModal({
   const isRecipient = Boolean(user && recipients.includes(user.name));
   const isCreator = Boolean(user && task && task.createdBy && task.createdBy === user.name);
 
-  if (!task) return null;
-
-  const handleConfirmDelete = async () => {
-    if (!onDelete) return;
-    setDeleting(true);
-    try {
-      await onDelete(task);
-      toast.success("Tarefa excluída", { description: task.title });
-      setConfirmDelete(false);
-      onOpenChange(false);
-    } catch (err) {
-      toast.error("Falha ao excluir", {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setDeleting(false);
-    }
-  };
+  if (!task) {
+    return (
+      <aside className="rounded-2xl border border-border-low bg-surface-container p-8 text-center text-on-surface-variant">
+        <Icon name="touch_app" className="text-5xl opacity-30" />
+        <p className="mt-3 text-sm font-bold">Selecione uma tarefa para ver os detalhes</p>
+      </aside>
+    );
+  }
 
   const statusConfig = TASK_STATUS_CONFIG[task.status];
   const statusTextColor = statusConfig.color.split(" ")[1] || "text-on-surface-variant";
@@ -100,7 +87,6 @@ export function TaskDetailsModal({
   const handleAddComment = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!newComment.trim() || !commentAuthor.trim()) return;
-
     await onAddComment(task.id, { author: commentAuthor, text: newComment });
     toast.success("Comentário adicionado", { description: "Sua mensagem foi registrada." });
     setNewComment("");
@@ -120,60 +106,82 @@ export function TaskDetailsModal({
     if (!ok) toast.error("Arquivo indisponível", { description: file.name });
   };
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="space-y-1 pb-4 border-b border-border-low">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
-                  #{task.id}
-                </span>
-                <div
-                  className={`px-2 py-1 rounded text-xs font-bold flex items-center gap-1 ${statusBgColor} ${statusTextColor}`}
-                >
-                  <Icon name={statusConfig.icon} className="text-sm" />
-                  {statusConfig.label}
-                </div>
-              </div>
-              <DialogTitle className="text-2xl font-black tracking-tight">{task.title}</DialogTitle>
-            </div>
-            <div className="flex gap-2 flex-wrap justify-end">
-              <Button size="sm" variant="outline" onClick={() => onEdit(task)}>
-                <Icon name="edit" />
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                title="Exportar PDF"
-                onClick={() => exportTaskAsPdf(task)}
-              >
-                <Icon name="picture_as_pdf" />
-              </Button>
-              {isCreator && onDelete && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  title="Excluir tarefa"
-                  className="text-status-error border-status-error/40 hover:bg-status-error/10"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  <Icon name="delete" />
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                title="Exportar planilha (.csv)"
-                onClick={() => exportTaskAsCsv(task)}
-              >
-                <Icon name="table_view" />
-              </Button>
-            </div>
-          </div>
-        </DialogHeader>
+  const handleConfirmDelete = async () => {
+    if (!onDelete) return;
+    setDeleting(true);
+    try {
+      await onDelete(task);
+      toast.success("Tarefa excluída", { description: task.title });
+      setConfirmDelete(false);
+      onClose();
+    } catch (err) {
+      toast.error("Falha ao excluir", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
 
+  return (
+    <aside className="rounded-2xl border border-border-low bg-surface-container shadow-industrial overflow-hidden">
+      <header className="space-y-1 px-5 py-4 border-b border-border-low bg-surface-container/95">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
+                #{task.id}
+              </span>
+              <div
+                className={`px-2 py-1 rounded text-xs font-bold flex items-center gap-1 ${statusBgColor} ${statusTextColor}`}
+              >
+                <Icon name={statusConfig.icon} className="text-sm" />
+                {statusConfig.label}
+              </div>
+            </div>
+            <h2 className="text-2xl font-black tracking-tight text-on-surface break-words">
+              {task.title}
+            </h2>
+          </div>
+          <div className="flex gap-2 flex-wrap justify-end items-start">
+            <Button size="sm" variant="outline" onClick={() => onEdit(task)} title="Editar">
+              <Icon name="edit" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Exportar PDF"
+              onClick={() => exportTaskAsPdf(task)}
+            >
+              <Icon name="picture_as_pdf" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Exportar planilha (.csv)"
+              onClick={() => exportTaskAsCsv(task)}
+            >
+              <Icon name="table_view" />
+            </Button>
+            {isCreator && onDelete && (
+              <Button
+                size="sm"
+                variant="outline"
+                title="Excluir tarefa"
+                className="text-status-error border-status-error/40 hover:bg-status-error/10"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Icon name="delete" />
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={onClose} title="Fechar">
+              <Icon name="close" />
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="p-5 max-h-[calc(100vh-220px)] overflow-y-auto">
         <Tabs defaultValue="details" className="w-full">
           <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="details" className="flex items-center gap-1.5">
@@ -190,7 +198,7 @@ export function TaskDetailsModal({
             </TabsTrigger>
             <TabsTrigger value="comments" className="flex items-center gap-1.5">
               <Icon name="chat" className="text-base" />
-              <span className="hidden sm:inline text-xs">Comentários</span>
+              <span className="hidden sm:inline text-xs">Coment.</span>
             </TabsTrigger>
             <TabsTrigger value="attachments" className="flex items-center gap-1.5">
               <Icon name="attach_file" className="text-base" />
@@ -198,7 +206,6 @@ export function TaskDetailsModal({
             </TabsTrigger>
           </TabsList>
 
-          {/* DETAILS TAB */}
           <TabsContent value="details" className="space-y-5 mt-5">
             <div>
               <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-3">
@@ -319,7 +326,6 @@ export function TaskDetailsModal({
             </div>
           </TabsContent>
 
-          {/* RESPONSES TAB */}
           <TabsContent value="responses" className="space-y-5 mt-5">
             <div className="space-y-3">
               {task.responses.length === 0 ? (
@@ -423,7 +429,6 @@ export function TaskDetailsModal({
             )}
           </TabsContent>
 
-          {/* TIMELINE TAB */}
           <TabsContent value="timeline" className="space-y-4 mt-5">
             <div className="space-y-4">
               {task.timeline.length > 0 ? (
@@ -464,7 +469,6 @@ export function TaskDetailsModal({
             </div>
           </TabsContent>
 
-          {/* COMMENTS TAB */}
           <TabsContent value="comments" className="space-y-5 mt-5">
             <div className="space-y-4 max-h-96 overflow-y-auto">
               {task.comments.length > 0 ? (
@@ -534,7 +538,6 @@ export function TaskDetailsModal({
             </form>
           </TabsContent>
 
-          {/* ATTACHMENTS TAB */}
           <TabsContent value="attachments" className="space-y-4 mt-5">
             {task.attachments.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -591,7 +594,8 @@ export function TaskDetailsModal({
             )}
           </TabsContent>
         </Tabs>
-      </DialogContent>
+      </div>
+
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -616,6 +620,6 @@ export function TaskDetailsModal({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Dialog>
+    </aside>
   );
 }

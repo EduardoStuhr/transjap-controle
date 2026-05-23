@@ -219,8 +219,8 @@ export function DayDetailsPanel({
           </div>
         </div>
 
-        <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(240px,320px)_1fr]">
-          <div className="grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-1">
+        <div className="grid gap-4 p-4 sm:p-5">
+          <div className="grid max-h-56 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
             {items.map((item) => (
               <ItemRow
                 key={item.id}

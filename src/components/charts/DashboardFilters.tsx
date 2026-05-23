@@ -23,7 +23,7 @@ export function DashboardFilters({
   equipment,
   aggregates,
   loading = false,
-}: DashboardFiltersProps): JSX.Element {
+}: DashboardFiltersProps) {
   return (
     <div className="mb-4 flex flex-wrap gap-2 items-center rounded border border-border-low bg-surface-lowest p-3">
       <input
@@ -146,7 +146,7 @@ interface TabsProps {
   onChange: (tabId: string) => void;
 }
 
-export function DashboardTabs({ tabs, activeTab, onChange }: TabsProps): JSX.Element {
+export function DashboardTabs({ tabs, activeTab, onChange }: TabsProps) {
   return (
     <div className="mb-4 flex gap-2 overflow-x-auto border-b border-border-low">
       {tabs.map(({ id, label }) => (
@@ -184,7 +184,7 @@ export function KpiCardCompact({
   sub,
   icon,
   tone = "neutral",
-}: KpiCardProps): JSX.Element {
+}: KpiCardProps) {
   const valueClass =
     tone === "warning"
       ? "mt-2 text-xl font-black leading-none text-status-warning"

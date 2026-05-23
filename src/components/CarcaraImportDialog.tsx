@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Icon } from "@/components/AppLayout";
+import { ManualPdeDialog } from "@/components/ManualPdeDialog";
 import { createAnalysis } from "@/lib/api/production-consumption";
 import {
   normalizeDateKey,
@@ -141,6 +142,7 @@ export function CarcaraImportDialog({
   const [arquivoPDE, setArquivoPDE] = useState<FileItem | null>(null);
   const [arquivoPendente, setArquivoPendente] = useState<PendingManualFile | null>(null);
   const [pdeFallback, setPdeFallback] = useState<PdeFallbackState | null>(null);
+  const [manualPdeOpen, setManualPdeOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [creating, setCreating] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -697,6 +699,21 @@ export function CarcaraImportDialog({
                       CMB
                     </p>
                   )}
+                  <div className="mt-2 flex items-center justify-between gap-2 px-1">
+                    <span className="text-[10px] text-on-surface-variant">
+                      Sem planilha PDE? Use a entrada manual simplificada.
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => setManualPdeOpen(true)}
+                      disabled={!!arquivoPDE}
+                    >
+                      <Icon name="edit_note" className="text-base mr-1" />
+                      Inserir manualmente
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -898,6 +915,22 @@ export function CarcaraImportDialog({
           </DialogContent>
         </Dialog>
       )}
+
+      <ManualPdeDialog
+        open={manualPdeOpen}
+        onClose={() => setManualPdeOpen(false)}
+        onConfirm={(rows) => {
+          const synthetic = new File([""], "PDE-manual.txt", { type: "text/plain" });
+          setArquivoPDE({
+            file: synthetic,
+            result: { type: "pde", rows, warnings: [] },
+          });
+        }}
+        cmbFleets={cmbRequiredFleets}
+        fueling={rawFueling}
+        defaultDate={draft.dateStart}
+        defaultObra={draft.obra}
+      />
 
       {pdeFallback && (
         <Dialog open onOpenChange={() => setPdeFallback(null)}>
