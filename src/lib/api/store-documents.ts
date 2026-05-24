@@ -85,6 +85,25 @@ export async function listStoreDocuments<T>(module: string): Promise<T[]> {
     .filter((payload): payload is T => payload !== null);
 }
 
+export async function getStoreDocument<T>(module: string, id: string): Promise<T | null> {
+  const d1 = getStoreD1();
+  if (!d1) {
+    return (getModuleDocuments(module).get(id)?.payload as T | undefined) ?? null;
+  }
+
+  await ensureStoreDocumentsTable(d1);
+  const row = await d1
+    .prepare(
+      `SELECT id, payload, created_at, updated_at
+       FROM store_documents
+       WHERE module = ? AND id = ?`,
+    )
+    .bind(module, id)
+    .first<StoreDocumentRow>();
+
+  return row ? parsePayload<T>(row) : null;
+}
+
 export async function upsertStoreDocument<T>(module: string, id: string, payload: T): Promise<T> {
   const d1 = getStoreD1();
   const timestamp = nowIso();
@@ -115,11 +134,14 @@ export async function upsertStoreDocument<T>(module: string, id: string, payload
   return payload;
 }
 
-export async function deleteStoreDocument(module: string, id: string): Promise<{ ok: true }> {
+export async function deleteStoreDocument(
+  module: string,
+  id: string,
+): Promise<{ ok: true; success: true; error: null }> {
   const d1 = getStoreD1();
   if (!d1) {
     getModuleDocuments(module).delete(id);
-    return { ok: true };
+    return { ok: true, success: true, error: null };
   }
 
   await ensureStoreDocumentsTable(d1);
@@ -128,5 +150,22 @@ export async function deleteStoreDocument(module: string, id: string): Promise<{
     .bind(module, id)
     .run();
 
-  return { ok: true };
+  return { ok: true, success: true, error: null };
+}
+
+export async function deleteStoreModuleDocuments(module: string): Promise<{
+  ok: true;
+  success: true;
+  error: null;
+}> {
+  const d1 = getStoreD1();
+  if (!d1) {
+    getModuleDocuments(module).clear();
+    return { ok: true, success: true, error: null };
+  }
+
+  await ensureStoreDocumentsTable(d1);
+  await d1.prepare("DELETE FROM store_documents WHERE module = ?").bind(module).run();
+
+  return { ok: true, success: true, error: null };
 }

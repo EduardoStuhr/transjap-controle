@@ -20,3 +20,11 @@ export function getOptionalD1(): D1Database | undefined {
   const env = cfEnvStorage.getStore();
   return env?.DB as D1Database | undefined;
 }
+
+export function getOptionalEnvString(name: string): string | undefined {
+  const envValue = cfEnvStorage.getStore()?.[name];
+  if (typeof envValue === "string" && envValue.trim()) return envValue.trim();
+
+  const processValue = typeof process !== "undefined" ? process.env[name] : undefined;
+  return processValue && processValue.trim() ? processValue.trim() : undefined;
+}

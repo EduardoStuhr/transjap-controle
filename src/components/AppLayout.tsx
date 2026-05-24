@@ -1,6 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useNavigate } from "@tanstack/react-router";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,11 +15,13 @@ import { authActions, useAuthStore } from "@/lib/auth-store";
 import { getInventoryAlerts, useInventoryStore } from "@/lib/inventory-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
-import { filterVisibleTasks } from "@/lib/task-visibility";
+import { isTaskCompletedStatus } from "@/lib/task-types";
+import { filterNotifiableTasks, filterVisibleTasks } from "@/lib/task-visibility";
+import { sortTasksStable } from "@/lib/task-sort";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
 
 const NAV = [
-  { to: "/", label: "Dashboard", icon: "dashboard" },
+  { to: "/", label: "Painel", icon: "dashboard" },
   { to: "/agenda", label: "Agenda Operacional", icon: "calendar_today" },
   { to: "/calendario", label: "Calendário", icon: "calendar_today" },
   { to: "/manutencao", label: "Manutenção", icon: "build" },
@@ -29,6 +31,42 @@ const NAV = [
   { to: "/relatorios", label: "Relatórios", icon: "insights" },
   { to: "/perfil", label: "Perfil", icon: "account_circle" },
 ] as const;
+
+const READ_ALERTS_STORAGE_PREFIX = "transjap:alerts:read:v1:";
+
+function alertStorageKey(userId: string | undefined) {
+  return `${READ_ALERTS_STORAGE_PREFIX}${userId || "session"}`;
+}
+
+function readAlertKeys(userId: string | undefined) {
+  if (typeof window === "undefined") return new Set<string>();
+
+  try {
+    const raw = window.localStorage.getItem(alertStorageKey(userId));
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(
+      Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : [],
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function writeAlertKeys(userId: string | undefined, keys: Set<string>) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    alertStorageKey(userId),
+    JSON.stringify(Array.from(keys).slice(-200)),
+  );
+}
+
+function taskAlertKey(task: { id: string; status: string; deadline: string }) {
+  return `task:${task.id}:${task.status}:${task.deadline}`;
+}
+
+function stockAlertKey(alert: { id: string; description: string }) {
+  return `stock:${alert.id}:${alert.description}`;
+}
 
 // Todas as rotas são acessíveis a qualquer usuário autenticado.
 
@@ -57,6 +95,12 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   const [notifOpen, setNotifOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const user = useAuthStore((snapshot) => snapshot.user);
+  const [viewedAlertKeys, setViewedAlertKeys] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setViewedAlertKeys(readAlertKeys(user?.id));
+  }, [user?.id]);
+
   const tasks = useTaskStore((s) => s.tasks);
   const maintenances = useMaintenanceStore((s) => s.records);
   const inventoryItems = useInventoryStore((s) => s.items);
@@ -71,16 +115,39 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   );
   const criticalTasks = useMemo(
     () =>
-      filterVisibleTasks(tasks, user).filter(
-        (task) =>
-          task.status !== "Concluído" && task.deadline && getUrgencyLevel(task.deadline).isOverdue,
+      sortTasksStable(
+        filterNotifiableTasks(tasks, user).filter(
+          (task) =>
+            !isTaskCompletedStatus(task.status) &&
+            task.deadline &&
+            getUrgencyLevel(task.deadline).isOverdue,
+        ),
       ),
     [tasks, user],
   );
+  const activeAlertKeys = useMemo(
+    () => [
+      ...criticalTasks.map((task) => taskAlertKey(task)),
+      ...stockAlerts.map((alert) => stockAlertKey(alert)),
+    ],
+    [criticalTasks, stockAlerts],
+  );
+  const unreadAlertCount = activeAlertKeys.filter((key) => !viewedAlertKeys.has(key)).length;
+
+  const markAlertsViewed = (keys: readonly string[]) => {
+    if (keys.length === 0) return;
+    setViewedAlertKeys((current) => {
+      const next = new Set(current);
+      keys.forEach((key) => next.add(key));
+      writeAlertKeys(user?.id, next);
+      return next;
+    });
+  };
+
   const results = useMemo(() => {
     if (query.length < 2) return [];
     const needle = query.toLowerCase();
-    const visibleTasks = filterVisibleTasks(tasks, user);
+    const visibleTasks = sortTasksStable(filterVisibleTasks(tasks, user));
     return [
       ...visibleTasks
         .filter((t) => t.title.toLowerCase().includes(needle))
@@ -105,9 +172,11 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const criticalCount = useTaskStore(
     (snapshot) =>
-      filterVisibleTasks(snapshot.tasks, user).filter(
+      filterNotifiableTasks(snapshot.tasks, user).filter(
         (task) =>
-          task.status !== "Concluído" && task.deadline && getUrgencyLevel(task.deadline).isOverdue,
+          !isTaskCompletedStatus(task.status) &&
+          task.deadline &&
+          getUrgencyLevel(task.deadline).isOverdue,
       ).length,
   );
   const stockAlertCount = stockAlerts.length;
@@ -220,11 +289,15 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
               <button
                 type="button"
                 className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full relative transition-industrial"
-                onClick={() => setNotifOpen((v) => !v)}
+                onClick={() => {
+                  const opening = !notifOpen;
+                  setNotifOpen(opening);
+                  if (opening) markAlertsViewed(activeAlertKeys);
+                }}
                 aria-label="Central de alertas"
               >
                 <Icon name="notifications" />
-                {totalAlertCount > 0 && (
+                {unreadAlertCount > 0 && (
                   <span className="absolute top-2 right-2 w-2 h-2 bg-status-error rounded-full ring-2 ring-surface-container animate-pulse" />
                 )}
               </button>
@@ -253,6 +326,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => {
+                                markAlertsViewed([taskAlertKey(task)]);
                                 setNotifOpen(false);
                                 navigate({ to: "/agenda" });
                               }}
@@ -277,6 +351,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                             type="button"
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => {
+                              markAlertsViewed([stockAlertKey(alert)]);
                               setNotifOpen(false);
                               navigate({ to: "/estoque" });
                             }}

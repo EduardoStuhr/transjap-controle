@@ -19,7 +19,6 @@ export type MaintenanceStepTemplate = {
 };
 
 export const MAINTENANCE_STEPS: MaintenanceStepTemplate[] = [
-  { id: "solicitacao_aberta", label: "Solicitação aberta", defaultSlaHours: 4 },
   { id: "enviado_manutencao", label: "Enviado para manutenção", defaultSlaHours: 8 },
   { id: "diagnostico", label: "Em diagnóstico", defaultSlaHours: 24 },
   { id: "aguardando_orcamento", label: "Aguardando orçamento", defaultSlaHours: 24 },
@@ -27,9 +26,10 @@ export const MAINTENANCE_STEPS: MaintenanceStepTemplate[] = [
   { id: "aguardando_aprovacao", label: "Aguardando aprovação", defaultSlaHours: 24 },
   { id: "aguardando_peca", label: "Aguardando peça", defaultSlaHours: 72 },
   { id: "execucao", label: "Em execução", defaultSlaHours: 24 },
-  { id: "teste", label: "Em teste", defaultSlaHours: 8 },
   { id: "concluido", label: "Concluído", defaultSlaHours: 1 },
 ];
+
+const DEPRECATED_MAINTENANCE_STEP_IDS = new Set(["solicitacao_aberta", "teste"]);
 
 export type MaintenanceStep = MaintenanceStepTemplate & {
   status: MaintenanceStepStatus;
@@ -53,6 +53,20 @@ export type MaintenanceTimelineEvent = {
   note: string;
 };
 
+export type MaintenanceCostEntry = {
+  id: string;
+  supplierName: string;
+  partName: string;
+  amount: number;
+  createdAt: string;
+  createdBy: string;
+};
+
+export type MaintenanceCostDraft = Pick<
+  MaintenanceCostEntry,
+  "supplierName" | "partName" | "amount"
+>;
+
 export type MaintenanceRecord = {
   id: string;
   equipment: string;
@@ -72,6 +86,10 @@ export type MaintenanceRecord = {
   item: string;
   serviceDescription: string;
   submittedBy: string;
+  supplierName: string;
+  materialDescription: string;
+  cost: number;
+  costEntries: MaintenanceCostEntry[];
   steps: MaintenanceStep[];
   timeline: MaintenanceTimelineEvent[];
   waitingParts: string[];
@@ -79,7 +97,15 @@ export type MaintenanceRecord = {
 
 export type MaintenanceDraft = Pick<
   MaintenanceRecord,
-  "equipment" | "type" | "status" | "item" | "serviceDescription" | "notes"
+  | "equipment"
+  | "type"
+  | "status"
+  | "item"
+  | "serviceDescription"
+  | "notes"
+  | "supplierName"
+  | "materialDescription"
+  | "cost"
 >;
 
 type MaintenanceState = {
@@ -91,6 +117,8 @@ type MaintenanceSelector<T> = (state: MaintenanceState) => T;
 const QK = ["maintenance"] as const;
 const STORAGE_KEY = "transjap:fleet-command:maintenance:v2";
 const LEGACY_STORAGE_KEY = "transjap:fleet-command:maintenance:v1";
+const DELETED_IDS_STORAGE_KEY = "transjap:fleet-command:maintenance:deleted-ids:v1";
+const REMOTE_SYNCED_STORAGE_KEY = "transjap:fleet-command:maintenance:remote-synced:v1";
 const EMPTY_STATE: MaintenanceState = { records: [] };
 
 let localMigrationStarted = false;
@@ -151,6 +179,65 @@ function minutesBetween(start: string, end: string) {
   return Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000));
 }
 
+function makeCostEntry(
+  draft: MaintenanceCostDraft,
+  createdAt = nowIso(),
+  createdBy = currentUserName(),
+): MaintenanceCostEntry {
+  return {
+    id: newId("COST"),
+    supplierName: draft.supplierName.trim(),
+    partName: draft.partName.trim(),
+    amount: Math.max(0, draft.amount),
+    createdAt,
+    createdBy,
+  };
+}
+
+function normalizeCostEntries(record: Partial<MaintenanceRecord>): MaintenanceCostEntry[] {
+  if (Array.isArray(record.costEntries) && record.costEntries.length > 0) {
+    return record.costEntries.map((entry) => ({
+      id: entry.id || newId("COST"),
+      supplierName: entry.supplierName || "",
+      partName: entry.partName || "",
+      amount: typeof entry.amount === "number" ? Math.max(0, entry.amount) : 0,
+      createdAt: entry.createdAt || record.createdAt || "",
+      createdBy: entry.createdBy || record.submittedBy || "",
+    }));
+  }
+
+  const amount = typeof record.cost === "number" ? Math.max(0, record.cost) : 0;
+  if (!record.supplierName && !record.materialDescription && amount === 0) return [];
+
+  return [
+    {
+      id: `COST-${record.id || "LEGACY"}-INITIAL`,
+      supplierName: record.supplierName || "",
+      partName: record.materialDescription || "",
+      amount,
+      createdAt: record.createdAt || "",
+      createdBy: record.submittedBy || "",
+    },
+  ];
+}
+
+function completeAllSteps(steps: MaintenanceStep[], timestamp: string, user: string, note: string) {
+  return steps.map((step) =>
+    step.status === "concluida"
+      ? step
+      : {
+          ...step,
+          status: "concluida" as const,
+          startedAt: step.startedAt || timestamp,
+          completedAt: timestamp,
+          startedBy: step.startedBy || user,
+          completedBy: user,
+          completionComment: step.completionComment || note,
+          durationMinutes: step.startedAt ? minutesBetween(step.startedAt, timestamp) : 0,
+        },
+  );
+}
+
 function normalizeStep(step: Partial<MaintenanceStep> & MaintenanceStepTemplate): MaintenanceStep {
   return {
     ...step,
@@ -168,19 +255,24 @@ function normalizeStep(step: Partial<MaintenanceStep> & MaintenanceStepTemplate)
 }
 
 function normalizeRecord(record: Partial<MaintenanceRecord>): MaintenanceRecord {
-  const rawSteps =
+  const storedSteps =
     Array.isArray(record.steps) && record.steps.length > 0 ? record.steps : initialSteps();
+  const rawSteps = storedSteps.filter((step) => !DEPRECATED_MAINTENANCE_STEP_IDS.has(step.id));
   const steps = rawSteps.map((step, index) =>
     normalizeStep({
-      ...MAINTENANCE_STEPS[index],
+      ...(MAINTENANCE_STEPS.find((template) => template.id === step.id) ||
+        MAINTENANCE_STEPS[index]),
       ...step,
       id: step.id || MAINTENANCE_STEPS[index]?.id || newId("STEP"),
       label: step.label || MAINTENANCE_STEPS[index]?.label || "Etapa",
       defaultSlaHours: step.defaultSlaHours || MAINTENANCE_STEPS[index]?.defaultSlaHours || 24,
     }),
   );
-  const currentStepId =
-    record.currentStepId || steps.find((step) => step.status !== "concluida")?.id || steps[0].id;
+  const fallbackStepId =
+    steps.find((step) => step.status !== "concluida")?.id || steps[steps.length - 1]?.id || "";
+  const currentStepId = steps.some((step) => step.id === record.currentStepId)
+    ? record.currentStepId || fallbackStepId
+    : fallbackStepId;
 
   return {
     id: record.id || newId(),
@@ -201,6 +293,10 @@ function normalizeRecord(record: Partial<MaintenanceRecord>): MaintenanceRecord 
     item: record.item || "",
     serviceDescription: record.serviceDescription || "",
     submittedBy: record.submittedBy || "",
+    supplierName: record.supplierName || "",
+    materialDescription: record.materialDescription || "",
+    cost: typeof record.cost === "number" ? record.cost : 0,
+    costEntries: normalizeCostEntries(record),
     steps,
     timeline: Array.isArray(record.timeline) ? record.timeline : [],
     waitingParts: Array.isArray(record.waitingParts) ? record.waitingParts : [],
@@ -213,6 +309,55 @@ function normalizeState(value: unknown): MaintenanceState {
   return { records: Array.isArray(stored.records) ? stored.records.map(normalizeRecord) : [] };
 }
 
+function readDeletedRecordIds(): Set<string> {
+  if (!isBrowser()) return new Set();
+
+  try {
+    const raw = window.localStorage.getItem(DELETED_IDS_STORAGE_KEY);
+    const ids = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function writeDeletedRecordIds(ids: Set<string>) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(DELETED_IDS_STORAGE_KEY, JSON.stringify(Array.from(ids).slice(-500)));
+}
+
+function markDeletedRecordId(id: string) {
+  const ids = readDeletedRecordIds();
+  ids.add(id);
+  writeDeletedRecordIds(ids);
+}
+
+function unmarkDeletedRecordId(id: string) {
+  const ids = readDeletedRecordIds();
+  ids.delete(id);
+  writeDeletedRecordIds(ids);
+}
+
+function hasSyncedRemoteMaintenance() {
+  return isBrowser() && window.localStorage.getItem(REMOTE_SYNCED_STORAGE_KEY) === "1";
+}
+
+function markRemoteMaintenanceSynced() {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(REMOTE_SYNCED_STORAGE_KEY, "1");
+}
+
+function filterDeletedRecords(state: MaintenanceState): MaintenanceState {
+  const deletedIds = readDeletedRecordIds();
+  if (deletedIds.size === 0) return state;
+
+  return {
+    records: state.records.filter((record) => !deletedIds.has(record.id)),
+  };
+}
+
 function readStorage(): MaintenanceState {
   if (!isBrowser()) return EMPTY_STATE;
 
@@ -220,7 +365,7 @@ function readStorage(): MaintenanceState {
     const raw =
       window.localStorage.getItem(STORAGE_KEY) || window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return EMPTY_STATE;
-    return normalizeState(JSON.parse(raw));
+    return filterDeletedRecords(normalizeState(JSON.parse(raw)));
   } catch {
     return EMPTY_STATE;
   }
@@ -229,6 +374,7 @@ function readStorage(): MaintenanceState {
 function writeStorage(nextState: MaintenanceState) {
   if (!isBrowser()) return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+  markRemoteMaintenanceSynced();
 }
 
 function nextOpenStep(steps: MaintenanceStep[]) {
@@ -239,6 +385,18 @@ function getCachedState(queryClient: ReturnType<typeof useQueryClient>): Mainten
   return queryClient.getQueryData<MaintenanceState>(QK) ?? readStorage();
 }
 
+function setCachedState(
+  queryClient: ReturnType<typeof useQueryClient>,
+  nextState: MaintenanceState,
+) {
+  queryClient.setQueryData<MaintenanceState>(QK, nextState);
+  writeStorage(nextState);
+}
+
+function upsertRecord(records: MaintenanceRecord[], record: MaintenanceRecord) {
+  return [record, ...records.filter((current) => current.id !== record.id)];
+}
+
 function useLocalMaintenanceMigration(remoteState: MaintenanceState | undefined, enabled: boolean) {
   const queryClient = useQueryClient();
 
@@ -247,7 +405,11 @@ function useLocalMaintenanceMigration(remoteState: MaintenanceState | undefined,
 
     const localState = readStorage();
     const remoteIds = new Set(remoteState.records.map((record) => record.id));
-    const records = localState.records.filter((record) => !remoteIds.has(record.id));
+    const deletedIds = readDeletedRecordIds();
+    const allowBootstrap = !hasSyncedRemoteMaintenance() && remoteIds.size === 0;
+    const records = localState.records.filter(
+      (record) => !deletedIds.has(record.id) && !remoteIds.has(record.id) && allowBootstrap,
+    );
 
     if (records.length === 0) {
       writeStorage(remoteState);
@@ -256,7 +418,11 @@ function useLocalMaintenanceMigration(remoteState: MaintenanceState | undefined,
 
     localMigrationStarted = true;
     Promise.all(records.map((record) => createMaintenanceRecord({ data: record })))
-      .then(() => queryClient.invalidateQueries({ queryKey: QK }))
+      .then(() => {
+        writeStorage(remoteState);
+        localMigrationStarted = false;
+        return queryClient.invalidateQueries({ queryKey: QK });
+      })
       .catch(() => {
         localMigrationStarted = false;
       });
@@ -270,6 +436,16 @@ export function getMaintenanceAlerts(_records: MaintenanceRecord[]) {
     title: string;
     description: string;
   }>;
+}
+
+export function getMaintenanceExternalCost(record: Pick<MaintenanceRecord, "costEntries">) {
+  return record.costEntries.reduce((sum, entry) => sum + entry.amount, 0);
+}
+
+export function getMaintenanceTotalCost(
+  record: Pick<MaintenanceRecord, "totalCost" | "costEntries">,
+) {
+  return record.totalCost + getMaintenanceExternalCost(record);
 }
 
 export function useMaintenanceStore<T>(selector: MaintenanceSelector<T>): T {
@@ -288,45 +464,72 @@ export function useMaintenanceStore<T>(selector: MaintenanceSelector<T>): T {
 
 export function useMaintenanceActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: QK });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: QK });
+  };
 
   const createMutation = useMutation({
     mutationFn: (record: MaintenanceRecord) => createMaintenanceRecord({ data: record }),
-    onSuccess: invalidate,
   });
 
   const updateMutation = useMutation({
     mutationFn: (record: MaintenanceRecord) => updateMaintenanceRecord({ data: record }),
-    onSuccess: invalidate,
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteMaintenanceRecord({ data: id }),
-    onSuccess: invalidate,
   });
 
   const updateRecord = async (record: MaintenanceRecord) => {
-    await updateMutation.mutateAsync(record);
-    return record;
+    const previous = getCachedState(queryClient);
+    setCachedState(queryClient, { records: upsertRecord(previous.records, record) });
+
+    try {
+      await updateMutation.mutateAsync(record);
+      invalidate();
+      return record;
+    } catch (error) {
+      setCachedState(queryClient, previous);
+      throw error;
+    }
   };
 
   return {
     async createRecord(draft: MaintenanceDraft) {
       const createdAt = new Date().toLocaleDateString("pt-BR");
-      const steps = initialSteps();
-      const submittedBy = getCurrentUser()?.name || "";
+      const timestamp = nowIso();
+      const submittedBy = currentUserName();
+      const isAlreadyCompleted = draft.status === "Concluída";
+      const completionNote = "Manutenção informada como já concluída no cadastro.";
+      const steps = isAlreadyCompleted
+        ? completeAllSteps(initialSteps(), timestamp, submittedBy, completionNote)
+        : initialSteps();
+      const initialCost =
+        draft.supplierName.trim() || draft.materialDescription.trim() || draft.cost > 0
+          ? [
+              makeCostEntry(
+                {
+                  supplierName: draft.supplierName,
+                  partName: draft.materialDescription,
+                  amount: draft.cost,
+                },
+                timestamp,
+                submittedBy,
+              ),
+            ]
+          : [];
       const record: MaintenanceRecord = {
         id: newId(),
         equipment: draft.equipment.trim(),
         type: draft.type.trim() || "Preventiva",
         technician: "",
         responsible: "",
-        status: "Aberta",
-        currentStepId: steps[0].id,
+        status: isAlreadyCompleted ? "Concluída" : "Aberta",
+        currentStepId: isAlreadyCompleted ? steps[steps.length - 1].id : steps[0].id,
         deadline: "",
         createdAt,
-        startedAt: "",
-        finishedAt: "",
+        startedAt: isAlreadyCompleted ? timestamp : "",
+        finishedAt: isAlreadyCompleted ? timestamp : "",
         description: "",
         notes: draft.notes.trim(),
         serviceSummary: "",
@@ -334,13 +537,39 @@ export function useMaintenanceActions() {
         item: draft.item.trim(),
         serviceDescription: draft.serviceDescription.trim(),
         submittedBy,
+        supplierName: draft.supplierName.trim(),
+        materialDescription: draft.materialDescription.trim(),
+        cost: typeof draft.cost === "number" && draft.cost > 0 ? draft.cost : 0,
+        costEntries: initialCost,
         steps,
-        timeline: [timeline("Manutenção criada", draft.serviceDescription)],
+        timeline: [
+          ...(isAlreadyCompleted
+            ? [timeline("Manutenção registrada como concluída", completionNote)]
+            : []),
+          ...(initialCost.length > 0
+            ? [
+                timeline(
+                  "Custo de fornecedor registrado",
+                  `${initialCost[0].partName || "Material"} - R$ ${initialCost[0].amount.toFixed(2)}`,
+                ),
+              ]
+            : []),
+          timeline("Manutenção criada", draft.serviceDescription),
+        ],
         waitingParts: [],
       };
 
-      await createMutation.mutateAsync(record);
-      return record;
+      const previous = getCachedState(queryClient);
+      setCachedState(queryClient, { records: upsertRecord(previous.records, record) });
+
+      try {
+        await createMutation.mutateAsync(record);
+        invalidate();
+        return record;
+      } catch (error) {
+        setCachedState(queryClient, previous);
+        throw error;
+      }
     },
 
     async startStep(recordId: string, stepId: string, note = "") {
@@ -452,8 +681,73 @@ export function useMaintenanceActions() {
       });
     },
 
+    async addExternalCost(recordId: string, draft: MaintenanceCostDraft) {
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!record) return null;
+      if (!draft.supplierName.trim() || !draft.partName.trim() || draft.amount <= 0) {
+        throw new Error("Informe fornecedor, peça e valor válido.");
+      }
+
+      const entry = makeCostEntry(draft);
+      return updateRecord({
+        ...record,
+        costEntries: [entry, ...record.costEntries],
+        timeline: [
+          timeline(
+            "Custo de fornecedor registrado",
+            `${entry.partName} - ${entry.supplierName} - R$ ${entry.amount.toFixed(2)}`,
+          ),
+          ...record.timeline,
+        ],
+      });
+    },
+
+    async completeRecord(recordId: string, note = "") {
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!record || record.status === "Concluída") return record ?? null;
+
+      const timestamp = nowIso();
+      const user = currentUserName();
+      const completionNote = note.trim() || "Manutenção registrada como já concluída.";
+      const steps = completeAllSteps(record.steps, timestamp, user, completionNote);
+
+      return updateRecord({
+        ...record,
+        status: "Concluída",
+        currentStepId: steps[steps.length - 1]?.id || record.currentStepId,
+        startedAt: record.startedAt || timestamp,
+        finishedAt: timestamp,
+        serviceSummary: record.serviceSummary || completionNote,
+        steps,
+        timeline: [
+          timeline("Manutenção registrada como concluída", completionNote),
+          ...record.timeline,
+        ],
+      });
+    },
+
     async removeRecord(id: string) {
-      await deleteMutation.mutateAsync(id);
+      await queryClient.cancelQueries({ queryKey: QK });
+      const previous = getCachedState(queryClient);
+      markDeletedRecordId(id);
+      setCachedState(queryClient, {
+        records: previous.records.filter((record) => record.id !== id),
+      });
+
+      try {
+        await deleteMutation.mutateAsync(id);
+        setCachedState(queryClient, {
+          records: getCachedState(queryClient).records.filter((record) => record.id !== id),
+        });
+        invalidate();
+      } catch (error) {
+        unmarkDeletedRecordId(id);
+        setCachedState(queryClient, previous);
+        invalidate();
+        throw error;
+      }
     },
   };
 }
@@ -482,6 +776,16 @@ export const maintenanceActions = {
   addCost: (): never => {
     throw new Error(
       "maintenanceActions.addCost() foi removido. Use useMaintenanceActions().addCost().",
+    );
+  },
+  addExternalCost: (): never => {
+    throw new Error(
+      "maintenanceActions.addExternalCost() foi removido. Use useMaintenanceActions().addExternalCost().",
+    );
+  },
+  completeRecord: (): never => {
+    throw new Error(
+      "maintenanceActions.completeRecord() foi removido. Use useMaintenanceActions().completeRecord().",
     );
   },
 } as const;

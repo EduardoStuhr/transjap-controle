@@ -3,15 +3,29 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useInventoryActions, useInventoryStore } from "@/lib/inventory-store";
 import type { InventoryItem, StockMovement } from "@/lib/inventory-types";
 import { useAuthStore } from "@/lib/auth-store";
+import { isAdminUser } from "@/lib/auth-users";
 import { exportMaintenanceAsCsv, exportMaintenanceAsPdf } from "@/lib/maintenance-export";
 import {
+  getMaintenanceExternalCost,
+  getMaintenanceTotalCost,
   useMaintenanceActions,
   useMaintenanceStore,
+  type MaintenanceCostDraft,
   type MaintenanceDraft,
   type MaintenanceRecord,
   type MaintenanceStep,
@@ -26,7 +40,8 @@ import {
 } from "@/lib/operational-options";
 import { daysSinceBrDate } from "@/lib/urgency";
 import { useEquipmentStore } from "@/lib/equipment-store";
-import { formatBrDate } from "@/lib/utils";
+import { formatBrDate, formatBrDateTime } from "@/lib/utils";
+import { EquipmentsInMaintenancePanel } from "@/components/EquipmentsInMaintenancePanel";
 
 export const Route = createFileRoute("/manutencao")({ component: Manutencao });
 
@@ -82,7 +97,16 @@ const EMPTY_MAINTENANCE: MaintenanceDraft = {
   item: "",
   serviceDescription: "",
   notes: "",
+  supplierName: "",
+  materialDescription: "",
+  cost: 0,
 };
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return "Tente novamente.";
+}
 
 function Manutencao() {
   const inventoryActions = useInventoryActions();
@@ -92,10 +116,13 @@ function Manutencao() {
   const inventoryItems = useInventoryStore((snapshot) => snapshot.items);
   const movements = useInventoryStore((snapshot) => snapshot.movements);
   const user = useAuthStore((snapshot) => snapshot.user);
+  const canDeleteMaintenance = isAdminUser(user);
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<MaintenanceRecord | null>(null);
+  const [deletingMaintenance, setDeletingMaintenance] = useState(false);
   const [draft, setDraft] = useState<MaintenanceDraft>(EMPTY_MAINTENANCE);
   const [consumption, setConsumption] = useState({
     itemId: "",
@@ -150,6 +177,22 @@ function Manutencao() {
     return Math.round(total / completedSteps.length);
   }, [records]);
 
+  const monthlyCost = useMemo(() => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    return records.reduce((sum, record) => {
+      const createdMs = (() => {
+        if (!record.createdAt) return 0;
+        if (record.createdAt.includes("/")) {
+          const [d, m, y] = record.createdAt.split("/").map(Number);
+          return new Date(y, m - 1, d).getTime() || 0;
+        }
+        return new Date(record.createdAt).getTime() || 0;
+      })();
+      return createdMs >= monthStart ? sum + getMaintenanceTotalCost(record) : sum;
+    }, 0);
+  }, [records]);
+
   const openCreateMaintenance = () => {
     setDraft({ ...EMPTY_MAINTENANCE });
     setShowMaintenanceModal(true);
@@ -196,7 +239,7 @@ function Manutencao() {
       equipment: record.equipment,
       maintenanceId: record.id,
     }));
-    toast.success("Manutenção registrada", { description: record.equipment });
+    toast.success("Manutenção registrada", { description: formatEquipment(record.equipment) });
   };
 
   const openRecord = (record: MaintenanceRecord) => {
@@ -206,6 +249,37 @@ function Manutencao() {
       equipment: record.equipment,
       maintenanceId: record.id,
     }));
+  };
+
+  const requestDeleteMaintenance = (record: MaintenanceRecord) => {
+    if (!canDeleteMaintenance) {
+      toast.error("Apenas administradores podem excluir manutenção.");
+      return;
+    }
+    setDeleteTarget(record);
+  };
+
+  const confirmDeleteMaintenance = async () => {
+    if (!deleteTarget) return;
+
+    setDeletingMaintenance(true);
+    try {
+      await maintenanceActions.removeRecord(deleteTarget.id);
+      toast.success("Manutenção excluída", {
+        description: `${formatEquipment(deleteTarget.equipment)} · ${deleteTarget.id}`,
+      });
+      if (selectedRecordId === deleteTarget.id) setSelectedRecordId(null);
+      setConsumption((current) =>
+        current.maintenanceId === deleteTarget.id
+          ? { ...current, maintenanceId: "", equipment: "" }
+          : current,
+      );
+      setDeleteTarget(null);
+    } catch (error) {
+      toast.error("Erro ao excluir manutenção", { description: getErrorMessage(error) });
+    } finally {
+      setDeletingMaintenance(false);
+    }
   };
 
   const consumeInventoryItem = async () => {
@@ -256,11 +330,27 @@ function Manutencao() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <EquipmentsInMaintenancePanel
+        records={records}
+        onRecordClick={(id) => setSelectedRecordId(id)}
+      />
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
         <Metric label="Total" value={totalMaintenance} tone="primary" />
         <Metric label="Concluídas" value={completedCount} tone="success" />
         <Metric label="Em andamento" value={activeCount} tone="primary" />
         <Metric label="Tempo médio (min)" value={averageStepMinutes} tone="primary" />
+        <div className="border rounded-lg p-4 bg-surface-container border-border-low">
+          <p className="text-[10px] font-black uppercase tracking-widest mb-2 text-on-surface-variant">
+            Custo do mês
+          </p>
+          <p className="text-2xl font-black font-mono text-primary">
+            {monthlyCost.toLocaleString("pt-BR", {
+              style: "currency",
+              currency: "BRL",
+            })}
+          </p>
+        </div>
       </div>
 
       <div className="bg-surface-container border border-border-low rounded-lg p-5 mb-8 shadow-industrial">
@@ -434,14 +524,23 @@ function Manutencao() {
               <table className="w-full text-left">
                 <thead className="bg-surface-lowest border-b border-border-low">
                   <tr>
-                    {["Equipamento", "Tipo", "Item", "Aberto por", "Status"].map((header) => (
-                      <th
-                        key={header}
-                        className="px-6 py-4 text-[10px] uppercase tracking-[0.2em] text-on-surface-variant font-black"
-                      >
-                        {header}
-                      </th>
-                    ))}
+                    {[
+                      "Equipamento",
+                      "Tipo",
+                      "Item",
+                      "Aberto por",
+                      "Status",
+                      canDeleteMaintenance ? "Ações" : null,
+                    ]
+                      .filter((header): header is string => Boolean(header))
+                      .map((header) => (
+                        <th
+                          key={header}
+                          className="px-6 py-4 text-[10px] uppercase tracking-[0.2em] text-on-surface-variant font-black"
+                        >
+                          {header}
+                        </th>
+                      ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-low">
@@ -450,6 +549,8 @@ function Manutencao() {
                       key={record.id}
                       record={record}
                       onOpen={openRecord}
+                      onRequestDelete={requestDeleteMaintenance}
+                      canDelete={canDeleteMaintenance}
                       formatEquipment={formatEquipment}
                     />
                   ))}
@@ -463,6 +564,8 @@ function Manutencao() {
                   key={record.id}
                   record={record}
                   onOpen={openRecord}
+                  onRequestDelete={requestDeleteMaintenance}
+                  canDelete={canDeleteMaintenance}
                   formatEquipment={formatEquipment}
                 />
               ))}
@@ -500,10 +603,42 @@ function Manutencao() {
         movements={selectedRecordMovements}
         inventoryItems={inventoryItems}
         actions={maintenanceActions}
+        canDelete={canDeleteMaintenance}
+        onRequestDelete={requestDeleteMaintenance}
         onOpenChange={(open) => {
           if (!open) setSelectedRecordId(null);
         }}
       />
+
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open && !deletingMaintenance) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir manutenção?</AlertDialogTitle>
+            <AlertDialogDescription>
+              O registro <strong>{deleteTarget?.id}</strong> será removido da manutenção. Tarefas,
+              equipamentos, estoque e configurações do sistema não serão apagados.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingMaintenance}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deletingMaintenance}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmDeleteMaintenance();
+              }}
+              className="bg-status-error text-white hover:bg-status-error/90"
+            >
+              {deletingMaintenance ? "Excluindo..." : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }
@@ -556,17 +691,21 @@ function Metric({
 function MaintenanceTableRow({
   record,
   onOpen,
+  onRequestDelete,
+  canDelete,
   formatEquipment,
 }: {
   record: MaintenanceRecord;
   onOpen: (record: MaintenanceRecord) => void;
+  onRequestDelete: (record: MaintenanceRecord) => void;
+  canDelete: boolean;
   formatEquipment: (value: string | undefined) => string;
 }) {
   return (
     <tr
       role="button"
       tabIndex={0}
-      aria-label={`Abrir manutenção: ${record.equipment}`}
+      aria-label={`Abrir manutenção: ${formatEquipment(record.equipment)}`}
       onClick={() => onOpen(record)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -608,6 +747,23 @@ function MaintenanceTableRow({
           })()}
         </div>
       </td>
+      {canDelete && (
+        <td className="px-6 py-4">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="border-status-error/40 text-status-error hover:bg-status-error/10"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRequestDelete(record);
+            }}
+          >
+            <Icon name="delete" />
+            Excluir
+          </Button>
+        </td>
+      )}
     </tr>
   );
 }
@@ -615,16 +771,27 @@ function MaintenanceTableRow({
 function MaintenanceCard({
   record,
   onOpen,
+  onRequestDelete,
+  canDelete,
   formatEquipment,
 }: {
   record: MaintenanceRecord;
   onOpen: (record: MaintenanceRecord) => void;
+  onRequestDelete: (record: MaintenanceRecord) => void;
+  canDelete: boolean;
   formatEquipment: (value: string | undefined) => string;
 }) {
   return (
-    <button
-      type="button"
+    <article
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(record)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen(record);
+        }
+      }}
       className="border border-border-low rounded-lg p-4 text-left hover:border-primary/50 hover:shadow-md transition-industrial group bg-surface-highest/50"
     >
       <div className="flex items-start justify-between mb-3">
@@ -663,11 +830,28 @@ function MaintenanceCard({
           <dd className="font-bold text-on-surface text-right truncate">{record.item || "—"}</dd>
         </div>
       </dl>
-      <div className="text-xs font-black text-primary uppercase tracking-widest flex items-center gap-1">
-        <Icon name="arrow_forward" />
-        Abrir manutenção
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-black text-primary uppercase tracking-widest flex items-center gap-1">
+          <Icon name="arrow_forward" />
+          Abrir manutenção
+        </div>
+        {canDelete && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="border-status-error/40 text-status-error hover:bg-status-error/10"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRequestDelete(record);
+            }}
+          >
+            <Icon name="delete" />
+            Excluir
+          </Button>
+        )}
       </div>
-    </button>
+    </article>
   );
 }
 
@@ -751,23 +935,25 @@ function MaintenanceFormDialog({
                 className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
               />
             </label>
-            <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
-              Status
-              <select
-                value={draft.status}
-                onChange={(event) => setValue("status", event.target.value as MaintenanceStatus)}
-                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
-              >
-                {(["Aberta", "Em andamento", "Concluída", "Atrasada"] as MaintenanceStatus[]).map(
-                  (status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ),
-                )}
-              </select>
-            </label>
           </div>
+          <label className="flex items-start gap-3 rounded-lg border border-status-success/30 bg-status-success/10 p-4 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.status === "Concluída"}
+              onChange={(event) =>
+                setValue("status", event.target.checked ? "Concluída" : "Aberta")
+              }
+              className="mt-1 h-4 w-4 accent-primary"
+            />
+            <span>
+              <span className="block text-sm font-black uppercase tracking-wider text-status-success">
+                Já registrar manutenção concluída
+              </span>
+              <span className="mt-1 block text-xs text-on-surface-variant">
+                Use quando o serviço já foi executado e deve entrar diretamente no histórico.
+              </span>
+            </span>
+          </label>
           <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant block">
             O que será feito / O que quebrou
             <textarea
@@ -783,6 +969,39 @@ function MaintenanceFormDialog({
             value={draft.notes}
             onChange={(value) => setValue("notes", value)}
           />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-4 border-t border-border-low">
+            <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant block">
+              Fornecedor
+              <input
+                type="text"
+                value={draft.supplierName}
+                onChange={(event) => setValue("supplierName", event.target.value)}
+                placeholder="Ex: Oficina Diesel Sul"
+                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant block">
+              Peça / serviço
+              <input
+                type="text"
+                value={draft.materialDescription}
+                onChange={(event) => setValue("materialDescription", event.target.value)}
+                placeholder="Ex: Bomba hidráulica + mangueiras"
+                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+            <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant block">
+              Valor (R$)
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={draft.cost}
+                onChange={(event) => setValue("cost", Number.parseFloat(event.target.value) || 0)}
+                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm font-mono text-on-surface outline-none focus:ring-2 focus:ring-primary"
+              />
+            </label>
+          </div>
           <Button type="submit" className="w-full font-black gap-2">
             <Icon name="save" />
             Salvar manutenção
@@ -794,11 +1013,13 @@ function MaintenanceFormDialog({
 }
 
 function MaintenanceDetailsDialog({
-  record,
+  record: incomingRecord,
   equipmentLabel,
   movements,
   inventoryItems,
   actions,
+  canDelete,
+  onRequestDelete,
   onOpenChange,
 }: {
   record: MaintenanceRecord | null;
@@ -806,14 +1027,90 @@ function MaintenanceDetailsDialog({
   movements: StockMovement[];
   inventoryItems: InventoryItem[];
   actions: ReturnType<typeof useMaintenanceActions>;
+  canDelete: boolean;
+  onRequestDelete: (record: MaintenanceRecord) => void;
   onOpenChange: (open: boolean) => void;
 }) {
-  const totalCost = movements.reduce((sum, movement) => sum + movement.costImpact, 0);
+  const [record, setRecord] = useState<MaintenanceRecord | null>(incomingRecord);
+  const movementCost = movements.reduce((sum, movement) => sum + movement.costImpact, 0);
+  const inventoryCost = record ? Math.max(record.totalCost, movementCost) : movementCost;
+  const supplierCost = record ? getMaintenanceExternalCost(record) : 0;
+  const totalCost = inventoryCost + supplierCost;
   const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
   const [completionComments, setCompletionComments] = useState<Record<string, string>>({});
   const [stepAttachments, setStepAttachments] = useState<Record<string, AttachedFile[]>>({});
   const [waitingPart, setWaitingPart] = useState("");
+  const [costDraft, setCostDraft] = useState<MaintenanceCostDraft>({
+    supplierName: "",
+    partName: "",
+    amount: 0,
+  });
+  const [savingCost, setSavingCost] = useState(false);
+  const [completionNote, setCompletionNote] = useState("");
+  const [completingRecord, setCompletingRecord] = useState(false);
   const activeStepIndex = record ? getActiveStepIndex(record.steps) : -1;
+
+  useEffect(() => {
+    setRecord(incomingRecord);
+  }, [incomingRecord]);
+
+  useEffect(() => {
+    setWaitingPart("");
+    setCostDraft({ supplierName: "", partName: "", amount: 0 });
+    setCompletionNote("");
+  }, [record?.id]);
+
+  const registerSupplierCost = async () => {
+    if (!record) return;
+    if (!costDraft.supplierName.trim() || !costDraft.partName.trim() || costDraft.amount <= 0) {
+      toast.error("Informe fornecedor, peça e valor.");
+      return;
+    }
+
+    setSavingCost(true);
+    try {
+      const updatedRecord = await actions.addExternalCost(record.id, costDraft);
+      if (updatedRecord) setRecord(updatedRecord);
+      setCostDraft({ supplierName: "", partName: "", amount: 0 });
+      toast.success("Custo da manutenção registrado.");
+    } catch {
+      toast.error("Não foi possível registrar o custo.");
+    } finally {
+      setSavingCost(false);
+    }
+  };
+
+  const finishExistingMaintenance = async () => {
+    if (!record) return;
+    setCompletingRecord(true);
+    try {
+      const updatedRecord = await actions.completeRecord(record.id, completionNote);
+      if (updatedRecord) setRecord(updatedRecord);
+      setCompletionNote("");
+      toast.success("Manutenção registrada como concluída.");
+    } catch {
+      toast.error("Não foi possível concluir a manutenção.");
+    } finally {
+      setCompletingRecord(false);
+    }
+  };
+
+  const startStep = async (recordId: string, stepId: string, note?: string) => {
+    const updatedRecord = await actions.startStep(recordId, stepId, note);
+    if (updatedRecord) setRecord(updatedRecord);
+    return updatedRecord;
+  };
+
+  const completeStep = async (
+    recordId: string,
+    stepId: string,
+    comment?: string,
+    attachments?: AttachedFile[],
+  ) => {
+    const updatedRecord = await actions.completeStep(recordId, stepId, comment, attachments);
+    if (updatedRecord) setRecord(updatedRecord);
+    return updatedRecord;
+  };
 
   return (
     <Dialog open={Boolean(record)} onOpenChange={onOpenChange}>
@@ -842,6 +1139,18 @@ function MaintenanceDetailsDialog({
                   >
                     <Icon name="table_view" />
                   </Button>
+                  {canDelete && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-status-error/40 text-status-error hover:bg-status-error/10"
+                      onClick={() => onRequestDelete(record)}
+                      aria-label="Excluir manutenção"
+                    >
+                      <Icon name="delete" />
+                      Excluir
+                    </Button>
+                  )}
                 </div>
               </div>
             </DialogHeader>
@@ -852,7 +1161,21 @@ function MaintenanceDetailsDialog({
                 <Info label="Status" value={record.status} />
                 <Info label="Aberto por" value={record.submittedBy || "—"} />
                 <Info
-                  label="Custo em peças"
+                  label="Peças do estoque"
+                  value={inventoryCost.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
+                />
+                <Info
+                  label="Fornecedor / serviços"
+                  value={supplierCost.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
+                />
+                <Info
+                  label="Custo total"
                   value={totalCost.toLocaleString("pt-BR", {
                     style: "currency",
                     currency: "BRL",
@@ -877,6 +1200,33 @@ function MaintenanceDetailsDialog({
                 <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3">
                   Pipeline da manutenção
                 </p>
+                {record.status !== "Concluída" && !completingRecord && (
+                  <div className="mb-4 rounded-lg border border-status-success/30 bg-status-success/10 p-4">
+                    <p className="text-sm font-black uppercase tracking-wider text-status-success">
+                      Serviço já realizado?
+                    </p>
+                    <p className="mt-1 text-xs text-on-surface-variant">
+                      Finalize a ordem diretamente quando a manutenção já estiver concluída.
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        value={completionNote}
+                        onChange={(event) => setCompletionNote(event.target.value)}
+                        placeholder="Observação da conclusão (opcional)"
+                        className="flex-1 rounded border border-border-low bg-surface-container px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+                      />
+                      <Button
+                        type="button"
+                        onClick={finishExistingMaintenance}
+                        isLoading={completingRecord}
+                        className="gap-2"
+                      >
+                        <Icon name="check_circle" />
+                        Registrar como concluída
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 <MaintenanceProgressSummary record={record} activeStepIndex={activeStepIndex} />
                 <div className="space-y-3">
                   {record.steps.map((step, index) => (
@@ -899,8 +1249,8 @@ function MaintenanceDetailsDialog({
                       onAttachmentsChange={(files) =>
                         setStepAttachments((current) => ({ ...current, [step.id]: files }))
                       }
-                      onStartStep={actions.startStep}
-                      onCompleteStep={actions.completeStep}
+                      onStartStep={startStep}
+                      onCompleteStep={completeStep}
                     />
                   ))}
                 </div>
@@ -926,7 +1276,8 @@ function MaintenanceDetailsDialog({
                     type="button"
                     variant="outline"
                     onClick={async () => {
-                      await actions.addWaitingPart(record.id, waitingPart);
+                      const updatedRecord = await actions.addWaitingPart(record.id, waitingPart);
+                      if (updatedRecord) setRecord(updatedRecord);
                       setWaitingPart("");
                     }}
                   >
@@ -946,6 +1297,89 @@ function MaintenanceDetailsDialog({
                   </div>
                 )}
               </div>
+              <section className="bg-surface-highest border border-border-low rounded-lg p-4">
+                <h3 className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-3 flex items-center gap-2">
+                  <Icon name="receipt_long" className="text-primary text-base" />
+                  Custos da manutenção
+                </h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    value={costDraft.supplierName}
+                    onChange={(event) =>
+                      setCostDraft((current) => ({
+                        ...current,
+                        supplierName: event.target.value,
+                      }))
+                    }
+                    placeholder="Fornecedor"
+                    className="min-w-0 px-3 py-2 bg-surface-container border border-border-low rounded text-sm"
+                  />
+                  <input
+                    value={costDraft.partName}
+                    onChange={(event) =>
+                      setCostDraft((current) => ({ ...current, partName: event.target.value }))
+                    }
+                    placeholder="Peça / serviço"
+                    className="min-w-0 px-3 py-2 bg-surface-container border border-border-low rounded text-sm"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={costDraft.amount || ""}
+                    onChange={(event) =>
+                      setCostDraft((current) => ({
+                        ...current,
+                        amount: Number.parseFloat(event.target.value) || 0,
+                      }))
+                    }
+                    placeholder="Valor (R$)"
+                    className="min-w-0 px-3 py-2 bg-surface-container border border-border-low rounded text-sm font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={registerSupplierCost}
+                    isLoading={savingCost}
+                    className="w-full"
+                  >
+                    Registrar custo
+                  </Button>
+                </div>
+                {record.costEntries.length > 0 ? (
+                  <div className="mt-4 space-y-2">
+                    {record.costEntries.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="grid gap-1 rounded border border-border-low bg-surface-container p-3 text-sm sm:grid-cols-[1fr_1fr_auto] sm:items-center sm:gap-3"
+                      >
+                        <div>
+                          <p className="font-bold text-on-surface">
+                            {entry.partName || "Material"}
+                          </p>
+                          <p className="text-xs text-on-surface-variant">
+                            {entry.supplierName || "Fornecedor não informado"}
+                          </p>
+                        </div>
+                        <p className="text-xs text-on-surface-variant">
+                          {formatBrDateTime(entry.createdAt)}
+                          {entry.createdBy ? ` por ${entry.createdBy}` : ""}
+                        </p>
+                        <strong className="font-mono text-primary">
+                          {entry.amount.toLocaleString("pt-BR", {
+                            style: "currency",
+                            currency: "BRL",
+                          })}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-on-surface-variant">
+                    Nenhum custo de fornecedor registrado nesta manutenção.
+                  </p>
+                )}
+              </section>
               {record.description && (
                 <div>
                   <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-2">

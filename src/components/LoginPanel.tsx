@@ -13,10 +13,14 @@ export function LoginPanel({ onSuccess }: LoginPanelProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const user = authActions.login(username, password, remember);
+    setSubmitting(true);
+    const user = await authActions.login(username, password, remember).finally(() => {
+      setSubmitting(false);
+    });
 
     if (!user) {
       toast.error("Login inválido", { description: "Confira usuário e senha." });
@@ -73,9 +77,9 @@ export function LoginPanel({ onSuccess }: LoginPanelProps) {
             />
             Manter sessão neste dispositivo
           </label>
-          <Button type="submit" className="w-full font-black gap-2">
+          <Button type="submit" disabled={submitting} className="w-full font-black gap-2">
             <Icon name="login" />
-            Entrar
+            {submitting ? "Entrando..." : "Entrar"}
           </Button>
         </form>
       </section>

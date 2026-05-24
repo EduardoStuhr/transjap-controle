@@ -1,6 +1,7 @@
 import type { AttachedFile } from "@/components/AttachmentUpload";
 import type { TaskRecord } from "@/lib/task-types";
 import { resolveRecipients } from "@/lib/operational-options";
+import { getTaskViewedAtForRecipient } from "@/lib/task-visibility";
 import {
   buildPdfDocument,
   escapeHtml,
@@ -38,7 +39,7 @@ function rowsToCsv(rows: string[][]) {
 export function exportTaskAsCsv(task: TaskRecord) {
   const recipients = resolveRecipients(task.assignedTo);
   const recipientLines = recipients.map((name) => {
-    const ts = task.viewedBy[name];
+    const ts = getTaskViewedAtForRecipient(task, name);
     return [name, ts ? `Visto em ${new Date(ts).toLocaleString("pt-BR")}` : "Não visualizado"];
   });
 
@@ -80,7 +81,7 @@ export function exportTaskAsPdf(task: TaskRecord) {
   const recipients = resolveRecipients(task.assignedTo);
   const recipientHtml = recipients
     .map((name) => {
-      const ts = task.viewedBy[name];
+      const ts = getTaskViewedAtForRecipient(task, name);
       const label = ts ? `Visto em ${new Date(ts).toLocaleString("pt-BR")}` : "Não visualizado";
       return `<li><strong>${escapeHtml(name)}</strong> — ${escapeHtml(label)}</li>`;
     })

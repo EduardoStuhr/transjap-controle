@@ -1,4 +1,10 @@
-export type CalendarItemType = "received_task" | "created_task" | "reminder" | "event" | "overdue";
+export type CalendarItemType =
+  | "received_task"
+  | "created_task"
+  | "completed_task"
+  | "reminder"
+  | "event"
+  | "overdue";
 
 export type CalendarViewMode = "month" | "week" | "day";
 
@@ -22,7 +28,8 @@ export type CalendarItem = {
   description: string;
   location?: string;
   completed?: boolean;
-  originalType?: Exclude<CalendarItemType, "overdue">;
+  completionLabel?: string;
+  originalType?: "received_task" | "created_task" | "reminder" | "event";
 };
 
 export const CALENDAR_TYPE_META: Record<
@@ -44,6 +51,14 @@ export const CALENDAR_TYPE_META: Record<
     border: "border-amber-300/35",
     text: "text-amber-100",
     icon: "edit_square",
+  },
+  completed_task: {
+    label: "Concluída",
+    color: "#22c55e",
+    bg: "bg-status-success/15",
+    border: "border-status-success/35",
+    text: "text-status-success",
+    icon: "check_circle",
   },
   reminder: {
     label: "Lembrete",

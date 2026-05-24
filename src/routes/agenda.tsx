@@ -3,13 +3,21 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 
 import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
-import { useAuthStore } from "@/lib/auth-store";
+import { useAuthStore, type AuthUser } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskActions, useTaskStore } from "@/lib/task-store";
-import { filterVisibleTasks } from "@/lib/task-visibility";
+import { sortTasksStable } from "@/lib/task-sort";
 import {
+  filterVisibleTasks,
+  getTaskStatusForUser,
+  getTaskVisibilityLabel,
+  hasUserViewedTask,
+  isTaskUnreadForUser,
+} from "@/lib/task-visibility";
+import {
+  formatTaskCompletionLabel,
+  isTaskCompletedStatus,
   TASK_STATUS_CONFIG,
-  TASK_STATUSES,
   type TaskRecord,
   type TaskStatus,
 } from "@/lib/task-types";
@@ -76,12 +84,29 @@ function Agenda() {
     setShowCreateModal(true);
   }, []);
 
-  const visibleTasks = useMemo(() => filterVisibleTasks(tasks, user), [tasks, user]);
-  const visiblePending = useMemo(() => filterVisibleTasks(pending, user), [pending, user]);
-  const filteredTasks = useMemo(
-    () => visibleTasks.filter((task) => filter === "Todas" || task.status === filter),
-    [filter, visibleTasks],
+  const visibleTasks = useMemo(
+    () => sortTasksStable(filterVisibleTasks(tasks, user)),
+    [tasks, user],
   );
+  const visiblePending = useMemo(
+    () => sortTasksStable(filterVisibleTasks(pending, user)),
+    [pending, user],
+  );
+  const filteredTasks = useMemo(() => {
+    return visibleTasks.filter((task) => {
+      if (filter === "Todas") return true;
+      if (filter === "Não visualizado") return isTaskUnreadForUser(task, user);
+      if (filter === "Concluído") return isTaskCompletedStatus(task.status);
+      if (filter === "Atrasado") {
+        return (
+          !isTaskCompletedStatus(task.status) &&
+          (task.status === "Atrasado" ||
+            Boolean(task.deadline && getUrgencyLevel(task.deadline).isOverdue))
+        );
+      }
+      return task.status === filter;
+    });
+  }, [filter, user, visibleTasks]);
 
   const selectedTask = useMemo(
     () => visibleTasks.find((task) => task.id === selectedTaskId) || null,
@@ -249,6 +274,7 @@ function Agenda() {
             tasks={filteredTasks}
             onOpen={openTaskDetails}
             formatEquipment={formatEquipment}
+            user={user}
           />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -258,6 +284,7 @@ function Agenda() {
                 task={task}
                 onOpen={openTaskDetails}
                 formatEquipment={formatEquipment}
+                user={user}
               />
             ))}
           </div>
@@ -311,6 +338,8 @@ function Agenda() {
             onAddResponse={taskActions.addResponse}
             onEdit={handleEditFromDetails}
             onDelete={handleDeleteTask}
+            onChangeStatus={taskActions.changeTaskStatus}
+            onSendResponseWithStatus={taskActions.addResponseWithStatus}
           />
         )}
       </Suspense>
@@ -364,10 +393,12 @@ function VirtualTaskList({
   tasks,
   onOpen,
   formatEquipment,
+  user,
 }: {
   tasks: TaskRecord[];
   onOpen: (id: string) => void;
   formatEquipment: (value: string | undefined) => string;
+  user: AuthUser | null;
 }) {
   const rowHeight = 116;
   const viewportHeight = Math.min(680, tasks.length * rowHeight);
@@ -401,7 +432,12 @@ function VirtualTaskList({
             className="absolute left-0 right-0"
             style={{ top: (visibleRange.start + index) * rowHeight, height: rowHeight }}
           >
-            <TaskListItem task={task} onOpen={onOpen} formatEquipment={formatEquipment} />
+            <TaskListItem
+              task={task}
+              onOpen={onOpen}
+              formatEquipment={formatEquipment}
+              user={user}
+            />
           </div>
         ))}
       </div>
@@ -413,13 +449,20 @@ const TaskListItem = memo(function TaskListItem({
   task,
   onOpen,
   formatEquipment,
+  user,
 }: {
   task: TaskRecord;
   onOpen: (id: string) => void;
   formatEquipment: (value: string | undefined) => string;
+  user: AuthUser | null;
 }) {
-  const urgency = task.deadline ? getUrgencyLevel(task.deadline) : null;
-  const config = TASK_STATUS_CONFIG[task.status];
+  const completionLabel = isTaskCompletedStatus(task.status)
+    ? formatTaskCompletionLabel(task)
+    : null;
+  const urgency = !completionLabel && task.deadline ? getUrgencyLevel(task.deadline) : null;
+  const viewedByUser = hasUserViewedTask(task, user);
+  const displayStatus = getTaskStatusForUser(task, user);
+  const config = TASK_STATUS_CONFIG[displayStatus];
 
   return (
     <button
@@ -432,7 +475,7 @@ const TaskListItem = memo(function TaskListItem({
           <div className="flex items-center gap-2 mb-2">
             <Icon name={config.icon} className={`text-lg ${config.color.split(" ")[1]}`} />
             <span className="text-xs font-mono text-on-surface-variant font-bold">#{task.id}</span>
-            {!task.viewed && <span className="w-2 h-2 bg-status-warning rounded-full" />}
+            {!viewedByUser && <span className="w-2 h-2 bg-status-warning rounded-full" />}
           </div>
           <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors truncate">
             {task.title}
@@ -463,9 +506,15 @@ const TaskListItem = memo(function TaskListItem({
                 {urgency.timeRemaining}
               </span>
             )}
+            {completionLabel && (
+              <span className="flex items-center gap-1 text-status-success font-bold">
+                <Icon name="check_circle" className="text-base" />
+                {completionLabel}
+              </span>
+            )}
           </div>
         </div>
-        <TaskBadges task={task} />
+        <TaskBadges task={task} user={user} />
       </div>
     </button>
   );
@@ -475,13 +524,21 @@ const TaskGridCard = memo(function TaskGridCard({
   task,
   onOpen,
   formatEquipment,
+  user,
 }: {
   task: TaskRecord;
   onOpen: (id: string) => void;
   formatEquipment: (value: string | undefined) => string;
+  user: AuthUser | null;
 }) {
-  const urgency = task.deadline ? getUrgencyLevel(task.deadline) : null;
-  const config = TASK_STATUS_CONFIG[task.status];
+  const completionLabel = isTaskCompletedStatus(task.status)
+    ? formatTaskCompletionLabel(task)
+    : null;
+  const urgency = !completionLabel && task.deadline ? getUrgencyLevel(task.deadline) : null;
+  const viewedByUser = hasUserViewedTask(task, user);
+  const displayStatus = getTaskStatusForUser(task, user);
+  const config = TASK_STATUS_CONFIG[displayStatus];
+  const visibility = getTaskVisibilityLabel(task);
 
   return (
     <button
@@ -493,7 +550,7 @@ const TaskGridCard = memo(function TaskGridCard({
         <div className={`px-2 py-1 rounded text-[10px] font-bold ${config.color}`}>
           {config.label}
         </div>
-        {!task.viewed && <span className="w-2 h-2 bg-status-warning rounded-full" />}
+        {!viewedByUser && <span className="w-2 h-2 bg-status-warning rounded-full" />}
       </div>
       <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-3 line-clamp-2">
         {task.title}
@@ -524,20 +581,37 @@ const TaskGridCard = memo(function TaskGridCard({
             </span>
           </p>
         )}
+        {completionLabel && (
+          <p className="text-status-success font-bold flex items-center gap-1">
+            <Icon name="check_circle" className="text-base" />
+            {completionLabel}
+          </p>
+        )}
       </div>
       <div className="pt-3 border-t border-border-low flex items-center justify-between">
         <span className="text-[10px] font-mono text-on-surface-variant">#{task.id}</span>
-        <PriorityBadge priority={task.priority} />
+        <div className="flex items-center gap-2">
+          <div className="px-2 py-1 rounded text-[10px] font-bold bg-surface-high text-on-surface-variant flex items-center gap-1">
+            <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm" />
+            {visibility}
+          </div>
+          <PriorityBadge priority={task.priority} />
+        </div>
       </div>
     </button>
   );
 });
 
-function TaskBadges({ task }: { task: TaskRecord }) {
-  const config = TASK_STATUS_CONFIG[task.status];
+function TaskBadges({ task, user }: { task: TaskRecord; user: AuthUser | null }) {
+  const config = TASK_STATUS_CONFIG[getTaskStatusForUser(task, user)];
+  const visibility = getTaskVisibilityLabel(task);
 
   return (
     <div className="flex items-center gap-3 flex-shrink-0">
+      <div className="px-3 py-1 rounded text-[10px] font-bold bg-surface-high text-on-surface-variant flex items-center gap-1">
+        <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm" />
+        {visibility}
+      </div>
       <PriorityBadge priority={task.priority} />
       <div className={`px-3 py-1 rounded text-[10px] font-bold ${config.color}`}>
         {config.label}

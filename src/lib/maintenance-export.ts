@@ -1,4 +1,4 @@
-import type { MaintenanceRecord } from "@/lib/maintenance-store";
+import { getMaintenanceExternalCost, type MaintenanceRecord } from "@/lib/maintenance-store";
 import type { StockMovement } from "@/lib/inventory-types";
 import {
   buildPdfDocument,
@@ -37,8 +37,12 @@ function formatTimestamp(value: string) {
 export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: StockMovement[] = []) {
   if (typeof window === "undefined") return;
 
-  const totalCost =
-    movements.reduce((sum, movement) => sum + movement.costImpact, 0) || record.totalCost;
+  const inventoryCost = Math.max(
+    movements.reduce((sum, movement) => sum + movement.costImpact, 0),
+    record.totalCost,
+  );
+  const supplierCost = getMaintenanceExternalCost(record);
+  const totalCost = inventoryCost + supplierCost;
 
   const stepRows = record.steps
     .map(
@@ -62,6 +66,23 @@ export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: Sto
                 <td>${escapeHtml(movement.itemName)}</td>
                 <td>${movement.quantity}</td>
                 <td>${escapeHtml(brl(movement.costImpact))}</td>
+              </tr>`,
+            )
+            .join("")}</tbody>
+        </table>`
+      : "";
+
+  const supplierCostsSection =
+    record.costEntries.length > 0
+      ? `<h2>Custos de fornecedor</h2>
+        <table>
+          <thead><tr><th>Peça / serviço</th><th>Fornecedor</th><th>Valor</th></tr></thead>
+          <tbody>${record.costEntries
+            .map(
+              (entry) => `<tr>
+                <td>${escapeHtml(entry.partName || "Material")}</td>
+                <td>${escapeHtml(entry.supplierName || "—")}</td>
+                <td>${escapeHtml(brl(entry.amount))}</td>
               </tr>`,
             )
             .join("")}</tbody>
@@ -93,6 +114,8 @@ export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: Sto
       <dt>Status</dt><dd>${escapeHtml(record.status)}</dd>
       <dt>Item / Componente</dt><dd>${escapeHtml(record.item || "—")}</dd>
       <dt>Aberto por</dt><dd>${escapeHtml(record.submittedBy || "—")}</dd>
+      <dt>Peças do estoque</dt><dd>${escapeHtml(brl(inventoryCost))}</dd>
+      <dt>Custos de fornecedor</dt><dd>${escapeHtml(brl(supplierCost))}</dd>
       <dt>Custo total</dt><dd>${escapeHtml(brl(totalCost))}</dd>
     </dl>
 
@@ -106,6 +129,7 @@ export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: Sto
     </table>
 
     ${partsSection}
+    ${supplierCostsSection}
 
     <h2>Timeline</h2>
     <table>
@@ -129,8 +153,12 @@ export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: Sto
 }
 
 export function exportMaintenanceAsCsv(record: MaintenanceRecord, movements: StockMovement[] = []) {
-  const totalCost =
-    movements.reduce((sum, movement) => sum + movement.costImpact, 0) || record.totalCost;
+  const inventoryCost = Math.max(
+    movements.reduce((sum, movement) => sum + movement.costImpact, 0),
+    record.totalCost,
+  );
+  const supplierCost = getMaintenanceExternalCost(record);
+  const totalCost = inventoryCost + supplierCost;
 
   const stepLines = record.steps.map((step, index) => [
     `${index + 1}. ${step.label}`,
@@ -143,6 +171,11 @@ export function exportMaintenanceAsCsv(record: MaintenanceRecord, movements: Sto
     movement.itemName,
     String(movement.quantity),
     brl(movement.costImpact),
+  ]);
+  const supplierCostLines = record.costEntries.map((entry) => [
+    entry.partName || "Material",
+    entry.supplierName || "—",
+    brl(entry.amount),
   ]);
 
   const timelineLines = record.timeline.map((event) => [
@@ -160,6 +193,8 @@ export function exportMaintenanceAsCsv(record: MaintenanceRecord, movements: Sto
     ["Status", record.status],
     ["Item / Componente", record.item || "—"],
     ["Aberto por", record.submittedBy || "—"],
+    ["Peças do estoque", brl(inventoryCost)],
+    ["Custos de fornecedor", brl(supplierCost)],
     ["Custo total", brl(totalCost)],
     ["Criada em", record.createdAt],
     [],
@@ -173,6 +208,15 @@ export function exportMaintenanceAsCsv(record: MaintenanceRecord, movements: Sto
 
   if (movementLines.length > 0) {
     rows.push([], ["Peças consumidas"], ["Peça", "Quantidade", "Custo"], ...movementLines);
+  }
+
+  if (supplierCostLines.length > 0) {
+    rows.push(
+      [],
+      ["Custos de fornecedor"],
+      ["Peça / serviço", "Fornecedor", "Valor"],
+      ...supplierCostLines,
+    );
   }
 
   rows.push([], ["Timeline"], ["Quando", "Ação", "Por", "Observação"], ...timelineLines);

@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "br.com.transjap.manager",
-  appName: "TransJap Manager",
+  appName: "Transjap Sistema",
   webDir: "dist",
   bundledWebRuntime: false,
   backgroundColor: "#05070c",

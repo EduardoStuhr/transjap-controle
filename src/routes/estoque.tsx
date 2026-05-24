@@ -1040,7 +1040,7 @@ function DashboardPanel({
 }) {
   return (
     <section className="bg-surface-container border border-border-low rounded-lg p-4 shadow-industrial">
-      <h2 className="text-sm font-black uppercase tracking-widest mb-4">Dashboard</h2>
+      <h2 className="text-sm font-black uppercase tracking-widest mb-4">Painel</h2>
       <div className="space-y-4">
         <MiniRank
           title="Peças mais usadas"

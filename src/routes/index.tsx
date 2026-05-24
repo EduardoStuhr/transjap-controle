@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
 import { filterVisibleTasks } from "@/lib/task-visibility";
+import { sortTasksStable } from "@/lib/task-sort";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
 import { useInventoryStore } from "@/lib/inventory-store";
 import { useEquipmentStore } from "@/lib/equipment-store";
@@ -28,7 +29,10 @@ function Dashboard() {
   const maintenances = useMaintenanceStore((snapshot) => snapshot.records);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const stockMovements = useInventoryStore((snapshot) => snapshot.movements);
-  const visibleTasks = useMemo(() => filterVisibleTasks(tasks, user), [tasks, user]);
+  const visibleTasks = useMemo(
+    () => sortTasksStable(filterVisibleTasks(tasks, user)),
+    [tasks, user],
+  );
   const visiblePending = useMemo(
     () => filterVisibleTasks(pendingRequests, user),
     [pendingRequests, user],

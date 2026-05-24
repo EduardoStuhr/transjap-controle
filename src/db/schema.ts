@@ -3,7 +3,7 @@ import { primaryKey, sqliteTable, text, integer, real, index } from "drizzle-orm
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
-  role: text("role", { enum: ["administrador"] }).notNull(),
+  role: text("role", { enum: ["admin", "operacional", "manutencao", "estoque"] }).notNull(),
   passwordHash: text("password_hash").notNull(),
   createdAt: text("created_at").notNull(),
 });
@@ -26,10 +26,14 @@ export const equipment = sqliteTable("equipment", {
 
 export const tasks = sqliteTable("tasks", {
   id: text("id").primaryKey(),
+  kind: text("kind", { enum: ["task", "request"] })
+    .notNull()
+    .default("task"),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
   equipment: text("equipment").notNull().default(""),
   assignedTo: text("assigned_to", { mode: "json" }).$type<string[]>().notNull(),
+  responsibleIds: text("responsible_ids", { mode: "json" }).$type<string[]>().notNull().default([]),
   sector: text("sector").notNull(),
   priority: text("priority", { enum: ["Baixa", "Média", "Alta", "Urgente"] }).notNull(),
   deadline: text("deadline"),
@@ -45,6 +49,7 @@ export const tasks = sqliteTable("tasks", {
     ],
   }).notNull(),
   createdBy: text("created_by").notNull().default(""),
+  createdByUserId: text("created_by_user_id").notNull().default(""),
   attachments: text("attachments", { mode: "json" }).$type<unknown[]>().notNull().default([]),
   viewedBy: text("viewed_by", { mode: "json" })
     .$type<Record<string, string>>()
@@ -53,7 +58,58 @@ export const tasks = sqliteTable("tasks", {
   viewed: integer("viewed", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  completedAt: text("completed_at").notNull().default(""),
+  completedBy: text("completed_by").notNull().default(""),
 });
+
+export const taskRecipients = sqliteTable(
+  "task_recipients",
+  {
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    userName: text("user_name").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.taskId, table.userId] }),
+    userIdx: index("idx_task_recipients_user_id").on(table.userId),
+  }),
+);
+
+export const taskViews = sqliteTable(
+  "task_views",
+  {
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    userName: text("user_name").notNull(),
+    viewedAt: text("viewed_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.taskId, table.userId] }),
+    userIdx: index("idx_task_views_user_id").on(table.userId),
+  }),
+);
+
+export const pushSubscriptions = sqliteTable(
+  "push_subscriptions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    endpoint: text("endpoint").notNull().unique(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    expirationTime: integer("expiration_time"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    userIdx: index("idx_push_subscriptions_user_id").on(table.userId),
+  }),
+);
 
 export const taskResponses = sqliteTable("task_responses", {
   id: text("id").primaryKey(),
@@ -119,14 +175,7 @@ export const maintenanceRecords = sqliteTable("maintenance_records", {
   id: text("id").primaryKey(),
   equipment: text("equipment").notNull(),
   type: text("type", {
-    enum: [
-      "Preventiva",
-      "Corretiva",
-      "Inspeção",
-      "Troca de óleo",
-      "Hidráulica",
-      "Mecânica",
-    ],
+    enum: ["Preventiva", "Corretiva", "Inspeção", "Troca de óleo", "Hidráulica", "Mecânica"],
   }).notNull(),
   status: text("status", {
     enum: ["Aberta", "Em andamento", "Concluída", "Atrasada"],
@@ -135,6 +184,9 @@ export const maintenanceRecords = sqliteTable("maintenance_records", {
   serviceDescription: text("service_description").notNull().default(""),
   submittedBy: text("submitted_by").notNull().default(""),
   notes: text("notes").notNull().default(""),
+  supplierName: text("supplier_name").notNull().default(""),
+  materialDescription: text("material_description").notNull().default(""),
+  cost: real("cost").notNull().default(0),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -300,14 +352,18 @@ export type DbProductionAnalysis = typeof productionAnalyses.$inferSelect;
 export const reminders = sqliteTable("reminders", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
-  kind: text("kind", { enum: ["reminder", "event"] }).notNull().default("reminder"),
+  kind: text("kind", { enum: ["reminder", "event"] })
+    .notNull()
+    .default("reminder"),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
   date: text("date").notNull(),
   time: text("time"),
   endTime: text("end_time"),
   location: text("location").notNull().default(""),
-  color: text("color", { enum: ["blue", "purple", "green"] }).notNull().default("blue"),
+  color: text("color", { enum: ["blue", "purple", "green"] })
+    .notNull()
+    .default("blue"),
   priority: text("priority", { enum: ["baixa", "média", "alta", "urgente"] })
     .notNull()
     .default("média"),

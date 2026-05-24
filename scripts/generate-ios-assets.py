@@ -87,7 +87,7 @@ def make_splash(source: Image.Image, size: int, scale: int) -> Image.Image:
     logo_y = int(size * 0.245)
     canvas.alpha_composite(logo, (logo_x, logo_y))
 
-    title = "TransJap Manager"
+    title = "Transjap Sistema"
     font = font_for(max(30, int(44 * scale)))
     box = draw.textbbox((0, 0), title, font=font)
     draw.text(((size - (box[2] - box[0])) // 2, logo_y + logo.height + int(size * 0.05)), title, fill="#f8fafcff", font=font)

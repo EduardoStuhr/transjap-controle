@@ -82,8 +82,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "color-scheme", content: "dark" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
-      { name: "apple-mobile-web-app-title", content: "TransJap Manager" },
-      { title: "TransJap Manager - Sistema Operacional" },
+      { name: "apple-mobile-web-app-title", content: "Transjap Sistema" },
+      { title: "Transjap Sistema - Sistema Operacional" },
       {
         name: "description",
         content: "Sistema operacional e controle de manutenção da frota TransJap.",

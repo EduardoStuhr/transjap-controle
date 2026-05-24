@@ -31,7 +31,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply transjap-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply transjap-db --remote",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "vapid:generate": "node scripts/generate-vapid-keys.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.4",

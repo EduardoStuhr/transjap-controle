@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -15,9 +15,23 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/AppLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AttachmentUpload, type AttachedFile } from "@/components/AttachmentUpload";
-import { TASK_STATUS_CONFIG, type TaskRecord } from "@/lib/task-types";
+import { TaskStatusControls } from "@/components/TaskStatusControls";
+import { ResponseWithStatusDialog } from "@/components/ResponseWithStatusDialog";
+import {
+  formatTaskCompletionLabel,
+  isTaskCompletedStatus,
+  TASK_STATUS_CONFIG,
+  type TaskRecord,
+} from "@/lib/task-types";
+import type { TaskStatus } from "@/lib/task-types";
 import { useAuthStore } from "@/lib/auth-store";
+import { isAdminUser } from "@/lib/auth-users";
 import { formatEquipmentReference, resolveRecipients } from "@/lib/operational-options";
+import {
+  getTaskStatusForUser,
+  getTaskViewedAtForRecipient,
+  getTaskVisibilityLabel,
+} from "@/lib/task-visibility";
 import { useEquipmentStore } from "@/lib/equipment-store";
 import { downloadAttachment, exportTaskAsCsv, exportTaskAsPdf } from "@/lib/task-export";
 import { formatBrDate } from "@/lib/utils";
@@ -36,6 +50,12 @@ interface TaskDetailsModalProps {
   ) => void | Promise<unknown>;
   onEdit: (task: TaskRecord) => void;
   onDelete?: (task: TaskRecord) => void | Promise<unknown>;
+  onChangeStatus?: (taskId: string, status: TaskStatus) => void | Promise<unknown>;
+  onSendResponseWithStatus?: (
+    taskId: string,
+    response: { text: string; attachments: AttachedFile[] },
+    nextStatus: TaskStatus | null,
+  ) => void | Promise<unknown>;
 }
 
 function formatViewedAt(iso?: string) {
@@ -55,11 +75,13 @@ function formatViewedAt(iso?: string) {
 export function TaskDetailsModal({
   open,
   onOpenChange,
-  task,
+  task: incomingTask,
   onAddComment,
   onAddResponse,
   onEdit,
   onDelete,
+  onChangeStatus,
+  onSendResponseWithStatus,
 }: TaskDetailsModalProps) {
   const user = useAuthStore((snapshot) => snapshot.user);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
@@ -69,12 +91,65 @@ export function TaskDetailsModal({
   const [responseAttachments, setResponseAttachments] = useState<AttachedFile[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [sendingResponse, setSendingResponse] = useState(false);
+  const [liveTask, setLiveTask] = useState<TaskRecord | null>(incomingTask);
+  const task = liveTask;
+
+  useEffect(() => {
+    setLiveTask(incomingTask);
+  }, [incomingTask]);
 
   const recipients = useMemo(() => (task ? resolveRecipients(task.assignedTo) : []), [task]);
   const isRecipient = Boolean(user && recipients.includes(user.name));
-  const isCreator = Boolean(user && task && task.createdBy && task.createdBy === user.name);
+  const isCreator = Boolean(
+    user && task && (task.createdBy === user.name || task.createdById === user.id),
+  );
+  const canManageTask = Boolean(user && (isAdminUser(user) || isCreator));
 
   if (!task) return null;
+
+  const applyOptimisticStatus = (nextStatus: TaskStatus) => {
+    const timestamp = new Date().toISOString();
+    const actor = user?.name || "Sistema";
+    setLiveTask((current) => {
+      if (!current || current.status === nextStatus) return current;
+      const completed = isTaskCompletedStatus(nextStatus);
+      const reopened = isTaskCompletedStatus(current.status) && !completed;
+      return {
+        ...current,
+        status: nextStatus,
+        completedAt: completed ? current.completedAt || timestamp : "",
+        completedBy: completed ? current.completedBy || actor : "",
+        updatedAt: timestamp,
+        timeline: [
+          {
+            id: `EV-OPT-${Date.now()}`,
+            timestamp,
+            action: completed
+              ? `Tarefa concluída por ${actor}`
+              : reopened
+                ? `Tarefa reaberta por ${actor}`
+                : `Status alterado de ${current.status} para ${nextStatus}`,
+            actor,
+            status: nextStatus,
+          },
+          ...current.timeline,
+        ],
+      };
+    });
+  };
+
+  const handleStatusChange = async (taskId: string, nextStatus: TaskStatus) => {
+    if (!onChangeStatus) return;
+    applyOptimisticStatus(nextStatus);
+    try {
+      await onChangeStatus(taskId, nextStatus);
+    } catch (error) {
+      setLiveTask(incomingTask);
+      throw error;
+    }
+  };
 
   const handleConfirmDelete = async () => {
     if (!onDelete) return;
@@ -93,7 +168,10 @@ export function TaskDetailsModal({
     }
   };
 
-  const statusConfig = TASK_STATUS_CONFIG[task.status];
+  const statusConfig = TASK_STATUS_CONFIG[getTaskStatusForUser(task, user)];
+  const completionLabel = isTaskCompletedStatus(task.status)
+    ? formatTaskCompletionLabel(task)
+    : null;
   const statusTextColor = statusConfig.color.split(" ")[1] || "text-on-surface-variant";
   const statusBgColor = statusConfig.color.split(" ")[0] || "bg-surface-variant";
 
@@ -106,13 +184,47 @@ export function TaskDetailsModal({
     setNewComment("");
   };
 
-  const handleSendResponse = async (e: FormEvent<HTMLFormElement>) => {
+  const handleOpenResponseDialog = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!responseText.trim()) return;
-    await onAddResponse(task.id, { text: responseText, attachments: responseAttachments });
-    toast.success("Resposta enviada", { description: `Como ${user?.name}` });
-    setResponseText("");
-    setResponseAttachments([]);
+    setStatusDialogOpen(true);
+  };
+
+  const handleConfirmResponseWithStatus = async (chosen: TaskStatus | "manter") => {
+    if (!responseText.trim()) return;
+    setSendingResponse(true);
+    try {
+      const nextStatus: TaskStatus | null = chosen === "manter" ? null : chosen;
+      const payload = { text: responseText, attachments: responseAttachments };
+      if (nextStatus) applyOptimisticStatus(nextStatus);
+
+      if (onSendResponseWithStatus) {
+        await onSendResponseWithStatus(task.id, payload, nextStatus);
+      } else {
+        await onAddResponse(task.id, payload);
+        if (nextStatus && onChangeStatus) {
+          await onChangeStatus(task.id, nextStatus);
+        }
+      }
+
+      toast.success(
+        nextStatus === "Concluído"
+          ? "Tarefa concluída com sucesso"
+          : nextStatus === "Em andamento" && isTaskCompletedStatus(task.status)
+            ? "Tarefa reaberta com sucesso"
+            : nextStatus
+              ? `Resposta enviada · status: ${nextStatus}`
+              : "Resposta enviada",
+      );
+      setResponseText("");
+      setResponseAttachments([]);
+      setStatusDialogOpen(false);
+    } catch (err) {
+      setLiveTask(incomingTask);
+      toast.error(`Falha ao enviar: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSendingResponse(false);
+    }
   };
 
   const handleDownload = (file: AttachedFile) => {
@@ -136,13 +248,22 @@ export function TaskDetailsModal({
                   <Icon name={statusConfig.icon} className="text-sm" />
                   {statusConfig.label}
                 </div>
+                <div className="px-2 py-1 rounded text-xs font-bold flex items-center gap-1 bg-surface-high text-on-surface-variant">
+                  <Icon
+                    name={getTaskVisibilityLabel(task) === "Privada" ? "lock" : "group"}
+                    className="text-sm"
+                  />
+                  {getTaskVisibilityLabel(task)}
+                </div>
               </div>
               <DialogTitle className="text-2xl font-black tracking-tight">{task.title}</DialogTitle>
             </div>
             <div className="flex gap-2 flex-wrap justify-end">
-              <Button size="sm" variant="outline" onClick={() => onEdit(task)}>
-                <Icon name="edit" />
-              </Button>
+              {canManageTask && (
+                <Button size="sm" variant="outline" onClick={() => onEdit(task)}>
+                  <Icon name="edit" />
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -151,7 +272,7 @@ export function TaskDetailsModal({
               >
                 <Icon name="picture_as_pdf" />
               </Button>
-              {isCreator && onDelete && (
+              {canManageTask && onDelete && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -209,7 +330,7 @@ export function TaskDetailsModal({
               ) : (
                 <ul className="space-y-2">
                   {recipients.map((name) => {
-                    const viewedAt = formatViewedAt(task.viewedBy[name]);
+                    const viewedAt = formatViewedAt(getTaskViewedAtForRecipient(task, name));
                     return (
                       <li
                         key={name}
@@ -291,6 +412,21 @@ export function TaskDetailsModal({
                 </div>
               </div>
 
+              {completionLabel && (
+                <div>
+                  <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2">
+                    Conclusão
+                  </p>
+                  <div className="flex items-center gap-2 text-status-success font-bold">
+                    <Icon name="check_circle" className="text-lg" />
+                    <p>
+                      {completionLabel}
+                      {task.completedBy ? ` por ${task.completedBy}` : ""}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2">
                   Criado em
@@ -321,6 +457,14 @@ export function TaskDetailsModal({
 
           {/* RESPONSES TAB */}
           <TabsContent value="responses" className="space-y-5 mt-5">
+            {onChangeStatus && (
+              <TaskStatusControls
+                task={task}
+                canChange={canManageTask || isRecipient}
+                onChangeStatus={handleStatusChange}
+              />
+            )}
+
             <div className="space-y-3">
               {task.responses.length === 0 ? (
                 <div className="text-center py-6 text-on-surface-variant">
@@ -390,7 +534,7 @@ export function TaskDetailsModal({
 
             {isRecipient ? (
               <form
-                onSubmit={handleSendResponse}
+                onSubmit={handleOpenResponseDialog}
                 className="border-t border-border-low pt-4 space-y-3"
               >
                 <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest">
@@ -427,31 +571,41 @@ export function TaskDetailsModal({
           <TabsContent value="timeline" className="space-y-4 mt-5">
             <div className="space-y-4">
               {task.timeline.length > 0 ? (
-                task.timeline.map((event, index) => (
-                  <div key={event.id} className="relative flex gap-4">
-                    <div className="flex flex-col items-center">
-                      <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center border-2 border-primary">
-                        <Icon name="event" className="text-primary" />
-                      </div>
-                      {index !== task.timeline.length - 1 && (
-                        <div className="w-0.5 h-12 bg-border-low mt-2" />
-                      )}
-                    </div>
-                    <div className="flex-1 pt-2">
-                      <p className="text-xs text-on-surface-variant font-bold uppercase tracking-widest">
-                        {event.timestamp}
-                      </p>
-                      <p className="font-bold text-on-surface">{event.action}</p>
-                      <p className="text-sm text-on-surface-variant">por {event.actor}</p>
-                      {event.status && (
-                        <div className="mt-2 inline-flex items-center gap-2 bg-surface-high px-3 py-1 rounded text-xs font-bold">
-                          <span className="w-2 h-2 rounded-full bg-primary" />
-                          {event.status}
+                task.timeline.map((event, index) => {
+                  const eventCfg = event.status ? TASK_STATUS_CONFIG[event.status] : null;
+                  const eventColor = eventCfg?.color.split(" ")[1] || "text-primary";
+                  const eventBg = eventCfg?.color.split(" ")[0] || "bg-primary/20";
+                  const eventIcon = eventCfg?.icon || "event";
+                  return (
+                    <div key={event.id} className="relative flex gap-4">
+                      <div className="flex flex-col items-center">
+                        <div
+                          className={`w-10 h-10 rounded-full ${eventBg} flex items-center justify-center border-2 border-border-low`}
+                        >
+                          <Icon name={eventIcon} className={eventColor} />
                         </div>
-                      )}
+                        {index !== task.timeline.length - 1 && (
+                          <div className="w-0.5 h-12 bg-border-low mt-2" />
+                        )}
+                      </div>
+                      <div className="flex-1 pt-2">
+                        <p className="text-xs text-on-surface-variant font-bold uppercase tracking-widest">
+                          {event.timestamp}
+                        </p>
+                        <p className="font-bold text-on-surface">{event.action}</p>
+                        <p className="text-sm text-on-surface-variant">por {event.actor}</p>
+                        {event.status && eventCfg && (
+                          <div
+                            className={`mt-2 inline-flex items-center gap-2 ${eventCfg.color} px-3 py-1 rounded text-xs font-bold`}
+                          >
+                            <Icon name={eventCfg.icon} className="text-sm" />
+                            {event.status}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="text-center py-8">
                   <Icon
@@ -616,6 +770,14 @@ export function TaskDetailsModal({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <ResponseWithStatusDialog
+        open={statusDialogOpen}
+        responseText={responseText}
+        currentStatus={task.status}
+        onConfirm={(chosen) => void handleConfirmResponseWithStatus(chosen)}
+        onCancel={() => setStatusDialogOpen(false)}
+        submitting={sendingResponse}
+      />
     </Dialog>
   );
 }

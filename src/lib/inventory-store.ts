@@ -192,6 +192,34 @@ function getCachedState(queryClient: ReturnType<typeof useQueryClient>): Invento
   return { ...data, offlineQueue: readStorage().offlineQueue, currentRole: getRoleSnapshot() };
 }
 
+function inventoryData(state: InventoryState): InventoryData {
+  return {
+    items: state.items,
+    locations: state.locations,
+    movements: state.movements,
+  };
+}
+
+function setCachedInventory(
+  queryClient: ReturnType<typeof useQueryClient>,
+  data: InventoryData,
+  offlineQueue = readStorage().offlineQueue,
+) {
+  queryClient.setQueryData<InventoryData>(QK, data);
+  writeStorage({ ...data, offlineQueue });
+}
+
+function restoreCachedInventory(
+  queryClient: ReturnType<typeof useQueryClient>,
+  previous: InventoryState,
+) {
+  setCachedInventory(queryClient, inventoryData(previous), previous.offlineQueue);
+}
+
+function upsertById<T extends { id: string }>(values: T[], next: T) {
+  return [next, ...values.filter((value) => value.id !== next.id)];
+}
+
 function newerByUpdatedAt(remote: { updatedAt: string } | undefined, local: { updatedAt: string }) {
   if (!remote) return true;
   return local.updatedAt.localeCompare(remote.updatedAt) > 0;
@@ -333,12 +361,13 @@ export function useInventoryStore<T>(selector: InventorySelector<T>): T {
 
 export function useInventoryActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: QK });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: QK });
+  };
 
   const itemMutation = useMutation({
     mutationFn: ({ item, exists }: { item: InventoryItem; exists: boolean }) =>
       exists ? updateInventoryItem({ data: item }) : createInventoryItem({ data: item }),
-    onSuccess: invalidate,
   });
 
   const locationMutation = useMutation({
@@ -346,28 +375,23 @@ export function useInventoryActions() {
       exists
         ? updateInventoryLocation({ data: location })
         : createInventoryLocation({ data: location }),
-    onSuccess: invalidate,
   });
 
   const movementMutation = useMutation({
     mutationFn: ({ item, movement }: { item: InventoryItem; movement: StockMovement }) =>
       createInventoryMovement({ data: { item, movement } }),
-    onSuccess: invalidate,
   });
 
   const deleteItemMutation = useMutation({
     mutationFn: (id: string) => deleteInventoryItem({ data: id }),
-    onSuccess: invalidate,
   });
 
   const deleteLocationMutation = useMutation({
     mutationFn: (id: string) => deleteInventoryLocation({ data: id }),
-    onSuccess: invalidate,
   });
 
   const deleteMovementMutation = useMutation({
     mutationFn: (id: string) => deleteInventoryMovement({ data: id }),
-    onSuccess: invalidate,
   });
 
   return {
@@ -404,8 +428,20 @@ export function useInventoryActions() {
         updatedAt: nowIso(),
       };
 
-      await itemMutation.mutateAsync({ item, exists: Boolean(existing) });
-      return item;
+      setCachedInventory(
+        queryClient,
+        { ...inventoryData(current), items: upsertById(current.items, item) },
+        current.offlineQueue,
+      );
+
+      try {
+        await itemMutation.mutateAsync({ item, exists: Boolean(existing) });
+        invalidate();
+        return item;
+      } catch (error) {
+        restoreCachedInventory(queryClient, current);
+        throw error;
+      }
     },
 
     async saveLocation(draft: LocationDraft, id?: string) {
@@ -422,8 +458,20 @@ export function useInventoryActions() {
         updatedAt: nowIso(),
       };
 
-      await locationMutation.mutateAsync({ location, exists: Boolean(existing) });
-      return location;
+      setCachedInventory(
+        queryClient,
+        { ...inventoryData(current), locations: upsertById(current.locations, location) },
+        current.offlineQueue,
+      );
+
+      try {
+        await locationMutation.mutateAsync({ location, exists: Boolean(existing) });
+        invalidate();
+        return location;
+      } catch (error) {
+        restoreCachedInventory(queryClient, current);
+        throw error;
+      }
     },
 
     async applyMovement(draft: MovementDraft) {
@@ -442,11 +490,28 @@ export function useInventoryActions() {
         updatedAt: nowIso(),
       };
 
-      await movementMutation.mutateAsync({
-        item: nextItem,
-        movement: { ...movement, syncStatus: "synced" },
-      });
-      return { ...movement, syncStatus: "synced" as const };
+      const syncedMovement = { ...movement, syncStatus: "synced" as const };
+      setCachedInventory(
+        queryClient,
+        {
+          ...inventoryData(current),
+          items: upsertById(current.items, nextItem),
+          movements: upsertById(current.movements, syncedMovement),
+        },
+        current.offlineQueue,
+      );
+
+      try {
+        await movementMutation.mutateAsync({
+          item: nextItem,
+          movement: syncedMovement,
+        });
+        invalidate();
+        return syncedMovement;
+      } catch (error) {
+        restoreCachedInventory(queryClient, current);
+        throw error;
+      }
     },
 
     resolveScan(value: string) {
@@ -484,15 +549,60 @@ export function useInventoryActions() {
     },
 
     async removeItem(id: string) {
-      await deleteItemMutation.mutateAsync(id);
+      const previous = getCachedState(queryClient);
+      setCachedInventory(
+        queryClient,
+        {
+          ...inventoryData(previous),
+          items: previous.items.filter((item) => item.id !== id),
+        },
+        previous.offlineQueue,
+      );
+      try {
+        await deleteItemMutation.mutateAsync(id);
+        invalidate();
+      } catch (error) {
+        restoreCachedInventory(queryClient, previous);
+        throw error;
+      }
     },
 
     async removeLocation(id: string) {
-      await deleteLocationMutation.mutateAsync(id);
+      const previous = getCachedState(queryClient);
+      setCachedInventory(
+        queryClient,
+        {
+          ...inventoryData(previous),
+          locations: previous.locations.filter((location) => location.id !== id),
+        },
+        previous.offlineQueue,
+      );
+      try {
+        await deleteLocationMutation.mutateAsync(id);
+        invalidate();
+      } catch (error) {
+        restoreCachedInventory(queryClient, previous);
+        throw error;
+      }
     },
 
     async removeMovement(id: string) {
-      await deleteMovementMutation.mutateAsync(id);
+      const previous = getCachedState(queryClient);
+      setCachedInventory(
+        queryClient,
+        {
+          ...inventoryData(previous),
+          movements: previous.movements.filter((movement) => movement.id !== id),
+        },
+        previous.offlineQueue,
+      );
+      try {
+        await deleteMovementMutation.mutateAsync(id);
+        invalidate();
+      } catch (error) {
+        restoreCachedInventory(queryClient, previous);
+        throw error;
+      }
     },
   };
 }

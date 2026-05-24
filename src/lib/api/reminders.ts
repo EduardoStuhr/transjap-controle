@@ -45,6 +45,11 @@ type ReminderPatch = Partial<{
 }>;
 
 const localReminders = new Map<string, DbReminder>();
+let remindersSchemaPromise: Promise<void> | null = null;
+
+type TableInfoRow = {
+  name: string;
+};
 
 function requireUser(userId?: string) {
   const user = getCurrentUser();
@@ -71,6 +76,62 @@ function sortReminderRows(rows: DbReminder[]) {
   );
 }
 
+async function migrateReminderTable(d1: D1Database) {
+  await d1
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS reminders (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'reminder',
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        date TEXT NOT NULL,
+        time TEXT,
+        end_time TEXT,
+        location TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT 'blue',
+        priority TEXT NOT NULL DEFAULT 'média',
+        status TEXT NOT NULL DEFAULT 'pendente',
+        completed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run();
+
+  const tableInfo = await d1.prepare("PRAGMA table_info(reminders)").all<TableInfoRow>();
+  const columns = new Set((tableInfo.results ?? []).map((row) => row.name));
+  const additions: Array<[string, string]> = [
+    ["kind", "ALTER TABLE reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'"],
+    ["end_time", "ALTER TABLE reminders ADD COLUMN end_time TEXT"],
+    ["location", "ALTER TABLE reminders ADD COLUMN location TEXT NOT NULL DEFAULT ''"],
+    ["priority", "ALTER TABLE reminders ADD COLUMN priority TEXT NOT NULL DEFAULT 'média'"],
+    ["status", "ALTER TABLE reminders ADD COLUMN status TEXT NOT NULL DEFAULT 'pendente'"],
+  ];
+
+  for (const [column, sql] of additions) {
+    if (!columns.has(column)) {
+      try {
+        await d1.prepare(sql).run();
+      } catch (error) {
+        const updatedInfo = await d1.prepare("PRAGMA table_info(reminders)").all<TableInfoRow>();
+        const wasAddedByAnotherRequest = (updatedInfo.results ?? []).some(
+          (row) => row.name === column,
+        );
+        if (!wasAddedByAnotherRequest) throw error;
+      }
+    }
+  }
+}
+
+async function ensureReminderTable(d1: D1Database) {
+  remindersSchemaPromise ??= migrateReminderTable(d1).catch((error) => {
+    remindersSchemaPromise = null;
+    throw error;
+  });
+  await remindersSchemaPromise;
+}
+
 export const listReminders = createServerFn({ method: "GET" })
   .inputValidator((args: ReminderFilters) => args)
   .handler(async ({ data }) => {
@@ -88,6 +149,7 @@ export const listReminders = createServerFn({ method: "GET" })
       );
     }
 
+    await ensureReminderTable(d1);
     const db = getDb(d1);
     const conditions = [eq(reminders.userId, user.id)];
     if (data.dateFrom) conditions.push(gte(reminders.date, data.dateFrom));
@@ -124,7 +186,7 @@ export const createReminder = createServerFn({ method: "POST" })
       color: data.color ?? (kind === "event" ? "purple" : "green"),
       priority: data.priority ?? "média",
       status: data.status ?? "pendente",
-      completed: false,
+      completed: data.status === "concluído",
       createdAt: now,
       updatedAt: now,
     };
@@ -134,6 +196,7 @@ export const createReminder = createServerFn({ method: "POST" })
       return row;
     }
 
+    await ensureReminderTable(d1);
     const db = getDb(d1);
     await db.insert(reminders).values(row);
     return row;
@@ -157,6 +220,7 @@ export const updateReminder = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
+    await ensureReminderTable(d1);
     const db = getDb(d1);
     await db
       .update(reminders)
@@ -177,6 +241,7 @@ export const deleteReminder = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
+    await ensureReminderTable(d1);
     const db = getDb(d1);
     await db.delete(reminders).where(and(eq(reminders.id, data.id), eq(reminders.userId, user.id)));
     return { ok: true };

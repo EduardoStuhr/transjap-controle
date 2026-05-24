@@ -104,6 +104,47 @@ const QK = ["equipment"] as const;
 type EquipmentState = { equipments: Equipment[] };
 type Selector<T> = (state: EquipmentState) => T;
 
+function statusTone(status: EquipmentStatus): EquipmentTone {
+  if (status === "Manutenção") return "warning";
+  if (status === "Parado") return "error";
+  return "success";
+}
+
+function getCachedEquipments(queryClient: ReturnType<typeof useQueryClient>) {
+  return queryClient.getQueryData<Equipment[]>(QK) ?? SEED_EQUIPMENTS;
+}
+
+function setCachedEquipments(
+  queryClient: ReturnType<typeof useQueryClient>,
+  equipments: Equipment[],
+) {
+  queryClient.setQueryData<Equipment[]>(QK, equipments);
+}
+
+function upsertEquipment(equipments: Equipment[], equipment: Equipment, previousId?: string) {
+  return [
+    ...equipments.filter((current) => current.id !== equipment.id && current.id !== previousId),
+    equipment,
+  ];
+}
+
+function draftToEquipment(draft: EquipmentDraft, previous?: Equipment): Equipment {
+  return {
+    ...previous,
+    id: draft.id,
+    model: draft.model,
+    icon: draft.icon ?? previous?.icon ?? "construction",
+    hours: draft.hours,
+    status: draft.status,
+    tone: draft.tone ?? statusTone(draft.status),
+    location: draft.location,
+    lastMaintenance: draft.lastMaintenance ?? previous?.lastMaintenance ?? "",
+    seriesNumber: draft.seriesNumber ?? previous?.seriesNumber ?? "",
+    acquisitionDate: draft.acquisitionDate ?? previous?.acquisitionDate ?? "",
+    manufacturer: draft.manufacturer ?? previous?.manufacturer ?? "",
+  };
+}
+
 /**
  * Drop-in replacement for the old useSyncExternalStore-based hook.
  * Selector signature is identical — no component changes needed.
@@ -132,12 +173,13 @@ export function useEquipmentStore<T>(selector: Selector<T>): T {
  */
 export function useEquipmentActions() {
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: QK });
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: QK });
+  };
 
   const addMut = useMutation({
     mutationFn: (draft: EquipmentDraft) =>
       createEquipment({ data: draft as Parameters<typeof createEquipment>[0]["data"] }),
-    onSuccess: invalidate,
   });
 
   const updateMut = useMutation({
@@ -145,18 +187,75 @@ export function useEquipmentActions() {
       updateEquipment({
         data: { id, patch: patch as Parameters<typeof updateEquipment>[0]["data"]["patch"] },
       }),
-    onSuccess: invalidate,
   });
 
   const removeMut = useMutation({
     mutationFn: (id: string) => deleteEquipment({ data: id }),
-    onSuccess: invalidate,
   });
 
   return {
-    add: (draft: EquipmentDraft) => addMut.mutateAsync(draft),
-    update: (id: string, patch: Partial<EquipmentDraft>) => updateMut.mutateAsync({ id, patch }),
-    remove: (id: string) => removeMut.mutateAsync(id),
+    async add(draft: EquipmentDraft) {
+      const previous = getCachedEquipments(qc);
+      const optimistic = draftToEquipment(draft);
+      setCachedEquipments(qc, upsertEquipment(previous, optimistic));
+
+      try {
+        const saved = (await addMut.mutateAsync(draft)) as unknown as Equipment;
+        setCachedEquipments(qc, upsertEquipment(getCachedEquipments(qc), saved, optimistic.id));
+        invalidate();
+        return saved;
+      } catch (error) {
+        setCachedEquipments(qc, previous);
+        throw error;
+      }
+    },
+    async update(id: string, patch: Partial<EquipmentDraft>) {
+      const previous = getCachedEquipments(qc);
+      const existing = previous.find((equipment) => equipment.id === id);
+      const optimistic =
+        existing &&
+        draftToEquipment(
+          {
+            ...existing,
+            ...patch,
+            id: patch.id ?? existing.id,
+            model: patch.model ?? existing.model,
+            location: patch.location ?? existing.location,
+            hours: patch.hours ?? existing.hours,
+            status: patch.status ?? existing.status,
+          },
+          existing,
+        );
+
+      if (optimistic) {
+        setCachedEquipments(qc, upsertEquipment(previous, optimistic, id));
+      }
+
+      try {
+        const result = await updateMut.mutateAsync({ id, patch });
+        invalidate();
+        return result;
+      } catch (error) {
+        setCachedEquipments(qc, previous);
+        throw error;
+      }
+    },
+    async remove(id: string) {
+      const previous = getCachedEquipments(qc);
+      setCachedEquipments(
+        qc,
+        previous.filter((equipment) => equipment.id !== id),
+      );
+
+      try {
+        const result = await removeMut.mutateAsync(id);
+        invalidate();
+        return result;
+      } catch (error) {
+        setCachedEquipments(qc, previous);
+        throw error;
+      }
+    },
   };
 }
 

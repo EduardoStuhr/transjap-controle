@@ -18,11 +18,22 @@ import { listReminders } from "@/lib/api/reminders";
 import { useAuthStore } from "@/lib/auth-store";
 import { useTaskActions, useTaskStore } from "@/lib/task-store";
 import { filterVisibleTasks } from "@/lib/task-visibility";
-import type { TaskRecord, TaskStatus } from "@/lib/task-types";
+import {
+  formatTaskCompletionLabel,
+  isTaskCompletedStatus,
+  type TaskRecord,
+  type TaskStatus,
+} from "@/lib/task-types";
 
 export const Route = createFileRoute("/calendario")({
   component: CalendarPage,
 });
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return "Tente novamente.";
+}
 
 const FILTERS: Array<{ id: CalendarFilter; label: string }> = [
   { id: "all", label: "Todos" },
@@ -92,10 +103,6 @@ function periodLabel(date: Date, viewMode: CalendarViewMode) {
   return `${range.from.split("-").reverse().join("/")} - ${range.to.split("-").reverse().join("/")}`;
 }
 
-function isTaskComplete(task: TaskRecord) {
-  return task.status === "Concluído";
-}
-
 function isReminderComplete(reminder: DbReminder) {
   return reminder.completed || reminder.status === "concluído";
 }
@@ -116,23 +123,24 @@ function taskToCalendarItem(task: TaskRecord, currentUserName: string): Calendar
   const date = task.deadline?.slice(0, 10);
   if (!date) return null;
   const mine = task.createdBy === currentUserName;
-  const completed = isTaskComplete(task);
+  const completed = isTaskCompletedStatus(task.status);
   const baseType = mine ? "created_task" : "received_task";
   return {
     id: `task-${task.id}`,
     sourceId: task.id,
     source: "task",
     title: task.title,
-    type: isOverdue(date, completed) ? "overdue" : baseType,
+    type: completed ? "completed_task" : isOverdue(date, completed) ? "overdue" : baseType,
     originalType: baseType,
     date,
     time: taskTime(task.deadline),
-    status: task.status,
+    status: completed ? "Concluído" : task.status,
     priority: task.priority.toLowerCase(),
     createdBy: task.createdBy || "Sistema",
     assignedTo: task.assignedTo,
     description: task.description,
     completed,
+    completionLabel: completed ? formatTaskCompletionLabel(task) : undefined,
   };
 }
 
@@ -162,8 +170,9 @@ function reminderToCalendarItem(reminder: DbReminder): CalendarItem {
 function matchesFilter(item: CalendarItem, filter: CalendarFilter) {
   if (filter === "all") return true;
   if (filter === "received")
-    return item.originalType === "received_task" && item.type !== "overdue";
-  if (filter === "created") return item.originalType === "created_task" && item.type !== "overdue";
+    return item.originalType === "received_task" && item.type === "received_task";
+  if (filter === "created")
+    return item.originalType === "created_task" && item.type === "created_task";
   if (filter === "reminders") return item.originalType === "reminder" && item.type !== "overdue";
   if (filter === "events") return item.originalType === "event" && item.type !== "overdue";
   return item.type === "overdue";
@@ -248,10 +257,10 @@ function CalendarPage() {
   const counts = useMemo(() => {
     return {
       received: allItems.filter(
-        (item) => item.originalType === "received_task" && item.type !== "overdue",
+        (item) => item.originalType === "received_task" && item.type === "received_task",
       ).length,
       created: allItems.filter(
-        (item) => item.originalType === "created_task" && item.type !== "overdue",
+        (item) => item.originalType === "created_task" && item.type === "created_task",
       ).length,
       reminders: allItems.filter(
         (item) => item.originalType === "reminder" && item.type !== "overdue",
@@ -305,25 +314,21 @@ function CalendarPage() {
   const completeTask = async (taskId: string) => {
     const task = visibleTasks.find((item) => item.id === taskId);
     if (!task) return;
-    const nextStatus: TaskStatus = task.status === "Concluído" ? "Em andamento" : "Concluído";
-    await taskActions.updateTask(taskId, {
-      title: task.title,
-      description: task.description,
-      sector: task.sector,
-      priority: task.priority,
-      assignedTo: task.assignedTo,
-      deadline: task.deadline,
-      equipment: task.equipment,
-      status: nextStatus,
-      attachments: task.attachments,
-    });
+    const nextStatus: TaskStatus = isTaskCompletedStatus(task.status)
+      ? "Em andamento"
+      : "Concluído";
+    await taskActions.changeTaskStatus(taskId, nextStatus);
     toast.success(nextStatus === "Concluído" ? "Tarefa concluída" : "Tarefa reaberta");
   };
 
   const deleteTask = async (taskId: string) => {
     if (!window.confirm("Deseja excluir esta tarefa?")) return;
-    await taskActions.removeTask(taskId);
-    toast.success("Tarefa excluída");
+    try {
+      await taskActions.removeTask(taskId);
+      toast.success("Tarefa excluída");
+    } catch (error) {
+      toast.error("Falha ao excluir tarefa", { description: getErrorMessage(error) });
+    }
   };
 
   const selectItem = (item: CalendarItem) => {

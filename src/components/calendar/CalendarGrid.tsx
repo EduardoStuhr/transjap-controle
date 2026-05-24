@@ -67,7 +67,7 @@ function ItemCard({ item, onClick }: { item: CalendarItem; onClick: () => void }
   const tooltip = [
     meta.label,
     item.title,
-    time,
+    item.completed && item.completionLabel ? item.completionLabel : time,
     item.priority ? `Prioridade: ${item.priority}` : "",
     item.status ? `Status: ${item.status}` : "",
     item.createdBy ? `Criado por: ${item.createdBy}` : "",

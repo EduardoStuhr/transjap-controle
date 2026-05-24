@@ -1,14 +1,18 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  changeTaskStatusDocument,
   createTaskDocument,
   deleteTaskDocument,
   listTasks,
+  markTaskViewedDocument,
   updateTaskDocument,
   type StoredTaskDocument,
   type StoredTaskKind,
+  type TaskStatusChangeInput,
 } from "@/lib/api/tasks";
 import {
+  isTaskCompletedStatus,
   normalizeTaskPriority,
   normalizeTaskStatus,
   type TaskComment,
@@ -19,7 +23,12 @@ import {
   type TimelineEvent,
 } from "@/lib/task-types";
 import { getCurrentUser } from "@/lib/auth-store";
-import { resolveRecipients } from "@/lib/operational-options";
+import { isAdminUser } from "@/lib/auth-users";
+import {
+  resolveRecipients,
+  resolveResponsibleIds,
+  resolveResponsibleUsers,
+} from "@/lib/operational-options";
 import type { AttachedFile } from "@/components/AttachmentUpload";
 
 type TaskState = {
@@ -30,7 +39,17 @@ type TaskState = {
 type TaskSelector<T> = (state: TaskState) => T;
 
 const QK = ["tasks"] as const;
+const RELATED_TASK_QUERY_KEYS = [
+  ["tasks"],
+  ["task-details"],
+  ["task-stats"],
+  ["dashboard-counters"],
+  ["notifications"],
+  ["critical-tasks"],
+] as const;
 const STORAGE_KEY = "transjap:fleet-command:tasks:v1";
+const DELETED_IDS_STORAGE_KEY = "transjap:fleet-command:tasks:deleted-ids:v1";
+const REMOTE_SYNCED_STORAGE_KEY = "transjap:fleet-command:tasks:remote-synced:v1";
 
 const EMPTY_STATE: TaskState = {
   tasks: [],
@@ -69,6 +88,14 @@ function normalizeAssignedTo(value: unknown): string[] {
   return [];
 }
 
+function stringField(source: Record<string, unknown>, fields: readonly string[]): string {
+  for (const field of fields) {
+    const value = source[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 function normalizeViewedBy(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") return {};
   const entries = Object.entries(value as Record<string, unknown>).filter(
@@ -96,21 +123,60 @@ function normalizeResponses(value: unknown): TaskResponse[] {
 function normalizeTask(
   task: Partial<TaskRecord> & { equip?: string; resp?: string; assignedTo?: unknown },
 ): TaskRecord {
+  const source = task as Record<string, unknown>;
   const createdAt = task.createdAt || displayDate();
-  const assignedTo = normalizeAssignedTo(task.assignedTo ?? task.resp);
-  const createdBy = typeof task.createdBy === "string" ? task.createdBy : "";
+  const updatedAt = task.updatedAt || nowIso();
+  const assignedTo = normalizeAssignedTo(
+    task.assignedTo ??
+      source.assigned_to ??
+      source.recipients ??
+      source.responsaveis ??
+      source["responsáveis"] ??
+      task.resp,
+  );
+  const createdBy = stringField(source, [
+    "createdBy",
+    "createdByName",
+    "created_by",
+    "created_by_name",
+    "sender",
+    "author",
+    "requestedBy",
+    "requested_by",
+  ]);
+  const createdById = stringField(source, [
+    "createdById",
+    "createdByUserId",
+    "created_by_user_id",
+    "userId",
+    "user_id",
+  ]);
+  const responsibleIds = Array.isArray(task.responsibleIds)
+    ? task.responsibleIds.filter((id): id is string => typeof id === "string")
+    : Array.isArray(source.responsible_ids)
+      ? source.responsible_ids.filter((id): id is string => typeof id === "string")
+      : resolveResponsibleIds(assignedTo);
+  const status = normalizeTaskStatus(task.status);
+  const completedAt =
+    typeof task.completedAt === "string" && task.completedAt
+      ? task.completedAt
+      : isTaskCompletedStatus(status) && typeof task.updatedAt === "string"
+        ? task.updatedAt
+        : "";
 
   return {
     id: task.id || newId("TK"),
     createdBy,
+    createdById,
     title: task.title || "",
     description: task.description || "",
     equipment: task.equipment || task.equip || "",
     assignedTo,
+    responsibleIds,
     sector: task.sector || "",
     priority: normalizeTaskPriority(task.priority),
     deadline: task.deadline || "",
-    status: normalizeTaskStatus(task.status),
+    status,
     attachments: sanitizeAttachments(task.attachments || []),
     comments: (task.comments || []).map((comment) => ({
       id: comment.id || newId("CM"),
@@ -128,7 +194,9 @@ function normalizeTask(
       status: event.status ? normalizeTaskStatus(event.status) : undefined,
     })),
     createdAt,
-    updatedAt: task.updatedAt || nowIso(),
+    updatedAt,
+    completedAt,
+    completedBy: typeof task.completedBy === "string" ? task.completedBy : "",
     viewed: Boolean(task.viewed),
   };
 }
@@ -145,12 +213,62 @@ function normalizeState(value: unknown): TaskState {
   };
 }
 
+function readDeletedTaskIds(): Set<string> {
+  if (!isBrowser()) return new Set();
+
+  try {
+    const raw = window.localStorage.getItem(DELETED_IDS_STORAGE_KEY);
+    const ids = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function writeDeletedTaskIds(ids: Set<string>) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(DELETED_IDS_STORAGE_KEY, JSON.stringify(Array.from(ids).slice(-500)));
+}
+
+function markDeletedTaskId(id: string) {
+  const ids = readDeletedTaskIds();
+  ids.add(id);
+  writeDeletedTaskIds(ids);
+}
+
+function unmarkDeletedTaskId(id: string) {
+  const ids = readDeletedTaskIds();
+  ids.delete(id);
+  writeDeletedTaskIds(ids);
+}
+
+function hasSyncedRemoteTasks() {
+  return isBrowser() && window.localStorage.getItem(REMOTE_SYNCED_STORAGE_KEY) === "1";
+}
+
+function markRemoteTasksSynced() {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(REMOTE_SYNCED_STORAGE_KEY, "1");
+}
+
+function filterDeletedTasks(state: TaskState): TaskState {
+  const deletedIds = readDeletedTaskIds();
+  if (deletedIds.size === 0) return state;
+
+  return {
+    tasks: state.tasks.filter((task) => !deletedIds.has(task.id)),
+    pendingRequests: state.pendingRequests.filter((request) => !deletedIds.has(request.id)),
+  };
+}
+
 function readStorage(): TaskState {
   if (!isBrowser()) return EMPTY_STATE;
 
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? normalizeState(JSON.parse(raw)) : EMPTY_STATE;
+    return raw ? filterDeletedTasks(normalizeState(JSON.parse(raw))) : EMPTY_STATE;
   } catch {
     return EMPTY_STATE;
   }
@@ -159,6 +277,7 @@ function readStorage(): TaskState {
 function writeStorage(nextState: TaskState) {
   if (!isBrowser()) return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+  markRemoteTasksSynced();
 }
 
 function sanitizeAssignedTo(value: string[]): string[] {
@@ -166,17 +285,67 @@ function sanitizeAssignedTo(value: string[]): string[] {
   return Array.from(new Set(cleaned));
 }
 
+function userHasViewed(task: TaskRecord, user: NonNullable<ReturnType<typeof getCurrentUser>>) {
+  return Boolean(task.viewedBy[user.id] || task.viewedBy[user.name]);
+}
+
+function allRecipientsViewed(task: TaskRecord, viewedBy: Record<string, string>) {
+  const recipients = resolveResponsibleUsers([...task.assignedTo, ...task.responsibleIds]);
+  if (recipients.length === 0) return false;
+  return recipients.every((recipient) =>
+    Boolean(viewedBy[recipient.id] || viewedBy[recipient.name]),
+  );
+}
+
+function withViewedByUser(task: TaskRecord, user: NonNullable<ReturnType<typeof getCurrentUser>>) {
+  const viewedAt = nowIso();
+  const alreadyViewed = userHasViewed(task, user);
+  const viewedBy = alreadyViewed
+    ? task.viewedBy
+    : { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
+  const fullyViewed = allRecipientsViewed(task, viewedBy);
+  const shouldFlipStatus = task.status === "Não visualizado" && fullyViewed;
+
+  return {
+    changed: !alreadyViewed || task.viewed !== fullyViewed || shouldFlipStatus,
+    task: {
+      ...task,
+      status: shouldFlipStatus ? "Visualizado" : task.status,
+      viewedBy,
+      viewed: fullyViewed,
+      timeline: alreadyViewed
+        ? task.timeline
+        : [
+            {
+              id: newId("EV"),
+              timestamp: displayDate(),
+              action: `Visualizado por ${user.name}`,
+              actor: user.name,
+              status: shouldFlipStatus ? "Visualizado" : task.status,
+            },
+            ...task.timeline,
+          ],
+      updatedAt: viewedAt,
+    },
+  };
+}
+
 function taskFromInput(input: TaskInput): TaskRecord {
   const now = nowIso();
-  const createdBy = getCurrentUser()?.name || "";
+  const user = getCurrentUser();
+  const createdBy = user?.name || "";
+  const responsibleIds = resolveResponsibleIds(input.assignedTo);
+  const completedAt = isTaskCompletedStatus(input.status) ? now : "";
 
   return {
     id: newId("TK"),
     createdBy,
+    createdById: user?.id || "",
     title: input.title.trim(),
     description: input.description.trim(),
     equipment: input.equipment.trim(),
     assignedTo: sanitizeAssignedTo(input.assignedTo),
+    responsibleIds,
     sector: input.sector.trim(),
     priority: input.priority,
     deadline: input.deadline,
@@ -196,16 +365,46 @@ function taskFromInput(input: TaskInput): TaskRecord {
     ],
     createdAt: displayDate(),
     updatedAt: now,
-    viewed: input.status !== "Não visualizado",
+    completedAt,
+    completedBy: isTaskCompletedStatus(input.status) ? createdBy : "",
+    viewed: false,
   };
 }
 
-function statusEvent(previous: TaskStatus, next: TaskStatus): TimelineEvent {
+function completionTimestampForStatus(
+  previousCompletedAt: string,
+  previousStatus: TaskStatus,
+  nextStatus: TaskStatus,
+): string {
+  if (isTaskCompletedStatus(nextStatus)) {
+    return previousCompletedAt || (isTaskCompletedStatus(previousStatus) ? "" : nowIso());
+  }
+
+  return "";
+}
+
+function completedByForStatus(
+  previousCompletedBy: string,
+  previousStatus: TaskStatus,
+  nextStatus: TaskStatus,
+  actor: string,
+): string {
+  if (!isTaskCompletedStatus(nextStatus)) return "";
+  return previousCompletedBy || (isTaskCompletedStatus(previousStatus) ? "" : actor);
+}
+
+function statusEvent(previous: TaskStatus, next: TaskStatus, actor = "Sistema"): TimelineEvent {
+  const action = isTaskCompletedStatus(next)
+    ? `Tarefa concluída por ${actor}`
+    : isTaskCompletedStatus(previous)
+      ? `Tarefa reaberta por ${actor}`
+      : `Status alterado de ${previous} para ${next}`;
+
   return {
     id: newId("EV"),
-    timestamp: displayDate(),
-    action: `Status alterado de ${previous} para ${next}`,
-    actor: "Sistema",
+    timestamp: nowIso(),
+    action,
+    actor,
     status: next,
   };
 }
@@ -227,23 +426,41 @@ function newerThanLocal(remoteTask: TaskRecord | undefined, localTask: TaskRecor
   );
 }
 
+function shouldPushLocalTask(
+  remoteTask: TaskRecord | undefined,
+  localTask: TaskRecord,
+  deletedIds: Set<string>,
+  allowBootstrap: boolean,
+) {
+  if (deletedIds.has(localTask.id)) return false;
+  if (!remoteTask) return allowBootstrap;
+  return newerThanLocal(remoteTask, localTask);
+}
+
 function useLocalTaskMigration(remoteState: TaskState | undefined, enabled: boolean) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (!enabled || !remoteState || localMigrationStarted) return;
+    const user = getCurrentUser();
+    if (!enabled || !remoteState || localMigrationStarted || !isAdminUser(user)) return;
 
     const localState = readStorage();
     const remoteTasks = new Map<string, TaskRecord>();
     remoteState.tasks.forEach((task) => remoteTasks.set(task.id, task));
     remoteState.pendingRequests.forEach((task) => remoteTasks.set(task.id, task));
+    const deletedIds = readDeletedTaskIds();
+    const allowBootstrap = !hasSyncedRemoteTasks() && remoteTasks.size === 0;
 
     const documents = [
       ...localState.tasks
-        .filter((task) => newerThanLocal(remoteTasks.get(task.id), task))
+        .filter((task) =>
+          shouldPushLocalTask(remoteTasks.get(task.id), task, deletedIds, allowBootstrap),
+        )
         .map((task) => asDocument("task", task)),
       ...localState.pendingRequests
-        .filter((task) => newerThanLocal(remoteTasks.get(task.id), task))
+        .filter((task) =>
+          shouldPushLocalTask(remoteTasks.get(task.id), task, deletedIds, allowBootstrap),
+        )
         .map((task) => asDocument("request", task)),
     ];
 
@@ -254,7 +471,11 @@ function useLocalTaskMigration(remoteState: TaskState | undefined, enabled: bool
 
     localMigrationStarted = true;
     Promise.all(documents.map((document) => createTaskDocument({ data: document })))
-      .then(() => queryClient.invalidateQueries({ queryKey: QK }))
+      .then(() => {
+        writeStorage(remoteState);
+        localMigrationStarted = false;
+        return queryClient.invalidateQueries({ queryKey: QK });
+      })
       .catch(() => {
         localMigrationStarted = false;
       });
@@ -267,7 +488,9 @@ export function useTaskStore<T>(selector: TaskSelector<T>): T {
     queryFn: async () => normalizeState(await listTasks()),
     staleTime: 0,
     retry: 1,
-    placeholderData: () => readStorage(),
+    refetchInterval: isBrowser() ? 2000 : false,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev ?? readStorage(),
   });
 
   useLocalTaskMigration(query.data, query.isSuccess && !query.isPlaceholderData);
@@ -277,7 +500,36 @@ export function useTaskStore<T>(selector: TaskSelector<T>): T {
 
 export function useTaskActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: QK });
+  const invalidate = () => {
+    RELATED_TASK_QUERY_KEYS.forEach((queryKey) => {
+      void queryClient.invalidateQueries({ queryKey });
+    });
+  };
+  const updateCachedState = (updater: (state: TaskState) => TaskState) => {
+    const next = updater(getCachedState(queryClient));
+    queryClient.setQueryData(QK, next);
+    writeStorage(next);
+    return next;
+  };
+  const sortByUpdated = (items: TaskRecord[]) =>
+    [...items].sort((a, b) =>
+      (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt),
+    );
+  const upsertCachedTask = (kind: StoredTaskKind, task: TaskRecord) => {
+    updateCachedState((state) => {
+      const key = kind === "request" ? "pendingRequests" : "tasks";
+      return {
+        ...state,
+        [key]: sortByUpdated([task, ...state[key].filter((item) => item.id !== task.id)]),
+      };
+    });
+  };
+  const removeCachedTask = (id: string) => {
+    updateCachedState((state) => ({
+      tasks: state.tasks.filter((task) => task.id !== id),
+      pendingRequests: state.pendingRequests.filter((request) => request.id !== id),
+    }));
+  };
 
   const createMutation = useMutation({
     mutationFn: (document: StoredTaskDocument) => createTaskDocument({ data: document }),
@@ -294,15 +546,38 @@ export function useTaskActions() {
     onSuccess: invalidate,
   });
 
+  const viewedMutation = useMutation({
+    mutationFn: (id: string) => markTaskViewedDocument({ data: id }),
+    onSuccess: invalidate,
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: (input: TaskStatusChangeInput) => changeTaskStatusDocument({ data: input }),
+    onSuccess: invalidate,
+  });
+
   const saveTask = async (kind: StoredTaskKind, task: TaskRecord) => {
-    await updateMutation.mutateAsync(asDocument(kind, task));
+    upsertCachedTask(kind, task);
+    try {
+      await updateMutation.mutateAsync(asDocument(kind, task));
+    } catch (error) {
+      invalidate();
+      throw error;
+    }
     return task;
   };
 
   return {
     async createTask(input: TaskInput) {
       const task = taskFromInput(input);
-      await createMutation.mutateAsync(asDocument("task", task));
+      upsertCachedTask("task", task);
+      try {
+        await createMutation.mutateAsync(asDocument("task", task));
+      } catch (error) {
+        removeCachedTask(task.id);
+        invalidate();
+        throw error;
+      }
       return task;
     },
 
@@ -319,16 +594,31 @@ export function useTaskActions() {
         description: input.description.trim(),
         equipment: input.equipment.trim(),
         assignedTo: sanitizeAssignedTo(input.assignedTo),
+        responsibleIds: resolveResponsibleIds(input.assignedTo),
         sector: input.sector.trim(),
         priority: input.priority,
         deadline: input.deadline,
         status: nextStatus,
         attachments: sanitizeAttachments(input.attachments),
         timeline: statusChanged
-          ? [statusEvent(existing.status, nextStatus), ...existing.timeline]
+          ? [
+              statusEvent(existing.status, nextStatus, getCurrentUser()?.name || "Sistema"),
+              ...existing.timeline,
+            ]
           : existing.timeline,
         updatedAt: nowIso(),
-        viewed: nextStatus !== "Não visualizado" || existing.viewed,
+        completedAt: completionTimestampForStatus(
+          existing.completedAt,
+          existing.status,
+          nextStatus,
+        ),
+        completedBy: completedByForStatus(
+          existing.completedBy,
+          existing.status,
+          nextStatus,
+          getCurrentUser()?.name || "Sistema",
+        ),
+        viewed: existing.viewed,
       };
 
       return saveTask("task", task);
@@ -340,36 +630,16 @@ export function useTaskActions() {
       const existing = current.tasks.find((task) => task.id === id);
       if (!existing || !user) return existing ?? null;
 
-      const recipients = resolveRecipients(existing.assignedTo);
-      if (!recipients.includes(user.name)) return existing;
-      if (existing.viewedBy[user.name]) {
-        return saveTask("task", { ...existing, viewed: true });
+      const { task, changed } = withViewedByUser(existing, user);
+      if (changed) upsertCachedTask("task", task);
+      try {
+        const result = await viewedMutation.mutateAsync(id);
+        upsertCachedTask(result.kind, normalizeTask(result.task));
+      } catch (error) {
+        invalidate();
+        throw error;
       }
-
-      const nextViewedBy = { ...existing.viewedBy, [user.name]: nowIso() };
-      const shouldFlipStatus = existing.status === "Não visualizado";
-      const nextStatus: TaskStatus = shouldFlipStatus ? "Visualizado" : existing.status;
-      const task: TaskRecord = {
-        ...existing,
-        status: nextStatus,
-        viewedBy: nextViewedBy,
-        viewed: true,
-        timeline: shouldFlipStatus
-          ? [
-              {
-                id: newId("EV"),
-                timestamp: displayDate(),
-                action: `Visualizado por ${user.name}`,
-                actor: user.name,
-                status: nextStatus,
-              },
-              ...existing.timeline,
-            ]
-          : existing.timeline,
-        updatedAt: nowIso(),
-      };
-
-      return saveTask("task", task);
+      return task;
     },
 
     async addResponse(taskId: string, response: { text: string; attachments: AttachedFile[] }) {
@@ -409,6 +679,73 @@ export function useTaskActions() {
       return created;
     },
 
+    async addResponseWithStatus(
+      taskId: string,
+      response: { text: string; attachments: AttachedFile[] },
+      nextStatus: TaskStatus | null,
+    ) {
+      const user = getCurrentUser();
+      const text = response.text.trim();
+      const current = getCachedState(queryClient);
+      const existing = current.tasks.find((task) => task.id === taskId);
+      if (!user || !text || !existing) return null;
+
+      const recipients = resolveRecipients(existing.assignedTo);
+      if (!recipients.includes(user.name)) return null;
+
+      const created: TaskResponse = {
+        id: newId("RS"),
+        author: user.name,
+        text,
+        attachments: sanitizeAttachments(response.attachments),
+        timestamp: displayDate(),
+      };
+
+      const statusChanged = Boolean(nextStatus) && nextStatus !== existing.status;
+      const finalStatus: TaskStatus = statusChanged ? (nextStatus as TaskStatus) : existing.status;
+      const completed = statusChanged && isTaskCompletedStatus(finalStatus);
+      const reopened =
+        statusChanged &&
+        isTaskCompletedStatus(existing.status) &&
+        !isTaskCompletedStatus(finalStatus);
+      const responseEvent = {
+        id: newId("EV"),
+        timestamp: nowIso(),
+        action: statusChanged
+          ? completed
+            ? `Resposta enviada; tarefa concluída por ${user.name}`
+            : reopened
+              ? `Resposta enviada; tarefa reaberta por ${user.name}`
+              : `Respondeu e alterou status para ${finalStatus}`
+          : `Resposta enviada por ${user.name}`,
+        actor: user.name,
+        ...(statusChanged ? { status: finalStatus } : {}),
+      };
+
+      const task: TaskRecord = {
+        ...existing,
+        status: finalStatus,
+        responses: [created, ...existing.responses],
+        timeline: [responseEvent, ...existing.timeline],
+        viewed: existing.viewed,
+        completedAt: completionTimestampForStatus(
+          existing.completedAt,
+          existing.status,
+          finalStatus,
+        ),
+        completedBy: completedByForStatus(
+          existing.completedBy,
+          existing.status,
+          finalStatus,
+          user.name,
+        ),
+        updatedAt: nowIso(),
+      };
+
+      await saveTask("task", task);
+      return { response: created, statusChanged, status: finalStatus };
+    },
+
     async addComment(taskId: string, comment: Pick<TaskComment, "author" | "text">) {
       const text = comment.text.trim();
       const author = comment.author.trim();
@@ -434,8 +771,43 @@ export function useTaskActions() {
       return task.comments[0];
     },
 
+    async changeTaskStatus(taskId: string, nextStatus: TaskStatus) {
+      const user = getCurrentUser();
+      const current = getCachedState(queryClient);
+      const existing = current.tasks.find((task) => task.id === taskId);
+      if (!existing || existing.status === nextStatus) return existing ?? null;
+
+      const actor = user?.name || "Sistema";
+      const task: TaskRecord = {
+        ...existing,
+        status: nextStatus,
+        viewed: existing.viewed,
+        completedAt: completionTimestampForStatus(
+          existing.completedAt,
+          existing.status,
+          nextStatus,
+        ),
+        completedBy: completedByForStatus(existing.completedBy, existing.status, nextStatus, actor),
+        timeline: [statusEvent(existing.status, nextStatus, actor), ...existing.timeline],
+        updatedAt: nowIso(),
+      };
+
+      upsertCachedTask("task", task);
+      try {
+        const result = await statusMutation.mutateAsync({ id: taskId, status: nextStatus });
+        const synced = normalizeTask(result.task);
+        upsertCachedTask(result.kind, synced);
+        return synced;
+      } catch (error) {
+        upsertCachedTask("task", existing);
+        invalidate();
+        throw error;
+      }
+    },
+
     async approveRequest(id: string) {
-      const createdBy = getCurrentUser()?.name || "";
+      const user = getCurrentUser();
+      const createdBy = user?.name || "";
       const current = getCachedState(queryClient);
       const approved = current.pendingRequests.find((request) => request.id === id);
       if (!approved) return null;
@@ -444,25 +816,65 @@ export function useTaskActions() {
         ...approved,
         id: newId("TK"),
         createdBy: approved.createdBy || createdBy,
+        createdById: approved.createdById || user?.id || "",
+        responsibleIds: approved.responsibleIds.length
+          ? approved.responsibleIds
+          : resolveResponsibleIds(approved.assignedTo),
         status: "Não visualizado",
         viewed: false,
+        completedAt: "",
+        completedBy: "",
         updatedAt: nowIso(),
       };
 
-      await createMutation.mutateAsync(asDocument("task", task));
-      await deleteMutation.mutateAsync(id);
+      upsertCachedTask("task", task);
+      markDeletedTaskId(id);
+      removeCachedTask(id);
+      try {
+        await createMutation.mutateAsync(asDocument("task", task));
+        await deleteMutation.mutateAsync(id);
+      } catch (error) {
+        unmarkDeletedTaskId(id);
+        invalidate();
+        throw error;
+      }
       return approved;
     },
 
     async rejectRequest(id: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const current = getCachedState(queryClient);
       const rejected = current.pendingRequests.find((request) => request.id === id) ?? null;
-      await deleteMutation.mutateAsync(id);
+      markDeletedTaskId(id);
+      removeCachedTask(id);
+      try {
+        await deleteMutation.mutateAsync(id);
+        removeCachedTask(id);
+      } catch (error) {
+        unmarkDeletedTaskId(id);
+        queryClient.setQueryData(QK, current);
+        writeStorage(current);
+        invalidate();
+        throw error;
+      }
       return rejected;
     },
 
     async removeTask(id: string) {
-      await deleteMutation.mutateAsync(id);
+      await queryClient.cancelQueries({ queryKey: QK });
+      const previous = getCachedState(queryClient);
+      markDeletedTaskId(id);
+      removeCachedTask(id);
+      try {
+        await deleteMutation.mutateAsync(id);
+        removeCachedTask(id);
+      } catch (error) {
+        unmarkDeletedTaskId(id);
+        queryClient.setQueryData(QK, previous);
+        writeStorage(previous);
+        invalidate();
+        throw error;
+      }
     },
   };
 }
@@ -484,6 +896,11 @@ export const taskActions = {
   },
   addComment: (): never => {
     throw new Error("taskActions.addComment() foi removido. Use useTaskActions().addComment().");
+  },
+  changeTaskStatus: (): never => {
+    throw new Error(
+      "taskActions.changeTaskStatus() foi removido. Use useTaskActions().changeTaskStatus().",
+    );
   },
   approveRequest: (): never => {
     throw new Error(

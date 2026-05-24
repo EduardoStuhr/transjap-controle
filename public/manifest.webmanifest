@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "TransJap Manager",
-  "short_name": "TransJap",
+  "name": "Transjap Sistema",
+  "short_name": "Transjap",
   "description": "Gestao operacional, manutencao e estoque da frota TransJap.",
   "start_url": "/",
   "scope": "/",

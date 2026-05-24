@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { authActions, useAuthStore } from "@/lib/auth-store";
+import { PushNotificationSettings } from "@/components/PushNotificationSettings";
 
 export const Route = createFileRoute("/perfil")({ component: Perfil });
 
@@ -34,19 +35,22 @@ function Perfil() {
         </div>
 
         {user && (
-          <div className="mt-6">
-            <Button
-              variant="ghost"
-              className="gap-2 text-on-surface-variant hover:text-status-error"
-              onClick={() => {
-                authActions.logout();
-                navigate({ to: "/login" });
-              }}
-            >
-              <Icon name="logout" />
-              <span className="text-xs font-black uppercase tracking-widest">Sair</span>
-            </Button>
-          </div>
+          <>
+            <PushNotificationSettings userId={user.id} />
+            <div className="mt-6">
+              <Button
+                variant="ghost"
+                className="gap-2 text-on-surface-variant hover:text-status-error"
+                onClick={() => {
+                  authActions.logout();
+                  navigate({ to: "/login" });
+                }}
+              >
+                <Icon name="logout" />
+                <span className="text-xs font-black uppercase tracking-widest">Sair</span>
+              </Button>
+            </div>
+          </>
         )}
 
         <div className="mt-8 bg-surface-low border border-border-low p-5 flex items-start gap-3">

@@ -53,6 +53,10 @@ function emptyForm(initialDate: string, kind: CalendarPersonalKind) {
   };
 }
 
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message ? error.message : "Tente novamente.";
+}
+
 export function ReminderDialog({
   open,
   onClose,
@@ -86,7 +90,20 @@ export function ReminderDialog({
     );
   }, [initialDate, kind, open, reminder]);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["reminders"] });
+  const refreshReminders = () => {
+    void queryClient.invalidateQueries({ queryKey: ["reminders"] });
+  };
+  const upsertCachedReminder = (nextReminder: DbReminder) => {
+    queryClient.setQueriesData<DbReminder[]>({ queryKey: ["reminders"] }, (current) =>
+      current
+        ? [
+            nextReminder,
+            ...current.filter((currentReminder) => currentReminder.id !== nextReminder.id),
+          ]
+        : current,
+    );
+    refreshReminders();
+  };
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -105,10 +122,18 @@ export function ReminderDialog({
           status: form.status,
         },
       }),
-    onSuccess: () => {
-      invalidate();
+    onSuccess: (created) => {
+      upsertCachedReminder(created);
       toast.success(isEvent ? "Evento criado" : "Lembrete criado");
       onClose();
+    },
+    onError: (error) => {
+      toast.error(
+        isEvent ? "Não foi possível criar o evento" : "Não foi possível criar o lembrete",
+        {
+          description: errorMessage(error),
+        },
+      );
     },
   });
 
@@ -129,13 +154,38 @@ export function ReminderDialog({
             color: isEvent ? "purple" : "green",
             priority: form.priority,
             status: form.status,
+            completed: form.status === "concluído",
           },
         },
       }),
     onSuccess: () => {
-      invalidate();
+      if (reminder) {
+        upsertCachedReminder({
+          ...reminder,
+          kind: resolvedKind,
+          title: form.title.trim(),
+          description: form.description.trim(),
+          date: form.date,
+          time: form.time || null,
+          endTime: form.endTime || null,
+          location: form.location.trim(),
+          color: isEvent ? "purple" : "green",
+          priority: form.priority,
+          status: form.status,
+          completed: form.status === "concluído",
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        refreshReminders();
+      }
       toast.success(isEvent ? "Evento atualizado" : "Lembrete atualizado");
       onClose();
+    },
+    onError: (error) => {
+      toast.error(
+        isEvent ? "Não foi possível atualizar o evento" : "Não foi possível atualizar o lembrete",
+        { description: errorMessage(error) },
+      );
     },
   });
 

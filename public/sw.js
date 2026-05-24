@@ -1,7 +1,9 @@
-const CACHE_NAME = "transjap-manager-v2";
+const CACHE_NAME = "transjap-sistema-v3";
+const APP_ORIGIN = "https://sistema-transjap.com.br";
 const APP_SHELL = [
   "/",
   "/login",
+  "/agenda",
   "/estoque",
   "/manutencao",
   "/manifest.webmanifest",
@@ -49,6 +51,49 @@ self.addEventListener("fetch", (event) => {
         .catch(() => cached || Response.error());
 
       return cached || network;
+    }),
+  );
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {
+    title: "Nova tarefa recebida",
+    body: "Uma nova tarefa foi enviada para você.",
+    url: `${APP_ORIGIN}/agenda`,
+    tag: "transjap-task",
+  };
+
+  if (event.data) {
+    try {
+      payload = { ...payload, ...event.data.json() };
+    } catch {
+      payload.body = event.data.text() || payload.body;
+    }
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/pwa-icon-192.png",
+      badge: "/pwa-icon-192.png",
+      tag: payload.tag,
+      renotify: true,
+      data: { url: payload.url || `${APP_ORIGIN}/agenda` },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || `${APP_ORIGIN}/agenda`;
+
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      const current = windows.find((client) => client.url.startsWith(APP_ORIGIN));
+      if (current) {
+        return current.navigate(targetUrl).then(() => current.focus());
+      }
+      return self.clients.openWindow(targetUrl);
     }),
   );
 });

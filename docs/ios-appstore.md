@@ -1,10 +1,10 @@
-# TransJap Manager - iOS, TestFlight e App Store
+# Transjap Sistema - iOS, TestFlight e App Store
 
 Este projeto ja esta preparado para iPhone, iPad, TestFlight e App Store usando Capacitor 8.
 
 ## Dados do app
 
-- Nome: TransJap Manager
+- Nome: Transjap Sistema
 - Bundle ID: `br.com.transjap.manager`
 - Dominio principal: `https://sistema-transjap.com.br`
 - Plataforma minima: iOS 15.0
@@ -137,7 +137,7 @@ npm run ios:archive
 O IPA exportado ficara em:
 
 ```text
-build/ios/ipa/TransJap Manager.ipa
+build/ios/ipa/Transjap Sistema.ipa
 ```
 
 Se o nome final variar por configuracao do Xcode, procure em:
@@ -167,7 +167,7 @@ Opcao Transporter:
 
 Depois em App Store Connect:
 
-1. Apps > TransJap Manager > TestFlight.
+1. Apps > Transjap Sistema > TestFlight.
 2. Aguarde processamento do build.
 3. Preencha beta app review info se usar teste externo.
 4. Adicione testers internos ou externos.
@@ -175,7 +175,7 @@ Depois em App Store Connect:
 ## Publicar na App Store
 
 1. App Store Connect > Apps > Novo App.
-2. Nome: TransJap Manager.
+2. Nome: Transjap Sistema.
 3. Bundle ID: `br.com.transjap.manager`.
 4. SKU sugerido: `transjap-manager-ios`.
 5. Categoria primaria: Business.
@@ -190,7 +190,7 @@ Depois em App Store Connect:
 Nome:
 
 ```text
-TransJap Manager
+Transjap Sistema
 ```
 
 Subtitulo:

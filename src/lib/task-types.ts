@@ -48,10 +48,12 @@ export type TaskResponse = {
 export type TaskRecord = {
   id: string;
   createdBy: string;
+  createdById: string;
   title: string;
   description: string;
   equipment: string;
   assignedTo: string[];
+  responsibleIds: string[];
   sector: string;
   priority: TaskPriority;
   deadline: string;
@@ -63,6 +65,8 @@ export type TaskRecord = {
   timeline: TimelineEvent[];
   createdAt: string;
   updatedAt: string;
+  completedAt: string;
+  completedBy: string;
   viewed: boolean;
 };
 
@@ -120,6 +124,14 @@ export const TASK_STATUS_CONFIG: Record<
 };
 
 export function normalizeTaskStatus(status: string | undefined): TaskStatus {
+  const normalized = status
+    ?.trim()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
+  if (normalized === "completed" || normalized === "concluido") return "Concluído";
+
   switch (status) {
     case "Not Viewed":
     case "Não Visualizado":
@@ -141,6 +153,10 @@ export function normalizeTaskStatus(status: string | undefined): TaskStatus {
     case "Aguardando aprovação":
       return "Aguardando aprovação";
     case "Completed":
+    case "completed":
+    case "CONCLUIDO":
+    case "CONCLUÍDO":
+    case "Concluido":
     case "Concluído":
       return "Concluído";
     case "Overdue":
@@ -153,4 +169,41 @@ export function normalizeTaskStatus(status: string | undefined): TaskStatus {
 
 export function normalizeTaskPriority(priority: string | undefined): TaskPriority {
   return TASK_PRIORITIES.includes(priority as TaskPriority) ? (priority as TaskPriority) : "Média";
+}
+
+export function isTaskCompletedStatus(status: string | undefined): boolean {
+  return normalizeTaskStatus(status) === "Concluído";
+}
+
+function formatCompletionDate(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  if (/^\d{2}\/\d{2}\/\d{4}/.test(trimmed)) {
+    const date = trimmed.slice(0, 10);
+    const timeMatch = trimmed.match(/(\d{2}):(\d{2})/);
+    return timeMatch ? `${date} às ${timeMatch[0]}` : date;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [year, month, day] = trimmed.split("-");
+    return `${day}/${month}/${year}`;
+  }
+
+  const date = new Date(trimmed);
+  if (!Number.isNaN(date.getTime())) {
+    const datePart = date.toLocaleDateString("pt-BR");
+    const timePart = date.toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `${datePart} às ${timePart}`;
+  }
+
+  return trimmed;
+}
+
+export function formatTaskCompletionLabel(task: Pick<TaskRecord, "completedAt">): string {
+  const dateText = formatCompletionDate(task.completedAt);
+  return dateText ? `Feito em ${dateText}` : "Concluído";
 }

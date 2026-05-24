@@ -1,18 +1,22 @@
-import { AUTH_USER_OPTIONS } from "@/lib/auth-store";
+import {
+  AUTH_USER_OPTIONS,
+  resolveResponsibleIds,
+  resolveResponsibleNames,
+  resolveResponsibleUsers,
+} from "@/lib/auth-users";
 import type { Equipment } from "@/lib/equipment-store";
 
 export const ASSIGNMENT_OPTIONS = ["Todos", ...AUTH_USER_OPTIONS.map((user) => user.name)] as const;
-
-const ALL_USER_NAMES = AUTH_USER_OPTIONS.map((user) => user.name);
 
 /**
  * Resolve a tasks's assignedTo list into the actual recipient names.
  * "Todos" expands to every registered auth user.
  */
 export function resolveRecipients(assignedTo: readonly string[]): string[] {
-  if (assignedTo.includes("Todos")) return ALL_USER_NAMES;
-  return assignedTo.filter((name) => name && name !== "Todos");
+  return resolveResponsibleNames(assignedTo);
 }
+
+export { resolveResponsibleIds, resolveResponsibleUsers };
 
 export const SECTOR_OPTIONS = [
   "Operacional",
@@ -47,7 +51,7 @@ export function normalizeFleetId(value: string): string {
   const trimmed = value.trim().toUpperCase();
   if (!trimmed) return "";
 
-  const withoutPrefix = trimmed.replace(/^FROTA\s*/, "").replace(/^FR[-\s]*/, "");
+  const withoutPrefix = trimmed.replace(/^FROTA[-\s]*/, "").replace(/^FR[-\s]*/, "");
   const compact = withoutPrefix.replace(/[^A-Z0-9]/g, "");
   if (!compact) return "";
 
@@ -58,8 +62,15 @@ export function normalizeFleetId(value: string): string {
   return `FR-${compact}`;
 }
 
+export function formatFleetCode(value: string | undefined): string {
+  if (!value) return "";
+  const normalized = normalizeFleetId(value);
+  if (!normalized) return "";
+  return `FROTA-${normalized.replace(/^FR-?/, "")}`;
+}
+
 export function formatEquipmentLabel(equipment: Pick<Equipment, "id" | "model">): string {
-  return `FROTA ${equipment.id} - ${equipment.model}`;
+  return `${formatFleetCode(equipment.id)} - ${equipment.model}`;
 }
 
 export function buildEquipmentOptions(
@@ -89,10 +100,16 @@ export function formatEquipmentReference(
       equipment.id === value ||
       equipment.id === normalized ||
       equipment.model === value ||
-      formatEquipmentLabel(equipment) === value,
+      formatEquipmentLabel(equipment) === value ||
+      `FROTA ${equipment.id} - ${equipment.model}` === value,
   );
 
-  return match ? formatEquipmentLabel(match) : value;
+  if (match) return formatEquipmentLabel(match);
+
+  const isFleetCode =
+    /^(?:(?:FROTA[-\s]*)?FR[-\s]*|FROTA[-\s]*)[A-Z0-9]+$/i.test(value.trim()) ||
+    /^\d+$/.test(value.trim());
+  return isFleetCode ? formatFleetCode(value) : value;
 }
 
 export const MAINTENANCE_TYPE_OPTIONS = [

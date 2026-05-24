@@ -4,6 +4,8 @@ import { AppLayout, Icon } from "@/components/AppLayout";
 import { useTaskStore } from "@/lib/task-store";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
 import { useInventoryStore } from "@/lib/inventory-store";
+import { useAuthStore } from "@/lib/auth-store";
+import { filterVisibleTasks } from "@/lib/task-visibility";
 
 export const Route = createFileRoute("/relatorios")({ component: Relatorios });
 
@@ -45,7 +47,9 @@ const REPORTS: ReportCard[] = [
 
 function Relatorios() {
   const [openReport, setOpenReport] = useState<ReportKey | null>(null);
-  const tasks = useTaskStore((s) => s.tasks);
+  const user = useAuthStore((s) => s.user);
+  const allTasks = useTaskStore((s) => s.tasks);
+  const tasks = useMemo(() => filterVisibleTasks(allTasks, user), [allTasks, user]);
   const maintenances = useMaintenanceStore((s) => s.records);
   const movements = useInventoryStore((s) => s.movements);
 

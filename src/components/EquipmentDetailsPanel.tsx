@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AttachedFile } from "@/components/AttachmentUpload";
 import { toast } from "sonner";
 import type { Equipment } from "@/lib/equipment-store";
+import { formatFleetCode } from "@/lib/operational-options";
 import { formatBrDate } from "@/lib/utils";
 
 export interface MaintenanceRecord {
@@ -67,25 +68,20 @@ export function EquipmentDetailsPanel({
       >
         <SheetHeader className="space-y-3 pb-4 border-b border-border-low">
           <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-4">
-              <div className="w-16 h-16 bg-surface-variant rounded-lg flex items-center justify-center flex-shrink-0">
-                <Icon name={equipment.icon} className="text-primary text-5xl" />
-              </div>
-              <div className="flex-1">
-                <SheetTitle className="text-2xl font-black tracking-tight">
-                  {equipment.model}
-                </SheetTitle>
-                <div className="flex items-center gap-2 mt-2">
-                  <div
-                    className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1 ${TONE_COLORS[equipment.tone]}`}
-                  >
-                    <Icon name={statusIcon[equipment.status]} className="text-sm" />
-                    {equipment.status}
-                  </div>
-                  <span className="text-xs font-mono text-on-surface-variant font-bold">
-                    FROTA {equipment.id}
-                  </span>
+            <div className="flex-1 min-w-0">
+              <SheetTitle className="text-2xl font-black tracking-tight">
+                {equipment.model}
+              </SheetTitle>
+              <div className="flex items-center gap-2 mt-2">
+                <div
+                  className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1 ${TONE_COLORS[equipment.tone]}`}
+                >
+                  <Icon name={statusIcon[equipment.status]} className="text-sm" />
+                  {equipment.status}
                 </div>
+                <span className="text-xs font-mono text-on-surface-variant font-bold">
+                  {formatFleetCode(equipment.id)}
+                </span>
               </div>
             </div>
             <div className="flex gap-2">

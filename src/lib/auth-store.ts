@@ -1,10 +1,8 @@
 import { useSyncExternalStore } from "react";
+import { loginServer, logoutServer } from "@/lib/api/auth";
+import { AUTH_USER_OPTIONS, LOCAL_USERS, normalizeRole, type AuthUser } from "@/lib/auth-users";
 
-export type AuthUser = {
-  id: string;
-  name: "Eduardo" | "Davi" | "Luiz" | "Jean" | "Reginaldo";
-  role: "administrador";
-};
+export type { AuthUser } from "@/lib/auth-users";
 
 type AuthState = {
   user: AuthUser | null;
@@ -13,15 +11,7 @@ type AuthState = {
 
 const STORAGE_KEY = "transjap:fleet-command:auth:v1";
 
-const LOCAL_USERS: Array<AuthUser & { password: string }> = [
-  { id: "usr-eduardo", name: "Eduardo", role: "administrador", password: "Transjap2026*" },
-  { id: "usr-davi", name: "Davi", role: "administrador", password: "Transjap2026*" },
-  { id: "usr-luiz", name: "Luiz", role: "administrador", password: "Transjap2026*" },
-  { id: "usr-jean", name: "Jean", role: "administrador", password: "Transjap2026*" },
-  { id: "usr-reginaldo", name: "Reginaldo", role: "administrador", password: "Transjap2026*" },
-];
-
-export const AUTH_USER_OPTIONS = LOCAL_USERS.map(({ password: _password, ...user }) => user);
+export { AUTH_USER_OPTIONS };
 
 let state: AuthState = {
   user: null,
@@ -44,7 +34,14 @@ function readSession(): AuthUser | null {
   try {
     const raw =
       window.localStorage.getItem(STORAGE_KEY) || window.sessionStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
+    const user = raw ? (JSON.parse(raw) as AuthUser) : null;
+    if (!user) return null;
+
+    const registered =
+      AUTH_USER_OPTIONS.find((option) => option.id === user.id) ??
+      AUTH_USER_OPTIONS.find((option) => option.name === user.name);
+
+    return registered ?? { ...user, role: normalizeRole(user.role) };
   } catch {
     return null;
   }
@@ -74,13 +71,16 @@ export function getCurrentUser() {
 }
 
 export const authActions = {
-  login(username: string, password: string, remember = true) {
+  async login(username: string, password: string, remember = true) {
     const normalized = username.trim().toLowerCase();
     const match = LOCAL_USERS.find(
       (user) => user.name.toLowerCase() === normalized && user.password === password,
     );
 
     if (!match) return null;
+
+    const serverUser = await loginServer({ data: { username, password, remember } });
+    if (!serverUser) return null;
 
     const { password: _password, ...user } = match;
     state = { user, hydrated: true };
@@ -92,6 +92,7 @@ export const authActions = {
   logout() {
     state = { user: null, hydrated: true };
     clearSession();
+    void logoutServer();
     emit();
   },
 };

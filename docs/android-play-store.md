@@ -1,4 +1,4 @@
-# TransJap Manager Android
+# Transjap Sistema Android
 
 Aplicativo Android Capacitor para abrir `https://sistema-transjap.com.br` com package ID `br.com.transjap.manager`.
 
@@ -49,7 +49,7 @@ Também é possível assinar pelo Android Studio em `Build > Generate Signed Bun
 
 ## Publicar na Play Store
 
-1. Crie o app no Play Console como `TransJap Manager`.
+1. Crie o app no Play Console como `Transjap Sistema`.
 2. Use o package ID `br.com.transjap.manager`.
 3. Envie o `.aab` assinado.
 4. Preencha ficha da loja, classificação indicativa, segurança de dados e política de privacidade.

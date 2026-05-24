@@ -28,7 +28,11 @@ import {
   type EquipmentTone,
 } from "@/lib/equipment-store";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
-import { formatEquipmentReference, normalizeFleetId } from "@/lib/operational-options";
+import {
+  formatEquipmentReference,
+  formatFleetCode,
+  normalizeFleetId,
+} from "@/lib/operational-options";
 
 export const Route = createFileRoute("/equipamentos")({ component: Equipamentos });
 
@@ -65,7 +69,7 @@ const EMPTY_FORM: FormState = {
 
 function equipmentToForm(equipment: Equipment): FormState {
   return {
-    fleet: equipment.id,
+    fleet: formatFleetCode(equipment.id),
     model: equipment.model,
     location: equipment.location,
     hours: String(equipment.hours),
@@ -130,6 +134,7 @@ function Equipamentos() {
         (e) =>
           e.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
           e.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          formatFleetCode(e.id).toLowerCase().includes(searchTerm.toLowerCase()) ||
           e.location.toLowerCase().includes(searchTerm.toLowerCase()),
       ),
     [equipments, searchTerm],
@@ -180,7 +185,7 @@ function Equipamentos() {
       } else {
         const created = await add(draft);
         toast.success("Equipamento cadastrado", {
-          description: `${created.id} · ${created.model}`,
+          description: `${formatFleetCode(created.id)} · ${created.model}`,
         });
       }
     } catch (error) {
@@ -270,17 +275,14 @@ function Equipamentos() {
             {/* Status indicator bar */}
             <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
-            <div className="flex justify-between items-start mb-4">
-              <div className="w-16 h-16 bg-surface-variant rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Icon name={e.icon} className="text-primary text-4xl" />
-              </div>
+            <div className="flex justify-end mb-4">
               <span className={`px-3 py-1 text-xs font-bold rounded-full border ${toneBg[e.tone]}`}>
                 {e.status}
               </span>
             </div>
 
             <p className="text-xs uppercase tracking-wider text-on-surface-variant font-medium mb-1">
-              FROTA {e.id}
+              {formatFleetCode(e.id)}
             </p>
             <h3 className="text-lg font-black text-on-surface group-hover:text-primary transition-colors mb-4">
               {e.model}
@@ -352,7 +354,9 @@ function Equipamentos() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {editingId ? `Editar equipamento ${editingId}` : "Cadastrar equipamento"}
+              {editingId
+                ? `Editar equipamento ${formatFleetCode(editingId)}`
+                : "Cadastrar equipamento"}
             </DialogTitle>
             <DialogDescription>
               {editingId
@@ -369,10 +373,10 @@ function Equipamentos() {
                 onChange={(e) => setForm((s) => ({ ...s, fleet: e.target.value }))}
                 onBlur={(e) => {
                   const normalized = normalizeFleetId(e.target.value);
-                  if (normalized) setForm((s) => ({ ...s, fleet: normalized }));
+                  if (normalized) setForm((s) => ({ ...s, fleet: formatFleetCode(normalized) }));
                 }}
                 required
-                placeholder="Ex: 16 ou FR-016"
+                placeholder="Ex: 16 ou FROTA-016"
                 className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
               />
             </label>

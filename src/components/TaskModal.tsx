@@ -359,7 +359,7 @@ export function TaskModal({
               <div>
                 <label className="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-2 block">
                   <Icon name="group" className="inline text-base mr-1" />
-                  Destinatários
+                  Enviar para
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-surface-highest border border-border-low rounded-lg p-3">
                   {ASSIGNMENT_OPTIONS.map((option) => {
@@ -431,7 +431,7 @@ export function TaskModal({
                 </div>
                 <dl className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <dt className="text-on-surface-variant font-semibold">Destinatários:</dt>
+                    <dt className="text-on-surface-variant font-semibold">Enviar para:</dt>
                     <dd className="text-on-surface font-bold text-right">
                       {formData.assignedTo.length > 0 ? formData.assignedTo.join(", ") : "Nenhum"}
                     </dd>

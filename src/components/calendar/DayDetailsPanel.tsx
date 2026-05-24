@@ -72,23 +72,35 @@ function ItemRow({
             </span>
           </div>
           <p className="mt-1 truncate font-bold text-on-surface">{item.title}</p>
-          <p className="mt-1 text-xs text-on-surface-variant">
-            {fullTime(item)} · {item.status}
-          </p>
+          {item.completed && item.completionLabel ? (
+            <p className="mt-1 text-xs font-bold text-status-success">{item.completionLabel}</p>
+          ) : (
+            <p className="mt-1 text-xs text-on-surface-variant">
+              {fullTime(item)} · {item.status}
+            </p>
+          )}
         </div>
       </div>
     </button>
   );
 }
 
-function DetailBlock({ label, value }: { label: string; value: string }) {
+function DetailBlock({
+  label,
+  value,
+  className = "text-on-surface",
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
   if (!value) return null;
   return (
     <div>
       <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
         {label}
       </p>
-      <p className="mt-1 text-sm font-semibold text-on-surface">{value}</p>
+      <p className={`mt-1 text-sm font-semibold ${className}`}>{value}</p>
     </div>
   );
 }
@@ -108,6 +120,16 @@ export function DayDetailsPanel({
   const queryClient = useQueryClient();
   const [activeItemId, setActiveItemId] = useState<string | null>(focusedItemId ?? null);
   const [editingReminder, setEditingReminder] = useState<DbReminder | null>(null);
+
+  const refreshReminders = () => {
+    void queryClient.invalidateQueries({ queryKey: ["reminders"] });
+  };
+  const updateCachedReminders = (update: (rows: DbReminder[]) => DbReminder[]) => {
+    queryClient.setQueriesData<DbReminder[]>({ queryKey: ["reminders"] }, (current) =>
+      current ? update(current) : current,
+    );
+    refreshReminders();
+  };
 
   useEffect(() => {
     setActiveItemId(focusedItemId ?? null);
@@ -130,8 +152,19 @@ export function DayDetailsPanel({
           },
         },
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["reminders"] });
+    onSuccess: (_, item) => {
+      updateCachedReminders((rows) =>
+        rows.map((row) =>
+          row.id === item.sourceId
+            ? {
+                ...row,
+                completed: !item.completed,
+                status: item.completed ? "pendente" : "concluído",
+                updatedAt: new Date().toISOString(),
+              }
+            : row,
+        ),
+      );
     },
   });
 
@@ -143,8 +176,8 @@ export function DayDetailsPanel({
           id: item.sourceId,
         },
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["reminders"] });
+    onSuccess: (_, item) => {
+      updateCachedReminders((rows) => rows.filter((row) => row.id !== item.sourceId));
       toast.success("Item removido");
     },
   });
@@ -257,7 +290,18 @@ export function DayDetailsPanel({
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <DetailBlock label="Horário" value={fullTime(activeItem)} />
-                <DetailBlock label="Status" value={activeItem.status} />
+                <DetailBlock
+                  label="Status"
+                  value={activeItem.completed ? "Concluído" : activeItem.status}
+                  className={activeItem.completed ? "text-status-success" : "text-on-surface"}
+                />
+                {activeItem.completed && activeItem.completionLabel && (
+                  <DetailBlock
+                    label="Conclusão"
+                    value={activeItem.completionLabel}
+                    className="text-status-success"
+                  />
+                )}
                 <DetailBlock label="Criado por" value={activeItem.createdBy || "Você"} />
                 <DetailBlock label="Responsável" value={activeItem.assignedTo.join(", ")} />
                 <DetailBlock label="Local" value={activeItem.location ?? ""} />
