@@ -1,4 +1,4 @@
-import { findUserByName } from "@/lib/auth-users";
+import { findUserByName, isAdminUser } from "@/lib/auth-users";
 import type { AuthUser } from "@/lib/auth-store";
 import { resolveRecipients, resolveResponsibleIds } from "@/lib/operational-options";
 import type { TaskRecord, TaskStatus } from "@/lib/task-types";
@@ -98,10 +98,11 @@ export function getTaskStatusForUser(task: TaskRecord, user: AuthUser | null): T
 /**
  * Tarefas são privadas por envolvimento.
  * Um usuário vê uma tarefa se for o criador OU estiver nos destinatários.
- * Não há hierarquia de role — todos os usuários são tratados de forma igual.
+ * Administradores também podem consultar a tarefa.
  */
 export function canUserSeeTask(task: TaskRecord, user: AuthUser | null): boolean {
   if (!user) return false;
+  if (isAdminUser(user)) return true;
 
   const creatorIds = getTaskCreatorIds(task);
   const creatorNames = getTaskCreatorNames(task);

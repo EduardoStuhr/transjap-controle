@@ -122,10 +122,16 @@ function filePeriod(rows: Array<{ datetime: string }>) {
 export function CarcaraImportDialog({
   onClose,
   onSuccess,
+  onCreatingChange,
+  isSynchronizing = false,
+  syncLabel,
   userName,
 }: {
   onClose: () => void;
-  onSuccess: (analysisId: string) => void;
+  onSuccess: (analysisId: string) => Promise<void> | void;
+  onCreatingChange?: (isCreating: boolean) => void;
+  isSynchronizing?: boolean;
+  syncLabel?: string;
   userName?: string;
 }) {
   const [step, setStep] = useState(1);
@@ -146,6 +152,8 @@ export function CarcaraImportDialog({
   const [dragging, setDragging] = useState(false);
   const [creating, setCreating] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const busy = creating || isSynchronizing;
+  const busyLabel = isSynchronizing ? (syncLabel ?? "Sincronizando analise...") : "Criando...";
 
   const factor = Number.parseFloat(draft.swellFactor.replace(",", "."));
   const validFactor = Number.isFinite(factor) && factor >= 0;
@@ -502,6 +510,7 @@ export function CarcaraImportDialog({
   async function handleCreate() {
     if (!preview || !canGoConfirm) return;
     setCreating(true);
+    onCreatingChange?.(true);
     try {
       const result = await createAnalysis({
         data: {
@@ -517,22 +526,28 @@ export function CarcaraImportDialog({
           dailyPartRows: rawPde,
         },
       });
+      await onSuccess(result.analysisId);
       toast.success("Análise criada", {
         description: `${result.trips} viagens, ${result.fueling} abastecimentos e ${result.dailyParts} apontamentos PDE usados.`,
       });
-      onSuccess(result.analysisId);
       onClose();
     } catch (err) {
       toast.error("Erro ao criar análise", {
         description: err instanceof Error ? err.message : "Tente novamente.",
       });
     } finally {
+      onCreatingChange?.(false);
       setCreating(false);
     }
   }
 
   return (
-    <Dialog open onOpenChange={onClose}>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) onClose();
+      }}
+    >
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto !flex flex-col p-0 gap-0">
         <DialogHeader className="shrink-0 px-6 pt-6 pb-3">
           <DialogTitle>Criar Análise</DialogTitle>
@@ -833,39 +848,32 @@ export function CarcaraImportDialog({
             </div>
           )}
 
-          <div className="mt-4 rounded border border-border-low bg-surface-highest p-3 text-xs">
-            <p className="font-black uppercase tracking-widest text-on-surface-variant">Debug</p>
-            <div className="mt-2 grid grid-cols-2 gap-1 md:grid-cols-4">
-              <span>hasRco: {String(hasRco)}</span>
-              <span>hasCmb: {String(hasCmb)}</span>
-              <span>hasPde: {String(hasPde)}</span>
-              <span>contextValid: {String(contextValid)}</span>
-              <span>parseErrors: {parseErrors.length ? parseErrors.join(" | ") : "none"}</span>
-              <span>canGoPreview: {String(canGoPreview)}</span>
-              <span>canGoConfirm: {String(canGoConfirm)}</span>
-              <span>currentStep: {step}</span>
-            </div>
-          </div>
         </div>
 
         <DialogFooter className="sticky bottom-0 z-20 bg-surface border-t border-border-low p-4">
-          <Button variant="outline" onClick={onClose} disabled={creating}>
+          {busy && (
+            <span className="mr-auto self-center text-xs text-on-surface-variant">
+              {busyLabel}
+            </span>
+          )}
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancelar
           </Button>
           <Button
             variant="outline"
             onClick={() => setStep((s) => Math.max(1, s - 1))}
-            disabled={creating || step === 1}
+            disabled={busy || step === 1}
           >
             Voltar
           </Button>
-          <Button variant="outline" onClick={() => setStep(3)} disabled={creating || !canGoPreview}>
+          <Button variant="outline" onClick={() => setStep(3)} disabled={busy || !canGoPreview}>
             Preview
           </Button>
           {step < 4 ? (
             <Button
               onClick={() => setStep((s) => s + 1)}
               disabled={
+                busy ||
                 (step === 1 && !contextValid) ||
                 (step === 2 && !canGoPreview) ||
                 (step === 3 && !canGoConfirm)
@@ -880,9 +888,9 @@ export function CarcaraImportDialog({
           )}
           <Button
             onClick={step === 4 ? handleCreate : () => setStep(4)}
-            disabled={creating || !canGoConfirm}
+            disabled={busy || !canGoConfirm}
           >
-            {creating ? "Criando..." : step === 4 ? "Criar análise" : "Confirmar"}
+            {busy ? busyLabel : step === 4 ? "Criar análise" : "Confirmar"}
           </Button>
         </DialogFooter>
       </DialogContent>

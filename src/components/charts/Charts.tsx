@@ -397,8 +397,300 @@ export function ChartLine({
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 5. HORIZONTAL BARS — Top-N ranking
+// 5. DIESEL POR M3 EMPOLADO — volume × consumo específico
 // ═══════════════════════════════════════════════════════════════════
+export type ChartSeriesConfig = {
+  dataKey: string;
+  name: string;
+  color: string;
+};
+
+export function ChartMultiLine({
+  data,
+  series,
+  unit,
+  yLabel,
+  precision = 1,
+}: {
+  data: Array<Record<string, unknown>>;
+  series: ChartSeriesConfig[];
+  unit: string;
+  yLabel: string;
+  precision?: number;
+}) {
+  const units = Object.fromEntries(series.map((s) => [s.dataKey, unit])) as Record<string, string>;
+  const format = Object.fromEntries(
+    series.map((s) => [s.dataKey, (v: number) => fmt.dec(v, precision)]),
+  ) as Record<string, (v: number) => string>;
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis
+          dataKey="d"
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+          interval={data.length > 14 ? 3 : 0}
+        />
+        <YAxis
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={52}
+          tickFormatter={(v: number) => fmt.k(v)}
+          label={{
+            value: yLabel,
+            angle: -90,
+            position: "insideLeft",
+            offset: 14,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <Tooltip content={<RichTooltip units={units} format={format} />} />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="line" />
+        {series.map((s) => (
+          <Line
+            key={s.dataKey}
+            type="monotone"
+            dataKey={s.dataKey}
+            name={s.name}
+            stroke={s.color}
+            strokeWidth={2.2}
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 0 }}
+            connectNulls
+          />
+        ))}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+export type VolumeLineObraSeries = {
+  obra: string;
+  color: string;
+  volumeKey: string;
+  lineKey: string;
+};
+
+export function ChartVolumeLinePorObra({
+  data,
+  series,
+  volumeName,
+  volumeUnit,
+  lineName,
+  lineUnit,
+  volumeAxisLabel,
+  lineAxisLabel,
+  linePrecision = 1,
+}: {
+  data: Array<Record<string, unknown>>;
+  series: VolumeLineObraSeries[];
+  volumeName: string;
+  volumeUnit: string;
+  lineName: string;
+  lineUnit: string;
+  volumeAxisLabel: string;
+  lineAxisLabel: string;
+  linePrecision?: number;
+}) {
+  const units = Object.fromEntries(
+    series.flatMap((s) => [
+      [s.volumeKey, volumeUnit],
+      [s.lineKey, lineUnit],
+    ]),
+  ) as Record<string, string>;
+  const format = Object.fromEntries(
+    series.flatMap((s) => [
+      [s.volumeKey, (v: number) => fmt.dec(v, 1)],
+      [s.lineKey, (v: number) => fmt.dec(v, linePrecision)],
+    ]),
+  ) as Record<string, (v: number) => string>;
+  const barSize = Math.max(6, Math.min(12, 24 / Math.max(series.length, 1)));
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis
+          dataKey="d"
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+          interval={data.length > 14 ? 3 : 0}
+        />
+        <YAxis
+          yAxisId="volume"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={52}
+          tickFormatter={(v: number) => fmt.k(v)}
+          label={{
+            value: volumeAxisLabel,
+            angle: -90,
+            position: "insideLeft",
+            offset: 14,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <YAxis
+          yAxisId="line"
+          orientation="right"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={52}
+          tickFormatter={(v: number) => fmt.dec(v, linePrecision)}
+          label={{
+            value: lineAxisLabel,
+            angle: 90,
+            position: "insideRight",
+            offset: 12,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <Tooltip content={<RichTooltip units={units} format={format} />} />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        {series.map((s) => (
+          <Bar
+            key={s.volumeKey}
+            yAxisId="volume"
+            dataKey={s.volumeKey}
+            name={`${s.obra} · ${volumeName}`}
+            fill={s.color}
+            fillOpacity={0.62}
+            radius={[2, 2, 0, 0]}
+            barSize={barSize}
+          />
+        ))}
+        {series.map((s) => (
+          <Line
+            key={s.lineKey}
+            yAxisId="line"
+            type="monotone"
+            dataKey={s.lineKey}
+            name={`${s.obra} · ${lineName}`}
+            stroke={s.color}
+            strokeWidth={2.4}
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 0 }}
+            connectNulls
+          />
+        ))}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+export type DieselPorM3EmpoladoPoint = {
+  d: string;
+  m3Empolado: number;
+  diesel: number;
+  litrosPorM3Empolado: number;
+};
+
+export function ChartDieselPorM3Empolado({
+  data,
+  media,
+}: {
+  data: DieselPorM3EmpoladoPoint[];
+  media: number;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis
+          dataKey="d"
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+          interval={data.length > 14 ? 3 : 0}
+        />
+        <YAxis
+          yAxisId="m3"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(v: number) => fmt.k(v)}
+          label={{
+            value: "m³ empolado",
+            angle: -90,
+            position: "insideLeft",
+            offset: 14,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <YAxis
+          yAxisId="lpm3"
+          orientation="right"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(v: number) => fmt.dec(v, 1)}
+          label={{
+            value: "L/m³",
+            angle: 90,
+            position: "insideRight",
+            offset: 12,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <Tooltip
+          content={
+            <RichTooltip
+              units={{
+                m3Empolado: "m³",
+                diesel: "L",
+                litrosPorM3Empolado: "L/m³",
+              }}
+              format={{
+                m3Empolado: (v) => fmt.dec(v, 1),
+                diesel: (v) => fmt.dec(v, 1),
+                litrosPorM3Empolado: (v) => fmt.dec(v, 2),
+              }}
+            />
+          }
+        />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        <Bar
+          yAxisId="m3"
+          dataKey="m3Empolado"
+          name="m³ empolado"
+          fill={C.sand}
+          radius={[2, 2, 0, 0]}
+          barSize={12}
+        />
+        <Line
+          yAxisId="lpm3"
+          type="monotone"
+          dataKey="litrosPorM3Empolado"
+          name="L/m³ empolado"
+          stroke={C.yellow}
+          strokeWidth={2.5}
+          dot={false}
+          activeDot={{ r: 4, strokeWidth: 0 }}
+        />
+        {media > 0 && (
+          <ReferenceLine
+            yAxisId="lpm3"
+            y={media}
+            stroke={C.danger}
+            strokeDasharray="3 4"
+            ifOverflow="extendDomain"
+          />
+        )}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// HORIZONTAL BARS — Top-N ranking
 export function ChartHBars({
   data,
   dataKey,

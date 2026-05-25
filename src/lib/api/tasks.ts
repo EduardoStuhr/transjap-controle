@@ -23,6 +23,7 @@ import {
   type TaskComment,
   type TaskRecord,
   type TaskResponse,
+  type TaskStatus,
   type TimelineEvent,
 } from "@/lib/task-types";
 
@@ -43,6 +44,18 @@ export type TaskListResult = {
 export type TaskStatusChangeInput = {
   id: string;
   status: string;
+};
+
+export type TaskResponseInput = {
+  taskId: string;
+  text: string;
+  attachments: TaskResponse["attachments"];
+  nextStatus?: string | null;
+};
+
+export type TaskCommentInput = {
+  taskId: string;
+  text: string;
 };
 
 type TaskRow = {
@@ -215,14 +228,12 @@ function allRecipientsViewed(task: TaskRecord, viewedBy: Record<string, string>)
 function withUserView(task: TaskRecord, user: AuthUser): { task: TaskRecord; changed: boolean } {
   const viewedAt = nowIso();
   const alreadyViewed = hasUserViewedTask(task.viewedBy, user);
-  const viewedBy = alreadyViewed
-    ? task.viewedBy
-    : { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
+  const viewedBy = { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
   const fullyViewed = allRecipientsViewed(task, viewedBy);
   const shouldFlipStatus = task.status === "Não visualizado" && fullyViewed;
 
   return {
-    changed: !alreadyViewed || task.viewed !== fullyViewed || shouldFlipStatus,
+    changed: true,
     task: {
       ...task,
       status: shouldFlipStatus ? "Visualizado" : task.status,
@@ -307,8 +318,20 @@ function normalizeStoredTask(task: Partial<TaskRecord>): TaskRecord {
     deadline: task.deadline || "",
     status,
     attachments: Array.isArray(task.attachments) ? task.attachments : [],
-    comments: Array.isArray(task.comments) ? task.comments : [],
-    responses: Array.isArray(task.responses) ? task.responses : [],
+    comments: Array.isArray(task.comments)
+      ? task.comments.map((comment) => ({
+          ...comment,
+          createdBy: comment.createdBy || comment.author,
+          authorId: comment.authorId || findUserByName(comment.author)?.id || "",
+        }))
+      : [],
+    responses: Array.isArray(task.responses)
+      ? task.responses.map((response) => ({
+          ...response,
+          createdBy: response.createdBy || response.author,
+          authorId: response.authorId || findUserByName(response.author)?.id || "",
+        }))
+      : [],
     viewedBy: task.viewedBy && typeof task.viewedBy === "object" ? task.viewedBy : {},
     timeline: Array.isArray(task.timeline) ? task.timeline : [],
     createdAt,
@@ -406,6 +429,8 @@ function preserveProtectedFields(
       ...next,
       createdBy: existing.createdBy,
       createdById: existing.createdById,
+      assignedTo: existing.assignedTo,
+      responsibleIds: existing.responsibleIds,
     };
   }
 
@@ -419,6 +444,32 @@ function preserveProtectedFields(
     completedBy: next.completedBy,
     timeline: next.timeline,
     updatedAt: next.updatedAt || nowIso(),
+  };
+}
+
+function originalCreatorFromTimeline(task: TaskRecord): AuthUser | null {
+  for (const event of [...task.timeline].reverse()) {
+    const match = event.action.match(/^Tarefa enviada por (.+)$/i);
+    if (!match) continue;
+    return findUserByName(match[1].trim()) ?? findUserByName(event.actor);
+  }
+
+  return null;
+}
+
+function repairTaskCreator(task: TaskRecord): TaskRecord {
+  const originalCreator = originalCreatorFromTimeline(task);
+  if (
+    !originalCreator ||
+    (task.createdBy === originalCreator.name && task.createdById === originalCreator.id)
+  ) {
+    return task;
+  }
+
+  return {
+    ...task,
+    createdBy: originalCreator.name,
+    createdById: originalCreator.id,
   };
 }
 
@@ -665,7 +716,13 @@ async function upsertTaskRows(d1: D1Database, document: StoredTaskDocument) {
         `INSERT INTO task_comments (id, task_id, author, text, timestamp)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .bind(comment.id, task.id, comment.author, comment.text, comment.timestamp)
+      .bind(
+        comment.id,
+        task.id,
+        comment.author,
+        comment.text,
+        comment.timestamp,
+      )
       .run();
   }
 
@@ -744,12 +801,16 @@ async function documentFromRow(d1: D1Database, row: TaskRow): Promise<StoredTask
       (commentsResult.results ?? []).map((comment) => ({
         id: comment.id,
         author: comment.author,
+        createdBy: comment.author,
+        authorId: findUserByName(comment.author)?.id || "",
         text: comment.text,
         timestamp: comment.timestamp,
       })),
       (responsesResult.results ?? []).map((response) => ({
         id: response.id,
         author: response.author,
+        createdBy: response.author,
+        authorId: findUserByName(response.author)?.id || "",
         text: response.text,
         attachments: parseJson(response.attachments, []),
         timestamp: response.timestamp,
@@ -768,6 +829,21 @@ async function documentFromRow(d1: D1Database, row: TaskRow): Promise<StoredTask
 async function getTaskDocument(d1: D1Database, id: string): Promise<StoredTaskDocument | null> {
   const row = await d1.prepare("SELECT * FROM tasks WHERE id = ?").bind(id).first<TaskRow>();
   return row ? documentFromRow(d1, row) : null;
+}
+
+async function repairStoredTaskCreators(d1: D1Database) {
+  const rows = await d1.prepare("SELECT * FROM tasks").all<TaskRow>();
+
+  for (const row of rows.results ?? []) {
+    const existing = await documentFromRow(d1, row);
+    const repaired = repairTaskCreator(existing.task);
+    if (repaired === existing.task) continue;
+
+    await d1
+      .prepare("UPDATE tasks SET created_by = ?, created_by_user_id = ? WHERE id = ?")
+      .bind(repaired.createdBy, repaired.createdById, repaired.id)
+      .run();
+  }
 }
 
 async function backfillTaskAccessTables(d1: D1Database) {
@@ -815,6 +891,7 @@ async function listTaskDocumentsFromD1(
   user: AuthUser,
 ): Promise<StoredTaskDocument[]> {
   await migrateStoreDocumentsToTasks(d1);
+  await repairStoredTaskCreators(d1);
 
   const query = isAdminUser(user)
     ? `SELECT * FROM tasks ORDER BY updated_at DESC`
@@ -841,11 +918,20 @@ async function listTaskDocumentsFromD1(
 }
 
 async function listTaskDocumentsLocal(user: AuthUser): Promise<StoredTaskDocument[]> {
-  return listStoreDocuments<StoredTaskDocument>(TASKS_MODULE).then((documents) =>
-    documents
-      .map((document) => ({ ...document, task: normalizeStoredTask(document.task) }))
-      .filter((document) => canSeeTask(document.task, user)),
-  );
+  const documents = await listStoreDocuments<StoredTaskDocument>(TASKS_MODULE);
+  const repaired: StoredTaskDocument[] = [];
+
+  for (const document of documents) {
+    const normalized = normalizeStoredTask(document.task);
+    const task = repairTaskCreator(normalized);
+    const next = { ...document, task };
+    if (task !== normalized) {
+      await upsertStoreDocument(TASKS_MODULE, task.id, next);
+    }
+    repaired.push(next);
+  }
+
+  return repaired.filter((document) => canSeeTask(document.task, user));
 }
 
 async function createDocument(document: StoredTaskDocument, user: AuthUser) {
@@ -928,6 +1014,249 @@ async function updateDocument(document: StoredTaskDocument, user: AuthUser) {
   return upsertTaskRows(d1, { kind: document.kind, task });
 }
 
+function canRespondToTask(task: TaskRecord, user: AuthUser): boolean {
+  return resolveTaskRecipientUsers(task).some((recipient) => recipient.id === user.id);
+}
+
+function responseActivity(
+  input: TaskResponseInput,
+  user: AuthUser,
+  timestamp: string,
+): TaskResponse {
+  return {
+    id: `RS-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+    author: user.name,
+    createdBy: user.name,
+    authorId: user.id,
+    text: input.text.trim(),
+    attachments: input.attachments,
+    timestamp,
+  };
+}
+
+function commentActivity(input: TaskCommentInput, user: AuthUser, timestamp: string): TaskComment {
+  return {
+    id: `CM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+    author: user.name,
+    createdBy: user.name,
+    authorId: user.id,
+    text: input.text.trim(),
+    timestamp,
+  };
+}
+
+function activityEvent(action: string, user: AuthUser, timestamp: string): TimelineEvent {
+  return {
+    id: `EV-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+    timestamp,
+    action,
+    actor: user.name,
+  };
+}
+
+async function sendTaskActivityNotification(
+  task: TaskRecord,
+  user: AuthUser,
+  action: "respondeu" | "comentou",
+) {
+  const { sendTaskActivityPushNotifications } = await import("@/lib/api/push.server");
+  await sendTaskActivityPushNotifications(task, user, action).catch((error) => {
+    console.warn("[push] A atividade foi registrada, mas a notificação falhou.", error);
+  });
+}
+
+async function addResponseDocument(input: TaskResponseInput, user: AuthUser) {
+  const text = input.text.trim();
+  if (!text) throw new Response("Resposta vazia.", { status: 400 });
+
+  const d1 = getOptionalD1();
+  const timestamp = nowIso();
+
+  if (!d1) {
+    const documents = await listTaskDocumentsLocal(user);
+    const existing = documents.find((document) => document.task.id === input.taskId);
+    if (!existing || !canRespondToTask(existing.task, user)) {
+      throw new Response("Tarefa nao encontrada ou sem permissao para responder.", {
+        status: 404,
+      });
+    }
+
+    const response = responseActivity(input, user, timestamp);
+    const responseEvent = activityEvent(`${user.name} respondeu`, user, timestamp);
+    const requestedStatus = input.nextStatus ? normalizeTaskStatus(input.nextStatus) : null;
+    const statusChanged = Boolean(requestedStatus) && requestedStatus !== existing.task.status;
+    const statusTask = statusChanged
+      ? applyStatusChange(existing.task, requestedStatus as TaskStatus, user)
+      : { ...existing.task, updatedAt: timestamp };
+    const task: TaskRecord = {
+      ...statusTask,
+      responses: [response, ...existing.task.responses],
+      timeline: [responseEvent, ...statusTask.timeline],
+    };
+    const saved = await upsertStoreDocument(TASKS_MODULE, task.id, {
+      kind: existing.kind,
+      task,
+    });
+    await sendTaskActivityNotification(task, user, "respondeu");
+    return saved;
+  }
+
+  await migrateStoreDocumentsToTasks(d1);
+  await repairStoredTaskCreators(d1);
+  const existing = await getTaskDocument(d1, input.taskId);
+  if (!existing || !canRespondToTask(existing.task, user)) {
+    throw new Response("Tarefa nao encontrada ou sem permissao para responder.", { status: 404 });
+  }
+
+  const response = responseActivity(input, user, timestamp);
+  const responseEvent = activityEvent(`${user.name} respondeu`, user, timestamp);
+  const requestedStatus = input.nextStatus ? normalizeTaskStatus(input.nextStatus) : null;
+  const statusChanged = Boolean(requestedStatus) && requestedStatus !== existing.task.status;
+  const statusTask = statusChanged
+    ? applyStatusChange(existing.task, requestedStatus as TaskStatus, user)
+    : { ...existing.task, updatedAt: timestamp };
+  const statements = [
+    d1
+      .prepare(
+        `INSERT INTO task_responses (id, task_id, author, text, attachments, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        response.id,
+        input.taskId,
+        response.author,
+        response.text,
+        JSON.stringify(response.attachments),
+        response.timestamp,
+      ),
+    d1
+      .prepare(
+        `INSERT INTO task_timeline (id, task_id, timestamp, action, actor, status)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+      )
+      .bind(
+        responseEvent.id,
+        input.taskId,
+        responseEvent.timestamp,
+        responseEvent.action,
+        responseEvent.actor,
+      ),
+    d1
+      .prepare(
+        `UPDATE tasks
+         SET status = ?, completed_at = ?, completed_by = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .bind(
+        statusTask.status,
+        statusTask.completedAt,
+        statusTask.completedBy,
+        statusTask.updatedAt,
+        input.taskId,
+      ),
+  ];
+  if (statusChanged) {
+    const statusEvent = statusTask.timeline[0];
+    statements.push(
+      d1
+        .prepare(
+          `INSERT INTO task_timeline (id, task_id, timestamp, action, actor, status)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          statusEvent.id,
+          input.taskId,
+          statusEvent.timestamp,
+          statusEvent.action,
+          statusEvent.actor,
+          statusEvent.status || null,
+        ),
+    );
+  }
+  await d1.batch(statements);
+
+  const saved = (await getTaskDocument(d1, input.taskId)) ?? {
+    kind: existing.kind,
+    task: { ...statusTask, responses: [response, ...existing.task.responses] },
+  };
+  await sendTaskActivityNotification(saved.task, user, "respondeu");
+  return saved;
+}
+
+async function addCommentDocument(input: TaskCommentInput, user: AuthUser) {
+  const text = input.text.trim();
+  if (!text) throw new Response("Comentario vazio.", { status: 400 });
+
+  const d1 = getOptionalD1();
+  const timestamp = nowIso();
+
+  if (!d1) {
+    const documents = await listTaskDocumentsLocal(user);
+    const existing = documents.find((document) => document.task.id === input.taskId);
+    if (!existing || !canSeeTask(existing.task, user)) {
+      throw new Response("Tarefa nao encontrada ou sem permissao.", { status: 404 });
+    }
+
+    const comment = commentActivity(input, user, timestamp);
+    const event = activityEvent(`${user.name} comentou`, user, timestamp);
+    const task = {
+      ...existing.task,
+      comments: [comment, ...existing.task.comments],
+      timeline: [event, ...existing.task.timeline],
+      updatedAt: timestamp,
+    };
+    const saved = await upsertStoreDocument(TASKS_MODULE, task.id, {
+      kind: existing.kind,
+      task,
+    });
+    await sendTaskActivityNotification(task, user, "comentou");
+    return saved;
+  }
+
+  await migrateStoreDocumentsToTasks(d1);
+  await repairStoredTaskCreators(d1);
+  const existing = await getTaskDocument(d1, input.taskId);
+  if (!existing || !canSeeTask(existing.task, user)) {
+    throw new Response("Tarefa nao encontrada ou sem permissao.", { status: 404 });
+  }
+
+  const comment = commentActivity(input, user, timestamp);
+  const event = activityEvent(`${user.name} comentou`, user, timestamp);
+  await d1.batch([
+    d1
+      .prepare(
+        `INSERT INTO task_comments (id, task_id, author, text, timestamp)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        comment.id,
+        input.taskId,
+        comment.author,
+        comment.text,
+        comment.timestamp,
+      ),
+    d1
+      .prepare(
+        `INSERT INTO task_timeline (id, task_id, timestamp, action, actor, status)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+      )
+      .bind(event.id, input.taskId, event.timestamp, event.action, event.actor),
+    d1.prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").bind(timestamp, input.taskId),
+  ]);
+
+  const saved = (await getTaskDocument(d1, input.taskId)) ?? {
+    kind: existing.kind,
+    task: {
+      ...existing.task,
+      comments: [comment, ...existing.task.comments],
+      timeline: [event, ...existing.task.timeline],
+      updatedAt: timestamp,
+    },
+  };
+  await sendTaskActivityNotification(saved.task, user, "comentou");
+  return saved;
+}
+
 async function deleteDocument(id: string, user: AuthUser) {
   const d1 = getOptionalD1();
 
@@ -984,37 +1313,31 @@ async function markDocumentViewed(id: string, user: AuthUser) {
     throw new Response("Tarefa nao encontrada ou sem permissao.", { status: 404 });
   }
 
-  if (hasUserViewedTask(existing.task.viewedBy, user)) return existing;
-
   const viewedAt = nowIso();
+  const alreadyViewed = hasUserViewedTask(existing.task.viewedBy, user);
   const eventId = `EV-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-  await d1.batch([
+  const writes = [
     d1
       .prepare(
         `INSERT INTO task_views (task_id, user_id, user_name, viewed_at)
          VALUES (?, ?, ?, ?)
-         ON CONFLICT(task_id, user_id) DO NOTHING`,
+         ON CONFLICT(task_id, user_id) DO UPDATE SET
+           user_name = excluded.user_name,
+           viewed_at = excluded.viewed_at`,
       )
       .bind(id, user.id, user.name, viewedAt),
-    d1
-      .prepare(
-        `INSERT INTO task_timeline (id, task_id, timestamp, action, actor, status)
-         SELECT ?, ?, ?, ?, ?, NULL
-         WHERE NOT EXISTS (
-           SELECT 1 FROM task_views WHERE task_id = ? AND user_id = ? AND viewed_at <> ?
-         )`,
-      )
-      .bind(
-        eventId,
-        id,
-        viewedAt,
-        `Visualizado por ${user.name}`,
-        user.name,
-        id,
-        user.id,
-        viewedAt,
-      ),
-  ]);
+  ];
+  if (!alreadyViewed) {
+    writes.push(
+      d1
+        .prepare(
+          `INSERT INTO task_timeline (id, task_id, timestamp, action, actor, status)
+           VALUES (?, ?, ?, ?, ?, NULL)`,
+        )
+        .bind(eventId, id, viewedAt, `Visualizado por ${user.name}`, user.name),
+    );
+  }
+  await d1.batch(writes);
 
   const recipients = resolveTaskRecipientUsers(existing.task);
   const row = await d1.prepare("SELECT * FROM tasks WHERE id = ?").bind(id).first<TaskRow>();
@@ -1023,17 +1346,19 @@ async function markDocumentViewed(id: string, user: AuthUser) {
   const fullyViewed =
     recipients.length > 0 &&
     recipients.every((recipient) => hasUserViewedTask(updated.task.viewedBy, recipient));
-  if (fullyViewed && !updated.task.viewed) {
-    await d1
-      .prepare(
-        `UPDATE tasks
-         SET viewed = 1,
-             status = CASE WHEN status = 'Não visualizado' THEN 'Visualizado' ELSE status END
-         WHERE id = ?`,
-      )
-      .bind(id)
-      .run();
-  }
+  await d1
+    .prepare(
+      `UPDATE tasks
+       SET updated_at = ?,
+           viewed = CASE WHEN ? = 1 THEN 1 ELSE viewed END,
+           status = CASE
+             WHEN ? = 1 AND status = 'Não visualizado' THEN 'Visualizado'
+             ELSE status
+           END
+       WHERE id = ?`,
+    )
+    .bind(viewedAt, fullyViewed ? 1 : 0, fullyViewed ? 1 : 0, id)
+    .run();
 
   return (await getTaskDocument(d1, id)) ?? updated;
 }
@@ -1119,6 +1444,14 @@ export const createTaskDocument = createServerFn({ method: "POST" })
 export const updateTaskDocument = createServerFn({ method: "POST" })
   .inputValidator((document: StoredTaskDocument) => document)
   .handler(async ({ data }) => updateDocument(data, await requireServerAuthUser()));
+
+export const addTaskResponseDocument = createServerFn({ method: "POST" })
+  .inputValidator((input: TaskResponseInput) => input)
+  .handler(async ({ data }) => addResponseDocument(data, await requireServerAuthUser()));
+
+export const addTaskCommentDocument = createServerFn({ method: "POST" })
+  .inputValidator((input: TaskCommentInput) => input)
+  .handler(async ({ data }) => addCommentDocument(data, await requireServerAuthUser()));
 
 export const deleteTaskDocument = createServerFn({ method: "POST" })
   .inputValidator((id: string) => id)

@@ -3,7 +3,7 @@
  * Suporta busca, filtros, e seleção múltipla
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,7 @@ interface MyAnalysesDialogProps {
   selectedIds: string[];
   onClose: () => void;
   onSelect: (ids: string[]) => void;
+  onDelete?: (id: string) => Promise<void> | void;
 }
 
 function formatDate(dateStr: string): string {
@@ -38,12 +39,18 @@ export function MyAnalysesDialog({
   selectedIds,
   onClose,
   onSelect,
+  onDelete,
 }: MyAnalysesDialogProps) {
   const [obra, setObra] = useState("");
   const [material, setMaterial] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [draftIds, setDraftIds] = useState<string[]>(selectedIds);
+  const [deletingId, setDeletingId] = useState("");
+
+  useEffect(() => {
+    if (isOpen) setDraftIds(selectedIds);
+  }, [isOpen, selectedIds]);
 
   const obras = uniqueValues(analyses.map((a) => a.obra));
   const materials = uniqueValues(analyses.map((a) => a.material));
@@ -60,6 +67,21 @@ export function MyAnalysesDialog({
     setDraftIds((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
+  };
+
+  const handleDelete = async (analysis: DbProductionAnalysis) => {
+    if (!onDelete) return;
+    const confirmed = window.confirm(
+      `Excluir a analise "${analysis.name}" e as viagens vinculadas?`,
+    );
+    if (!confirmed) return;
+    setDeletingId(analysis.id);
+    try {
+      await onDelete(analysis.id);
+      setDraftIds((current) => current.filter((id) => id !== analysis.id));
+    } finally {
+      setDeletingId("");
+    }
   };
 
   if (!isOpen) return null;
@@ -181,6 +203,17 @@ export function MyAnalysesDialog({
                   >
                     Abrir
                   </Button>
+                  {onDelete && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs text-status-error"
+                      disabled={deletingId === analysis.id}
+                      onClick={() => handleDelete(analysis)}
+                    >
+                      {deletingId === analysis.id ? "Excluindo..." : "Excluir"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>

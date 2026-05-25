@@ -174,7 +174,7 @@ export function useEquipmentStore<T>(selector: Selector<T>): T {
 export function useEquipmentActions() {
   const qc = useQueryClient();
   const invalidate = () => {
-    void qc.invalidateQueries({ queryKey: QK });
+    void qc.refetchQueries({ queryKey: QK, type: "active" });
   };
 
   const addMut = useMutation({

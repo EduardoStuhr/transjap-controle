@@ -25,6 +25,8 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type TaskComment = {
   id: string;
   author: string;
+  createdBy?: string;
+  authorId?: string;
   text: string;
   timestamp: string;
 };
@@ -40,6 +42,8 @@ export type TimelineEvent = {
 export type TaskResponse = {
   id: string;
   author: string;
+  createdBy?: string;
+  authorId?: string;
   text: string;
   attachments: AttachedFile[];
   timestamp: string;

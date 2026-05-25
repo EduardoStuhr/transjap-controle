@@ -7,11 +7,11 @@ import { useAuthStore, type AuthUser } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskActions, useTaskStore } from "@/lib/task-store";
 import { sortTasksStable } from "@/lib/task-sort";
+import { getUnreadActivity, type UnreadKind } from "@/lib/task-unread";
 import {
   filterVisibleTasks,
   getTaskStatusForUser,
   getTaskVisibilityLabel,
-  hasUserViewedTask,
   isTaskUnreadForUser,
 } from "@/lib/task-visibility";
 import {
@@ -400,7 +400,7 @@ function VirtualTaskList({
   formatEquipment: (value: string | undefined) => string;
   user: AuthUser | null;
 }) {
-  const rowHeight = 116;
+  const rowHeight = 136;
   const viewportHeight = Math.min(680, tasks.length * rowHeight);
   const [scrollTop, setScrollTop] = useState(0);
   const visibleRange = useMemo(() => {
@@ -460,7 +460,6 @@ const TaskListItem = memo(function TaskListItem({
     ? formatTaskCompletionLabel(task)
     : null;
   const urgency = !completionLabel && task.deadline ? getUrgencyLevel(task.deadline) : null;
-  const viewedByUser = hasUserViewedTask(task, user);
   const displayStatus = getTaskStatusForUser(task, user);
   const config = TASK_STATUS_CONFIG[displayStatus];
 
@@ -475,7 +474,7 @@ const TaskListItem = memo(function TaskListItem({
           <div className="flex items-center gap-2 mb-2">
             <Icon name={config.icon} className={`text-lg ${config.color.split(" ")[1]}`} />
             <span className="text-xs font-mono text-on-surface-variant font-bold">#{task.id}</span>
-            {!viewedByUser && <span className="w-2 h-2 bg-status-warning rounded-full" />}
+            <UnreadActivityBadges task={task} user={user} />
           </div>
           <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors truncate">
             {task.title}
@@ -535,7 +534,6 @@ const TaskGridCard = memo(function TaskGridCard({
     ? formatTaskCompletionLabel(task)
     : null;
   const urgency = !completionLabel && task.deadline ? getUrgencyLevel(task.deadline) : null;
-  const viewedByUser = hasUserViewedTask(task, user);
   const displayStatus = getTaskStatusForUser(task, user);
   const config = TASK_STATUS_CONFIG[displayStatus];
   const visibility = getTaskVisibilityLabel(task);
@@ -546,11 +544,11 @@ const TaskGridCard = memo(function TaskGridCard({
       onClick={() => onOpen(task.id)}
       className="bg-surface-container border border-border-low rounded-lg p-5 text-left hover:border-primary/50 hover:shadow-md transition-industrial group"
     >
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex items-start justify-between gap-2 mb-3">
         <div className={`px-2 py-1 rounded text-[10px] font-bold ${config.color}`}>
           {config.label}
         </div>
-        {!viewedByUser && <span className="w-2 h-2 bg-status-warning rounded-full" />}
+        <UnreadActivityBadges task={task} user={user} />
       </div>
       <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-3 line-clamp-2">
         {task.title}
@@ -617,6 +615,46 @@ function TaskBadges({ task, user }: { task: TaskRecord; user: AuthUser | null })
         {config.label}
       </div>
     </div>
+  );
+}
+
+const UNREAD_BADGES: Record<UnreadKind, { icon: string; label: string; className: string }> = {
+  response: {
+    icon: "reply",
+    label: "Nova resposta",
+    className: "bg-status-info/15 text-status-info border-status-info/30",
+  },
+  comment: {
+    icon: "chat",
+    label: "Novo comentário",
+    className: "bg-primary/15 text-primary border-primary/30",
+  },
+  status: {
+    icon: "sync_alt",
+    label: "Status alterado",
+    className: "bg-status-warning/15 text-status-warning border-status-warning/30",
+  },
+};
+
+function UnreadActivityBadges({ task, user }: { task: TaskRecord; user: AuthUser | null }) {
+  const unread = useMemo(() => getUnreadActivity(task, user?.name), [task, user?.name]);
+  if (unread.kinds.length === 0) return null;
+
+  return (
+    <span className="flex items-center gap-1.5 flex-wrap">
+      {unread.kinds.map((kind) => {
+        const badge = UNREAD_BADGES[kind];
+        return (
+          <span
+            key={kind}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${badge.className}`}
+          >
+            <Icon name={badge.icon} className="text-xs" />
+            {badge.label}
+          </span>
+        );
+      })}
+    </span>
   );
 }
 

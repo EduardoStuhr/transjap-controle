@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  addTaskCommentDocument,
+  addTaskResponseDocument,
   changeTaskStatusDocument,
   createTaskDocument,
   deleteTaskDocument,
@@ -111,6 +113,8 @@ function normalizeResponses(value: unknown): TaskResponse[] {
     return {
       id: response.id || newId("RS"),
       author: response.author || "",
+      createdBy: response.createdBy || response.author || "",
+      authorId: response.authorId || "",
       text: response.text || "",
       attachments: sanitizeAttachments(
         Array.isArray(response.attachments) ? response.attachments : [],
@@ -181,6 +185,8 @@ function normalizeTask(
     comments: (task.comments || []).map((comment) => ({
       id: comment.id || newId("CM"),
       author: comment.author || "",
+      createdBy: comment.createdBy || comment.author || "",
+      authorId: comment.authorId || "",
       text: comment.text || "",
       timestamp: comment.timestamp || createdAt,
     })),
@@ -300,14 +306,12 @@ function allRecipientsViewed(task: TaskRecord, viewedBy: Record<string, string>)
 function withViewedByUser(task: TaskRecord, user: NonNullable<ReturnType<typeof getCurrentUser>>) {
   const viewedAt = nowIso();
   const alreadyViewed = userHasViewed(task, user);
-  const viewedBy = alreadyViewed
-    ? task.viewedBy
-    : { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
+  const viewedBy = { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
   const fullyViewed = allRecipientsViewed(task, viewedBy);
   const shouldFlipStatus = task.status === "Não visualizado" && fullyViewed;
 
   return {
-    changed: !alreadyViewed || task.viewed !== fullyViewed || shouldFlipStatus,
+    changed: true,
     task: {
       ...task,
       status: shouldFlipStatus ? "Visualizado" : task.status,
@@ -318,7 +322,7 @@ function withViewedByUser(task: TaskRecord, user: NonNullable<ReturnType<typeof 
         : [
             {
               id: newId("EV"),
-              timestamp: displayDate(),
+              timestamp: viewedAt,
               action: `Visualizado por ${user.name}`,
               actor: user.name,
               status: shouldFlipStatus ? "Visualizado" : task.status,
@@ -500,10 +504,12 @@ export function useTaskStore<T>(selector: TaskSelector<T>): T {
 
 export function useTaskActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => {
-    RELATED_TASK_QUERY_KEYS.forEach((queryKey) => {
-      void queryClient.invalidateQueries({ queryKey });
-    });
+  const invalidate = async () => {
+    await Promise.all(
+      RELATED_TASK_QUERY_KEYS.map((queryKey) =>
+        queryClient.refetchQueries({ queryKey, type: "active" }),
+      ),
+    );
   };
   const updateCachedState = (updater: (state: TaskState) => TaskState) => {
     const next = updater(getCachedState(queryClient));
@@ -556,6 +562,18 @@ export function useTaskActions() {
     onSuccess: invalidate,
   });
 
+  const responseMutation = useMutation({
+    mutationFn: (input: Parameters<typeof addTaskResponseDocument>[0]["data"]) =>
+      addTaskResponseDocument({ data: input }),
+    onSuccess: invalidate,
+  });
+
+  const commentMutation = useMutation({
+    mutationFn: (input: Parameters<typeof addTaskCommentDocument>[0]["data"]) =>
+      addTaskCommentDocument({ data: input }),
+    onSuccess: invalidate,
+  });
+
   const saveTask = async (kind: StoredTaskKind, task: TaskRecord) => {
     upsertCachedTask(kind, task);
     try {
@@ -593,8 +611,8 @@ export function useTaskActions() {
         title: input.title.trim(),
         description: input.description.trim(),
         equipment: input.equipment.trim(),
-        assignedTo: sanitizeAssignedTo(input.assignedTo),
-        responsibleIds: resolveResponsibleIds(input.assignedTo),
+        assignedTo: existing.assignedTo,
+        responsibleIds: existing.responsibleIds,
         sector: input.sector.trim(),
         priority: input.priority,
         deadline: input.deadline,
@@ -655,9 +673,11 @@ export function useTaskActions() {
       const created: TaskResponse = {
         id: newId("RS"),
         author: user.name,
+        createdBy: user.name,
+        authorId: user.id,
         text,
         attachments: sanitizeAttachments(response.attachments),
-        timestamp: displayDate(),
+        timestamp: nowIso(),
       };
 
       const task: TaskRecord = {
@@ -666,8 +686,8 @@ export function useTaskActions() {
         timeline: [
           {
             id: newId("EV"),
-            timestamp: displayDate(),
-            action: `Resposta enviada por ${user.name}`,
+            timestamp: nowIso(),
+            action: `${user.name} respondeu`,
             actor: user.name,
           },
           ...existing.timeline,
@@ -675,8 +695,21 @@ export function useTaskActions() {
         updatedAt: nowIso(),
       };
 
-      await saveTask("task", task);
-      return created;
+      upsertCachedTask("task", task);
+      try {
+        const result = await responseMutation.mutateAsync({
+          taskId,
+          text,
+          attachments: sanitizeAttachments(response.attachments),
+        });
+        const synced = normalizeTask(result.task);
+        upsertCachedTask(result.kind, synced);
+        return synced.responses[0] ?? created;
+      } catch (error) {
+        upsertCachedTask("task", existing);
+        invalidate();
+        throw error;
+      }
     },
 
     async addResponseWithStatus(
@@ -696,37 +729,31 @@ export function useTaskActions() {
       const created: TaskResponse = {
         id: newId("RS"),
         author: user.name,
+        createdBy: user.name,
+        authorId: user.id,
         text,
         attachments: sanitizeAttachments(response.attachments),
-        timestamp: displayDate(),
+        timestamp: nowIso(),
       };
 
       const statusChanged = Boolean(nextStatus) && nextStatus !== existing.status;
       const finalStatus: TaskStatus = statusChanged ? (nextStatus as TaskStatus) : existing.status;
-      const completed = statusChanged && isTaskCompletedStatus(finalStatus);
-      const reopened =
-        statusChanged &&
-        isTaskCompletedStatus(existing.status) &&
-        !isTaskCompletedStatus(finalStatus);
       const responseEvent = {
         id: newId("EV"),
         timestamp: nowIso(),
-        action: statusChanged
-          ? completed
-            ? `Resposta enviada; tarefa concluída por ${user.name}`
-            : reopened
-              ? `Resposta enviada; tarefa reaberta por ${user.name}`
-              : `Respondeu e alterou status para ${finalStatus}`
-          : `Resposta enviada por ${user.name}`,
+        action: `${user.name} respondeu`,
         actor: user.name,
-        ...(statusChanged ? { status: finalStatus } : {}),
       };
 
       const task: TaskRecord = {
         ...existing,
         status: finalStatus,
         responses: [created, ...existing.responses],
-        timeline: [responseEvent, ...existing.timeline],
+        timeline: [
+          responseEvent,
+          ...(statusChanged ? [statusEvent(existing.status, finalStatus, user.name)] : []),
+          ...existing.timeline,
+        ],
         viewed: existing.viewed,
         completedAt: completionTimestampForStatus(
           existing.completedAt,
@@ -742,33 +769,67 @@ export function useTaskActions() {
         updatedAt: nowIso(),
       };
 
-      await saveTask("task", task);
-      return { response: created, statusChanged, status: finalStatus };
+      upsertCachedTask("task", task);
+      try {
+        const result = await responseMutation.mutateAsync({
+          taskId,
+          text,
+          attachments: sanitizeAttachments(response.attachments),
+          nextStatus: statusChanged ? finalStatus : null,
+        });
+        const synced = normalizeTask(result.task);
+        upsertCachedTask(result.kind, synced);
+        return { response: synced.responses[0] ?? created, statusChanged, status: finalStatus };
+      } catch (error) {
+        upsertCachedTask("task", existing);
+        invalidate();
+        throw error;
+      }
     },
 
     async addComment(taskId: string, comment: Pick<TaskComment, "author" | "text">) {
+      const user = getCurrentUser();
       const text = comment.text.trim();
-      const author = comment.author.trim();
       const current = getCachedState(queryClient);
       const existing = current.tasks.find((task) => task.id === taskId);
-      if (!text || !author || !existing) return null;
+      if (!text || !user || !existing) return null;
 
       const task: TaskRecord = {
         ...existing,
         comments: [
           {
             id: newId("CM"),
-            author,
+            author: user.name,
+            createdBy: user.name,
+            authorId: user.id,
             text,
-            timestamp: displayDate(),
+            timestamp: nowIso(),
           },
           ...existing.comments,
+        ],
+        timeline: [
+          {
+            id: newId("EV"),
+            timestamp: nowIso(),
+            action: `${user.name} comentou`,
+            actor: user.name,
+          },
+          ...existing.timeline,
         ],
         updatedAt: nowIso(),
       };
 
-      await saveTask("task", task);
-      return task.comments[0];
+      upsertCachedTask("task", task);
+      try {
+        const result = await commentMutation.mutateAsync({ taskId, text });
+        const synced = normalizeTask(result.task);
+        upsertCachedTask(result.kind, synced);
+        return synced.comments[0] ?? task.comments[0];
+      } catch (error) {
+        upsertCachedTask("task", existing);
+        invalidate();
+        throw error;
+      }
     },
 
     async changeTaskStatus(taskId: string, nextStatus: TaskStatus) {

@@ -465,7 +465,7 @@ export function useMaintenanceStore<T>(selector: MaintenanceSelector<T>): T {
 export function useMaintenanceActions() {
   const queryClient = useQueryClient();
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: QK });
+    void queryClient.refetchQueries({ queryKey: QK, type: "active" });
   };
 
   const createMutation = useMutation({

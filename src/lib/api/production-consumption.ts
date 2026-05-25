@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
-import { getDb } from "@/db/client";
+import { getDb, type Db } from "@/db/client";
 import { equipmentDailyParts, fueling, productionAnalyses, swellFactors, trips } from "@/db/schema";
 import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
@@ -57,6 +57,8 @@ type PreviewResult = {
   sampleNew: SamplePreviewRow[];
 };
 
+const D1_INSERT_BATCH_SIZE = 100;
+
 const localAnalyses: DbProductionAnalysis[] = [];
 const localTrips: DbTrip[] = [];
 const localFueling: DbFueling[] = [];
@@ -67,16 +69,195 @@ function analysisScopedId(analysisId: string, sourceId: string) {
   return `${analysisId}:${sourceId}`;
 }
 
+function uniqueScopedIdFactory(analysisId: string) {
+  const counts = new Map<string, number>();
+  return (sourceId: string) => {
+    const base = analysisScopedId(analysisId, sourceId);
+    const nextCount = (counts.get(base) ?? 0) + 1;
+    counts.set(base, nextCount);
+    return nextCount === 1 ? base : `${base}:${nextCount}`;
+  };
+}
+
+function errorMessage(err: unknown) {
+  if (!(err instanceof Error)) return String(err || "Erro desconhecido.");
+  const cause =
+    "cause" in err && err.cause
+      ? ` (${err.cause instanceof Error ? err.cause.message : String(err.cause)})`
+      : "";
+  return `${err.message}${cause}`;
+}
+
+function createAnalysisFailure(step: string, err: unknown) {
+  return new Error(`Nao foi possivel criar a analise (${step}): ${errorMessage(err)}`);
+}
+
+function createAnalysisId() {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `ANL-${Date.now().toString(36).toUpperCase()}-${random.toUpperCase()}`;
+}
+
+async function runD1Batch(d1: D1Database, statements: D1PreparedStatement[]) {
+  for (let i = 0; i < statements.length; i += D1_INSERT_BATCH_SIZE) {
+    await d1.batch(statements.slice(i, i + D1_INSERT_BATCH_SIZE));
+  }
+}
+
+function tripInsertStatement(d1: D1Database, row: DbTrip) {
+  return d1
+    .prepare(
+      `INSERT INTO trips (
+        id, analysis_id, datetime, operator, operation, owner, plate, vehicle_id, prefix, driver,
+        obra, origin, destination, km, material, weight, cubic_m_loose, swell_factor_applied,
+        cubic_m_compacted, unit_price, total, status, import_batch_id, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.id,
+      row.analysisId,
+      row.datetime,
+      row.operator,
+      row.operation,
+      row.owner,
+      row.plate,
+      row.vehicleId,
+      row.prefix,
+      row.driver,
+      row.obra,
+      row.origin,
+      row.destination,
+      row.km,
+      row.material,
+      row.weight,
+      row.cubicMLoose,
+      row.swellFactorApplied,
+      row.cubicMCompacted,
+      row.unitPrice,
+      row.total,
+      row.status,
+      row.importBatchId,
+      row.importedAt,
+    );
+}
+
+function fuelingInsertStatement(d1: D1Database, row: DbFueling) {
+  return d1
+    .prepare(
+      `INSERT INTO fueling (
+        id, analysis_id, datetime, owner, plate, vehicle_id, prefix, vehicle_type, km_previous,
+        km_current, liters, unit_price, total, consumption, standard_consumption, operator, obra,
+        status, import_batch_id, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.id,
+      row.analysisId,
+      row.datetime,
+      row.owner,
+      row.plate,
+      row.vehicleId,
+      row.prefix,
+      row.vehicleType,
+      row.kmPrevious,
+      row.kmCurrent,
+      row.liters,
+      row.unitPrice,
+      row.total,
+      row.consumption,
+      row.standardConsumption,
+      row.operator,
+      row.obra,
+      row.status,
+      row.importBatchId,
+      row.importedAt,
+    );
+}
+
+function dailyPartInsertStatement(d1: D1Database, row: DbEquipmentDailyPart) {
+  return d1
+    .prepare(
+      `INSERT INTO equipment_daily_parts (
+        id, analysis_id, fleet, fleet_label, date, obra, hours, source_sheet, status,
+        used_in_analysis, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.id,
+      row.analysisId,
+      row.fleet,
+      row.fleetLabel,
+      row.date,
+      row.obra,
+      row.hours,
+      row.sourceSheet,
+      row.status,
+      row.usedInAnalysis ? 1 : 0,
+      row.importedAt,
+    );
+}
+
+async function insertAnalysisRows(d1: D1Database, rows: DbTrip[], analysisId: string) {
+  try {
+    await runD1Batch(
+      d1,
+      rows.map((row) => tripInsertStatement(d1, row)),
+    );
+  } catch (err) {
+    throw createAnalysisFailure(`viagens da analise ${analysisId}`, err);
+  }
+}
+
+async function insertFuelingRows(d1: D1Database, rows: DbFueling[], analysisId: string) {
+  try {
+    await runD1Batch(
+      d1,
+      rows.map((row) => fuelingInsertStatement(d1, row)),
+    );
+  } catch (err) {
+    throw createAnalysisFailure(`abastecimentos da analise ${analysisId}`, err);
+  }
+}
+
+async function insertDailyPartRows(
+  d1: D1Database,
+  rows: DbEquipmentDailyPart[],
+  analysisId: string,
+) {
+  try {
+    await runD1Batch(
+      d1,
+      rows.map((row) => dailyPartInsertStatement(d1, row)),
+    );
+  } catch (err) {
+    throw createAnalysisFailure(`apontamentos PDE da analise ${analysisId}`, err);
+  }
+}
+
+async function cleanupCreatedAnalysis(db: Db, analysisId: string) {
+  await db.delete(equipmentDailyParts).where(eq(equipmentDailyParts.analysisId, analysisId));
+  await db.delete(fueling).where(eq(fueling.analysisId, analysisId));
+  await db.delete(trips).where(eq(trips.analysisId, analysisId));
+  await db.delete(productionAnalyses).where(eq(productionAnalyses.id, analysisId));
+}
+
+function normalizeLinkedFleet(row: { prefix?: string; vehicleId?: string; plate?: string; fleet?: string }) {
+  return normalizeFleet(row.fleet || row.prefix || row.vehicleId || row.plate || "");
+}
+
 function makeTripRow(
   row: ParsedTrip,
   analysisId: string,
   batchId: string,
   now: string,
   factor: number,
+  scopedId = analysisScopedId(analysisId, row.id),
 ): DbTrip {
   const compactedM3 = row.cubicMLoose > 0 ? row.cubicMLoose / (1 + factor) : 0;
   return {
-    id: analysisScopedId(analysisId, row.id),
+    id: scopedId,
     analysisId,
     datetime: row.datetime,
     operator: row.operator,
@@ -108,10 +289,11 @@ function makeFuelRow(
   analysisId: string,
   batchId: string,
   now: string,
+  scopedId = analysisScopedId(analysisId, row.id),
 ): DbFueling {
   const total = row.total || row.liters * row.unitPrice;
   return {
-    id: analysisScopedId(analysisId, row.id),
+    id: scopedId,
     analysisId,
     datetime: row.datetime,
     owner: row.owner,
@@ -140,9 +322,10 @@ function makeDailyPartRow(
   now: string,
   status: string,
   usedInAnalysis: boolean,
+  scopedId = analysisScopedId(analysisId, `${row.fleet}:${row.date}:${row.sourceSheet}`),
 ): DbEquipmentDailyPart {
   return {
-    id: analysisScopedId(analysisId, `${row.fleet}:${row.date}:${row.sourceSheet}`),
+    id: scopedId,
     analysisId,
     fleet: row.fleet,
     fleetLabel: row.fleetLabel,
@@ -192,8 +375,15 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     createdBy: data.createdBy ?? "",
   };
 
-  const tripRows = data.tripsRows.map((row) => makeTripRow(row, id, batchId, now, factor));
-  const fuelRows = data.fuelingRows.map((row) => makeFuelRow(row, id, batchId, now));
+  const nextTripId = uniqueScopedIdFactory(id);
+  const nextFuelId = uniqueScopedIdFactory(id);
+  const nextDailyPartId = uniqueScopedIdFactory(id);
+  const tripRows = data.tripsRows.map((row) =>
+    makeTripRow(row, id, batchId, now, factor, nextTripId(row.id)),
+  );
+  const fuelRows = data.fuelingRows.map((row) =>
+    makeFuelRow(row, id, batchId, now, nextFuelId(row.id)),
+  );
   const fueledFleets = new Set(
     fuelRows.map((row) => normalizeFleet(row.prefix || row.vehicleId || row.plate)).filter(Boolean),
   );
@@ -213,7 +403,14 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     } else if (fueledDates.size > 0 && !fueledDates.has(row.date)) {
       status = "OK";
     }
-    return makeDailyPartRow(row, id, now, status, used);
+    return makeDailyPartRow(
+      row,
+      id,
+      now,
+      status,
+      used,
+      nextDailyPartId(`${row.fleet}:${row.date}:${row.sourceSheet}`),
+    );
   });
 
   const dailyKeys = new Set(
@@ -530,7 +727,7 @@ export const createAnalysis = createServerFn({ method: "POST" })
   .inputValidator((data: CreateAnalysisInput) => data)
   .handler(async ({ data }) => {
     const now = new Date().toISOString();
-    const id = `ANL-${Date.now().toString(36).toUpperCase()}`;
+    const id = createAnalysisId();
     const built = buildAnalysisFromImports(data, id, now);
     const { analysis, tripRows, fuelRows, dailyPartRows, metrics } = built;
 
@@ -552,17 +749,23 @@ export const createAnalysis = createServerFn({ method: "POST" })
     }
 
     const db = getDb(d1);
-    await db.insert(productionAnalyses).values(analysis);
+    try {
+      await db.insert(productionAnalyses).values(analysis);
+    } catch (err) {
+      throw createAnalysisFailure("cadastro da analise", err);
+    }
 
-    const INSERT_CHUNK = 50;
-    for (let i = 0; i < tripRows.length; i += INSERT_CHUNK) {
-      await db.insert(trips).values(tripRows.slice(i, i + INSERT_CHUNK));
-    }
-    for (let i = 0; i < fuelRows.length; i += INSERT_CHUNK) {
-      await db.insert(fueling).values(fuelRows.slice(i, i + INSERT_CHUNK));
-    }
-    for (let i = 0; i < dailyPartRows.length; i += INSERT_CHUNK) {
-      await db.insert(equipmentDailyParts).values(dailyPartRows.slice(i, i + INSERT_CHUNK));
+    try {
+      await insertAnalysisRows(d1, tripRows, id);
+      await insertFuelingRows(d1, fuelRows, id);
+      await insertDailyPartRows(d1, dailyPartRows, id);
+    } catch (err) {
+      try {
+        await cleanupCreatedAnalysis(db, id);
+      } catch (cleanupErr) {
+        console.error("[production-consumption] cleanup on createAnalysis failed", cleanupErr);
+      }
+      throw err;
     }
 
     const affectedFleets = Array.from(
@@ -575,7 +778,11 @@ export const createAnalysis = createServerFn({ method: "POST" })
     );
     if (affectedFleets.length > 0) {
       try {
-        await recalculateFuelAttribution(db, { fleets: affectedFleets, deleteFirst: true });
+        await recalculateFuelAttribution(db, {
+          fleets: affectedFleets,
+          analysisIds: [id],
+          deleteFirst: false,
+        });
       } catch (err) {
         console.error("[fuel-attribution] recalc on createAnalysis failed", err);
       }
@@ -590,6 +797,80 @@ export const createAnalysis = createServerFn({ method: "POST" })
       liters: metrics.liters,
       metrics,
     };
+  });
+
+export const deleteAnalysis = createServerFn({ method: "POST" })
+  .inputValidator((data: { analysisId: string }) => data)
+  .handler(async ({ data }) => {
+    const analysisId = data.analysisId?.trim();
+    if (!analysisId) throw new Error("Informe a analise que sera excluida.");
+
+    const d1 = getOptionalD1();
+    if (!d1) {
+      const analysisIndex = localAnalyses.findIndex((analysis) => analysis.id === analysisId);
+      if (analysisIndex < 0) throw new Error("Analise nao encontrada.");
+      localAnalyses.splice(analysisIndex, 1);
+
+      const removeLocalRows = <T extends { analysisId: string }>(rows: T[]) => {
+        for (let i = rows.length - 1; i >= 0; i -= 1) {
+          if (rows[i].analysisId === analysisId) rows.splice(i, 1);
+        }
+      };
+      removeLocalRows(localTrips);
+      removeLocalRows(localFueling);
+      removeLocalRows(localDailyParts);
+      return { ok: true, analysisId };
+    }
+
+    const db = getDb(d1);
+    const existing = await db
+      .select({ id: productionAnalyses.id })
+      .from(productionAnalyses)
+      .where(eq(productionAnalyses.id, analysisId))
+      .get();
+    if (!existing) throw new Error("Analise nao encontrada.");
+
+    const [linkedFuelRows, linkedDailyRows] = await Promise.all([
+      db
+        .select({
+          prefix: fueling.prefix,
+          vehicleId: fueling.vehicleId,
+          plate: fueling.plate,
+        })
+        .from(fueling)
+        .where(eq(fueling.analysisId, analysisId))
+        .all(),
+      db
+        .select({ fleet: equipmentDailyParts.fleet })
+        .from(equipmentDailyParts)
+        .where(eq(equipmentDailyParts.analysisId, analysisId))
+        .all(),
+    ]);
+
+    const affectedFleets = Array.from(
+      new Set(
+        [...linkedFuelRows, ...linkedDailyRows].map(normalizeLinkedFleet).filter(Boolean),
+      ),
+    );
+
+    try {
+      await db.delete(equipmentDailyParts).where(eq(equipmentDailyParts.analysisId, analysisId));
+      await db.delete(fueling).where(eq(fueling.analysisId, analysisId));
+      await db.delete(trips).where(eq(trips.analysisId, analysisId));
+      await db.delete(productionAnalyses).where(eq(productionAnalyses.id, analysisId));
+    } catch (err) {
+      throw new Error(`Nao foi possivel excluir a analise: ${errorMessage(err)}`);
+    }
+
+    if (affectedFleets.length > 0) {
+      try {
+        await recalculateFuelAttribution(db, { fleets: affectedFleets, deleteFirst: true });
+      } catch (err) {
+        console.error("[fuel-attribution] recalc on deleteAnalysis failed", err);
+      }
+    }
+
+    return { ok: true, analysisId };
   });
 
 export const importTrips = createServerFn({ method: "POST" })

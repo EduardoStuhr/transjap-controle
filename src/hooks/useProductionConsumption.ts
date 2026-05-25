@@ -17,16 +17,47 @@ const DEFAULT_FILTERS: DashboardFilterState = {
   analysisType: "all",
 };
 
+function defaultFilters(): DashboardFilterState {
+  return { ...DEFAULT_FILTERS };
+}
+
+function readJsonArray(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function readStoredFilters(storageKey: string): DashboardFilterState {
+  if (typeof window === "undefined") return defaultFilters();
+  const stored = localStorage.getItem(storageKey);
+  if (!stored) return defaultFilters();
+  try {
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object"
+      ? { ...DEFAULT_FILTERS, ...(parsed as Partial<DashboardFilterState>) }
+      : defaultFilters();
+  } catch {
+    localStorage.removeItem(storageKey);
+    return defaultFilters();
+  }
+}
+
+function normalizeIds(ids: string[]) {
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
 /**
  * Hook para gerenciar filtros do dashboard
  * Persiste em localStorage automaticamente
  */
 export function useDashboardFilters(storageKey = "dashboard_filters") {
-  const [filters, setFilters] = useState<DashboardFilterState>(() => {
-    if (typeof window === "undefined") return DEFAULT_FILTERS;
-    const stored = localStorage.getItem(storageKey);
-    return stored ? { ...DEFAULT_FILTERS, ...JSON.parse(stored) } : DEFAULT_FILTERS;
-  });
+  const [filters, setFilters] = useState<DashboardFilterState>(() =>
+    readStoredFilters(storageKey),
+  );
 
   const updateFilters = useCallback(
     (updates: Partial<DashboardFilterState>) => {
@@ -42,7 +73,7 @@ export function useDashboardFilters(storageKey = "dashboard_filters") {
   );
 
   const clearFilters = useCallback(() => {
-    setFilters(DEFAULT_FILTERS);
+    setFilters(defaultFilters());
     if (typeof window !== "undefined") {
       localStorage.removeItem(storageKey);
     }
@@ -61,9 +92,8 @@ export function useAnalysisSelection(
 ) {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
-    const stored = localStorage.getItem(storageKey);
-    if (stored) {
-      const ids = JSON.parse(stored) as string[];
+    const ids = readJsonArray(localStorage.getItem(storageKey));
+    if (ids.length > 0) {
       const validIds = ids.filter((id) => analyses.some((a) => a.id === id));
       if (validIds.length > 0) return validIds;
     }
@@ -78,11 +108,21 @@ export function useAnalysisSelection(
     }
   }, [selectedIds, storageKey]);
 
+  useEffect(() => {
+    setSelectedIds((current) => {
+      if (analyses.length === 0) return current.length ? [] : current;
+      const availableIds = new Set(analyses.map((analysis) => analysis.id));
+      const kept = current.filter((id) => availableIds.has(id));
+      if (kept.length > 0) return kept.length === current.length ? current : kept;
+      return [analyses[0].id];
+    });
+  }, [analyses]);
+
   const updateSelectedIds = useCallback(
     (ids: string[] | ((current: string[]) => string[])) => {
       setSelectedIds((current) => {
         const next = typeof ids === "function" ? ids(current) : ids;
-        return next;
+        return normalizeIds(next);
       });
     },
     [],
@@ -123,6 +163,8 @@ export function useFilteredData(
   filters: DashboardFilterState,
 ) {
   const dateKey = (value: string) => (value ? value.slice(0, 10) : "");
+  const equipmentKey = (row: { prefix?: string; vehicleId?: string; plate?: string }) =>
+    row.prefix || row.vehicleId || row.plate || "";
 
   const filteredTrips = useMemo(() => {
     return trips.filter((row) => {
@@ -130,6 +172,7 @@ export function useFilteredData(
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
       if (filters.obra !== "all" && row.obra !== filters.obra) return false;
       if (filters.material !== "all" && row.material !== filters.material) return false;
+      if (filters.aggregate !== "all" && equipmentKey(row) !== filters.aggregate) return false;
       if (filters.analysisType === "production-only" && row.cubicMLoose <= 0) return false;
       return true;
     });
@@ -140,6 +183,7 @@ export function useFilteredData(
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
       if (filters.obra !== "all" && row.obra !== filters.obra) return false;
+      if (filters.equipment !== "all" && equipmentKey(row) !== filters.equipment) return false;
       if (filters.analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
     });
@@ -150,6 +194,13 @@ export function useFilteredData(
       if (filters.dateFrom && row.date < filters.dateFrom) return false;
       if (filters.dateTo && row.date > filters.dateTo) return false;
       if (filters.obra !== "all" && row.obra && row.obra !== filters.obra) return false;
+      if (
+        filters.equipment !== "all" &&
+        row.fleet !== filters.equipment &&
+        row.fleetLabel !== filters.equipment
+      ) {
+        return false;
+      }
       return true;
     });
   }, [dailyParts, filters]);
@@ -240,6 +291,10 @@ export function usePagination(total: number, pageSize = 12) {
   const nextPage = useCallback(() => goToPage(page + 1), [goToPage, page]);
   const prevPage = useCallback(() => goToPage(page - 1), [goToPage, page]);
 
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount - 1));
+  }, [pageCount]);
+
   return {
     page,
     pageCount,
@@ -254,13 +309,13 @@ export function usePagination(total: number, pageSize = 12) {
 /**
  * Hook para gerenciar busca/search
  */
-export function useSearch(items: any[], searchFn: (item: any, query: string) => boolean) {
+export function useSearch<T>(items: T[], searchFn: (item: T, query: string) => boolean) {
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
     if (!query) return items;
     return items.filter((item) => searchFn(item, query.toLowerCase()));
-  }, [items, query]);
+  }, [items, query, searchFn]);
 
   const clear = useCallback(() => setQuery(""), []);
 

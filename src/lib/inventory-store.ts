@@ -362,7 +362,7 @@ export function useInventoryStore<T>(selector: InventorySelector<T>): T {
 export function useInventoryActions() {
   const queryClient = useQueryClient();
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: QK });
+    void queryClient.refetchQueries({ queryKey: QK, type: "active" });
   };
 
   const itemMutation = useMutation({

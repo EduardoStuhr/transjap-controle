@@ -34,7 +34,7 @@ import {
 } from "@/lib/task-visibility";
 import { useEquipmentStore } from "@/lib/equipment-store";
 import { downloadAttachment, exportTaskAsCsv, exportTaskAsPdf } from "@/lib/task-export";
-import { formatBrDate } from "@/lib/utils";
+import { formatBrDate, formatBrDateTime } from "@/lib/utils";
 
 interface TaskDetailsModalProps {
   open: boolean;
@@ -85,7 +85,7 @@ export function TaskDetailsModal({
 }: TaskDetailsModalProps) {
   const user = useAuthStore((snapshot) => snapshot.user);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
-  const [commentAuthor, setCommentAuthor] = useState("");
+  const commentAuthor = user?.name || "";
   const [newComment, setNewComment] = useState("");
   const [responseText, setResponseText] = useState("");
   const [responseAttachments, setResponseAttachments] = useState<AttachedFile[]>([]);
@@ -485,7 +485,7 @@ export function TaskDetailsModal({
                         <div>
                           <p className="font-bold text-sm text-on-surface">{response.author}</p>
                           <p className="text-[10px] text-on-surface-variant">
-                            {response.timestamp}
+                            {formatBrDateTime(response.timestamp)}
                           </p>
                         </div>
                       </div>
@@ -590,7 +590,7 @@ export function TaskDetailsModal({
                       </div>
                       <div className="flex-1 pt-2">
                         <p className="text-xs text-on-surface-variant font-bold uppercase tracking-widest">
-                          {event.timestamp}
+                          {formatBrDateTime(event.timestamp)}
                         </p>
                         <p className="font-bold text-on-surface">{event.action}</p>
                         <p className="text-sm text-on-surface-variant">por {event.actor}</p>
@@ -634,7 +634,9 @@ export function TaskDetailsModal({
                         </div>
                         <div>
                           <p className="font-bold text-sm text-on-surface">{comment.author}</p>
-                          <p className="text-[10px] text-on-surface-variant">{comment.timestamp}</p>
+                          <p className="text-[10px] text-on-surface-variant">
+                            {formatBrDateTime(comment.timestamp)}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -660,8 +662,7 @@ export function TaskDetailsModal({
                 </label>
                 <input
                   value={commentAuthor}
-                  onChange={(e) => setCommentAuthor(e.target.value)}
-                  placeholder="Seu nome ou equipe"
+                  readOnly
                   className="w-full px-4 py-2 bg-surface-highest border border-border-low rounded-lg text-on-surface placeholder:text-on-surface-variant/50 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial font-medium"
                 />
               </div>

@@ -1,5 +1,5 @@
 import { getOptionalD1, getOptionalEnvString } from "@/lib/cf-env";
-import { resolveResponsibleIds } from "@/lib/auth-users";
+import { findUserByName, resolveResponsibleIds } from "@/lib/auth-users";
 import type { AuthUser } from "@/lib/auth-users";
 import type { TaskRecord } from "@/lib/task-types";
 
@@ -386,6 +386,48 @@ export async function sendNewTaskPushNotifications(task: TaskRecord) {
     url: `${APP_ORIGIN}/agenda`,
     taskId: task.id,
     tag: `task-${task.id}`,
+  };
+
+  await Promise.all(
+    subscriptions.map(async (subscription) => {
+      try {
+        const response = await sendPushNotification(subscription, payload, config);
+        if (response.status === 404 || response.status === 410) {
+          await removeExpiredSubscription(subscription);
+        } else if (!response.ok) {
+          console.warn(`[push] Falha ao notificar subscription: HTTP ${response.status}`);
+        }
+      } catch (error) {
+        console.warn("[push] Não foi possível enviar notificação.", error);
+      }
+    }),
+  );
+}
+
+export async function sendTaskActivityPushNotifications(
+  task: TaskRecord,
+  actor: AuthUser,
+  action: "respondeu" | "comentou",
+) {
+  const config = pushConfiguration();
+  if (!config) return;
+
+  const creatorId = task.createdById || findUserByName(task.createdBy)?.id || "";
+  const participantIds = new Set([
+    creatorId,
+    ...task.responsibleIds,
+    ...resolveResponsibleIds(task.assignedTo),
+  ]);
+  participantIds.delete("");
+  participantIds.delete(actor.id);
+
+  const subscriptions = await listSubscriptionsForUsers(Array.from(participantIds));
+  const payload = {
+    title: `${actor.name} ${action}`,
+    body: task.title,
+    url: `${APP_ORIGIN}/agenda`,
+    taskId: task.id,
+    tag: `task-activity-${task.id}`,
   };
 
   await Promise.all(

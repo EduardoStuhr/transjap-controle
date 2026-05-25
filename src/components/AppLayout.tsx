@@ -16,13 +16,14 @@ import { getInventoryAlerts, useInventoryStore } from "@/lib/inventory-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
 import { isTaskCompletedStatus } from "@/lib/task-types";
+import { hasUnread } from "@/lib/task-unread";
 import { filterNotifiableTasks, filterVisibleTasks } from "@/lib/task-visibility";
 import { sortTasksStable } from "@/lib/task-sort";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
 
 const NAV = [
   { to: "/", label: "Painel", icon: "dashboard" },
-  { to: "/agenda", label: "Agenda Operacional", icon: "calendar_today" },
+  { to: "/agenda", label: "Tarefa Operacional", icon: "calendar_today" },
   { to: "/calendario", label: "Calendário", icon: "calendar_today" },
   { to: "/manutencao", label: "Manutenção", icon: "build" },
   { to: "/equipamentos", label: "Equipamentos", icon: "construction" },
@@ -123,6 +124,10 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
             getUrgencyLevel(task.deadline).isOverdue,
         ),
       ),
+    [tasks, user],
+  );
+  const unreadTaskCount = useMemo(
+    () => filterVisibleTasks(tasks, user).filter((task) => hasUnread(task, user?.name)).length,
     [tasks, user],
   );
   const activeAlertKeys = useMemo(
@@ -278,6 +283,20 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           </div>
 
           <div className="flex items-center gap-3">
+            {unreadTaskCount > 0 && (
+              <button
+                type="button"
+                onClick={() => navigate({ to: "/agenda" })}
+                aria-label={`${unreadTaskCount} ${unreadTaskCount === 1 ? "novidade" : "novidades"} em tarefas`}
+                className="px-2 sm:px-3 py-1.5 rounded text-xs font-black uppercase tracking-wider bg-status-info/15 text-status-info border border-status-info/30 flex items-center gap-1.5"
+              >
+                <Icon name="notifications_active" className="text-sm" />
+                {unreadTaskCount}
+                <span className="hidden lg:inline">
+                  {unreadTaskCount === 1 ? "novidade" : "novidades"}
+                </span>
+              </button>
+            )}
             <div
               className="relative"
               onBlur={(e) => {
