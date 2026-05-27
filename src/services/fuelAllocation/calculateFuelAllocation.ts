@@ -197,23 +197,29 @@ export function calculateFuelAllocation(
     }
   }
 
-  for (const pde of findFallbackPDEs(fuel, pdes)) {
-    let availableHours = Math.max(0, (pde.workedHours ?? 0) - (fallbackHoursUsed.get(pde.id) ?? 0));
-    let allocatedFallbackHours = 0;
-    while (availableHours > HOURS_EPSILON && openSlices.length > 0) {
-      const slice = openSlices[openSlices.length - 1];
-      const allocatedHours = Math.min(availableHours, slice.end - slice.start);
-      if (allocatedHours <= HOURS_EPSILON) break;
-      const end = slice.end;
-      const start = end - allocatedHours;
-      allocations.push(allocateResult(fuel, pde, start, end, litersPerHour, costPerHour));
-      openSlices = removeSlice(openSlices, start, end);
-      fallbackHoursUsed.set(pde.id, (fallbackHoursUsed.get(pde.id) ?? 0) + allocatedHours);
-      allocatedFallbackHours += allocatedHours;
-      availableHours -= allocatedHours;
-    }
-    if (allocatedFallbackHours > HOURS_EPSILON) {
-      audits.push(pdeUsingWorkedHoursFallbackAudit(fuel, pde, allocatedFallbackHours));
+  const hasHourmeterAllocations = allocations.length > 0;
+  if (!hasHourmeterAllocations) {
+    for (const pde of findFallbackPDEs(fuel, pdes)) {
+      let availableHours = Math.max(
+        0,
+        (pde.workedHours ?? 0) - (fallbackHoursUsed.get(pde.id) ?? 0),
+      );
+      let allocatedFallbackHours = 0;
+      while (availableHours > HOURS_EPSILON && openSlices.length > 0) {
+        const slice = openSlices[0];
+        const allocatedHours = Math.min(availableHours, slice.end - slice.start);
+        if (allocatedHours <= HOURS_EPSILON) break;
+        const start = slice.start;
+        const end = start + allocatedHours;
+        allocations.push(allocateResult(fuel, pde, start, end, litersPerHour, costPerHour));
+        openSlices = removeSlice(openSlices, start, end);
+        fallbackHoursUsed.set(pde.id, (fallbackHoursUsed.get(pde.id) ?? 0) + allocatedHours);
+        allocatedFallbackHours += allocatedHours;
+        availableHours -= allocatedHours;
+      }
+      if (allocatedFallbackHours > HOURS_EPSILON) {
+        audits.push(pdeUsingWorkedHoursFallbackAudit(fuel, pde, allocatedFallbackHours));
+      }
     }
   }
 

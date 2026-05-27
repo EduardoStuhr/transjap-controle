@@ -7,6 +7,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DbProductionAnalysis, DbTrip, DbFueling, DbEquipmentDailyPart } from "@/db/schema";
 import type { DashboardFilterState } from "@/lib/production-consumption-types";
 import { obraMatches } from "@/lib/production-consumption-utils";
+import {
+  equipmentMatches,
+  isAggregateEquipment,
+  normalizeEquipmentKey,
+  type EquipmentContext,
+} from "@/lib/equipment-normalization";
 
 const DEFAULT_FILTERS: DashboardFilterState = {
   dateFrom: "",
@@ -152,6 +158,27 @@ export function useFilteredData(
   const dateKey = (value: string) => (value ? value.slice(0, 10) : "");
   const equipmentKey = (row: { prefix?: string; vehicleId?: string; plate?: string }) =>
     row.prefix || row.vehicleId || row.plate || "";
+  const tripAggregateKeys = new Set(
+    trips
+      .map((row) => normalizeEquipmentKey(equipmentKey(row), "trip"))
+      .filter((key) => isAggregateEquipment(key)),
+  );
+  const fuelingContext = (
+    row: Pick<
+      DbFueling,
+      "analysisId" | "vehicleType" | "owner" | "operator" | "prefix" | "vehicleId" | "plate"
+    >,
+  ): EquipmentContext => {
+    if (row.analysisId === "allocated") return "fuelAllocation";
+    if (row.analysisId === "attributed") return "fuelAttribution";
+    if (tripAggregateKeys.has(normalizeEquipmentKey(equipmentKey(row), "aggregate"))) {
+      return "aggregate";
+    }
+    return {
+      source: "fueling",
+      description: [row.vehicleType, row.owner, row.operator].filter(Boolean).join(" "),
+    };
+  };
 
   const filteredTrips = useMemo(() => {
     return trips.filter((row) => {
@@ -159,7 +186,12 @@ export function useFilteredData(
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
       if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
       if (filters.material !== "all" && row.material !== filters.material) return false;
-      if (filters.aggregate !== "all" && equipmentKey(row) !== filters.aggregate) return false;
+      if (
+        filters.aggregate !== "all" &&
+        !equipmentMatches(equipmentKey(row), filters.aggregate, "trip")
+      ) {
+        return false;
+      }
       if (filters.analysisType === "production-only" && row.cubicMLoose <= 0) return false;
       return true;
     });
@@ -170,11 +202,16 @@ export function useFilteredData(
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
       if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
-      if (filters.equipment !== "all" && equipmentKey(row) !== filters.equipment) return false;
+      if (
+        filters.equipment !== "all" &&
+        !equipmentMatches(equipmentKey(row), filters.equipment, fuelingContext(row))
+      ) {
+        return false;
+      }
       if (filters.analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
     });
-  }, [fueling, filters]);
+  }, [fueling, filters, trips]);
 
   const filteredDailyParts = useMemo(() => {
     return dailyParts.filter((row) => {
@@ -183,8 +220,8 @@ export function useFilteredData(
       if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
       if (
         filters.equipment !== "all" &&
-        row.fleet !== filters.equipment &&
-        row.fleetLabel !== filters.equipment
+        !equipmentMatches(row.fleet, filters.equipment, "dailyPart") &&
+        !equipmentMatches(row.fleetLabel, filters.equipment, "dailyPart")
       ) {
         return false;
       }

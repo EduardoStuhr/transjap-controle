@@ -53,9 +53,9 @@ export function findFallbackPDEs(fuel: FuelEntry, pdes: PDEEntry[]) {
         !hasPdeHourmeterInterval(pde) &&
         finite(pde.workedHours) &&
         pde.workedHours > 0 &&
-        pde.date <= fuel.date,
+        pde.date < fuel.date,
     )
-    .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
 }
 
 export function findPDEsWithoutAllocationData(fuel: FuelEntry, pdes: PDEEntry[]) {

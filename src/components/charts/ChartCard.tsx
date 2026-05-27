@@ -10,6 +10,7 @@ type Props = {
   height?: number; // override size if provided
   hasData?: boolean;
   emptyMessage?: string;
+  footer?: ReactNode;
   children?: ReactNode;
 };
 
@@ -28,6 +29,7 @@ export function ChartCard({
   height,
   hasData = true,
   emptyMessage = "Sem dados suficientes para este gráfico.",
+  footer,
   children,
 }: Props) {
   const badgeClass =
@@ -64,6 +66,7 @@ export function ChartCard({
           </div>
         )}
       </div>
+      {footer && hasData && <div className="mt-3">{footer}</div>}
     </div>
   );
 }

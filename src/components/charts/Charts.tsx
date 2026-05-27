@@ -505,7 +505,7 @@ export function ChartLineLpm3({
         <Tooltip
           content={
             <RichTooltip
-              units={{ lPorM3: "L/m³" }}
+              units={{ lPorM3: "m³/L" }}
               format={{ lPorM3: (value: number) => fmt.dec(value, 3) }}
             />
           }
@@ -513,7 +513,7 @@ export function ChartLineLpm3({
         <Area
           type="monotone"
           dataKey="lPorM3"
-          name="L/m³"
+          name="m³/L"
           stroke={color}
           strokeWidth={2}
           fill="url(#g-lpm3-item)"
@@ -638,18 +638,24 @@ export function ChartHistogram({
   color?: string;
   refIndex?: number;
 }) {
+  const visibleData = data.filter((row) => Number(row.count ?? 0) > 0);
+
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ top: 14, right: 14, left: 0, bottom: 4 }}>
+      <BarChart data={visibleData} margin={{ top: 14, right: 14, left: 0, bottom: 4 }}>
         <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
         <XAxis dataKey="range" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
         <YAxis tick={TICK} axisLine={false} tickLine={false} width={42} />
         <Tooltip content={<RichTooltip units={{ count: "itens" }} />} />
         {typeof refIndex === "number" && refIndex >= 0 && (
-          <ReferenceLine x={data[refIndex]?.range as string} stroke={C.warn} strokeDasharray="4 4" />
+          <ReferenceLine
+            x={visibleData[refIndex]?.range as string}
+            stroke={C.warn}
+            strokeDasharray="4 4"
+          />
         )}
         <Bar dataKey="count" name="Quantidade" radius={[3, 3, 0, 0]} barSize={28}>
-          {data.map((_, index) => (
+          {visibleData.map((_, index) => (
             <Cell key={index} fill={index === refIndex ? C.warn : color} />
           ))}
         </Bar>
@@ -667,22 +673,114 @@ export type StackedBarSeries = {
 export function ChartStackedBars({
   data,
   series,
+  showTotalOnTop = true,
+  showWeeklyAverage = true,
 }: {
   data: Array<Record<string, unknown>>;
   series: StackedBarSeries[];
+  showTotalOnTop?: boolean;
+  showWeeklyAverage?: boolean;
 }) {
-  const units = Object.fromEntries(series.map((item) => [item.dataKey, "L"])) as Record<
-    string,
-    string
-  >;
+  const enhanced = data.map((row) => {
+    const total = series.reduce((sum, item) => sum + Number(row[item.dataKey] ?? 0), 0);
+    return { ...row, _total: total };
+  });
+  const avgTotal =
+    enhanced.reduce((sum, row) => sum + Number(row._total ?? 0), 0) / Math.max(1, enhanced.length);
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ top: 14, right: 18, left: 0, bottom: 4 }}>
+      <ComposedChart data={enhanced} margin={{ top: 24, right: 18, left: 0, bottom: 4 }}>
         <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
-        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <XAxis
+          dataKey="d"
+          tick={(props: { x?: number | string; y?: number | string; payload?: { value?: unknown } }) => {
+            const x = Number(props.x ?? 0);
+            const y = Number(props.y ?? 0);
+            const label = String(props.payload?.value ?? "");
+            const isWeekend = /sab|dom/i.test(label.normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+            return (
+              <text
+                x={x}
+                y={y + 12}
+                textAnchor="middle"
+                fontSize={10}
+                fill={isWeekend ? "var(--fg-4)" : "var(--fg-3)"}
+                style={{ fontFamily: MONO }}
+              >
+                {label}
+              </text>
+            );
+          }}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+        />
         <YAxis tick={TICK} axisLine={false} tickLine={false} width={44} />
-        <Tooltip content={<RichTooltip units={units} />} />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const total = payload.reduce((sum, item) => sum + Number(item.value ?? 0), 0);
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: 10,
+                  fontSize: 11,
+                  minWidth: 210,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+                  {label}{" "}
+                  <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>
+                    - Total: {fmt.dec(total, 1)} L
+                  </span>
+                </div>
+                {payload
+                  .filter((item) => Number(item.value ?? 0) > 0)
+                  .map((item) => {
+                    const value = Number(item.value ?? 0);
+                    const pct = total > 0 ? (value / total) * 100 : 0;
+                    return (
+                      <div
+                        key={`${item.name}-${item.dataKey}`}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 12,
+                          padding: "2px 0",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            color: "var(--fg-2)",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 8,
+                              height: 8,
+                              background: item.color,
+                              borderRadius: 2,
+                            }}
+                          />
+                          {item.name}
+                        </span>
+                        <span style={{ fontFamily: MONO, color: "var(--fg)" }}>
+                          {fmt.dec(value, 1)} L{" "}
+                          <span style={{ color: "var(--fg-3)" }}>({pct.toFixed(0)}%)</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            );
+          }}
+        />
         <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
         {series.map((item) => (
           <Bar
@@ -692,10 +790,32 @@ export function ChartStackedBars({
             stackId="diesel"
             fill={item.color}
             radius={[2, 2, 0, 0]}
-            barSize={18}
-          />
+            barSize={22}
+          >
+            {showTotalOnTop && item === series[series.length - 1] && (
+              <LabelList
+                dataKey="_total"
+                position="top"
+                formatter={(value) => (Number(value) > 0 ? fmt.dec(Number(value), 0) : "")}
+                style={{ fontSize: 10, fill: "var(--fg-2)", fontWeight: 600 }}
+              />
+            )}
+          </Bar>
         ))}
-      </BarChart>
+        {showWeeklyAverage && avgTotal > 0 && (
+          <ReferenceLine
+            y={avgTotal}
+            stroke="var(--accent)"
+            strokeDasharray="3 5"
+            label={{
+              value: `Media: ${fmt.dec(avgTotal, 0)} L`,
+              position: "right",
+              fill: "var(--accent)",
+              fontSize: 10,
+            }}
+          />
+        )}
+      </ComposedChart>
     </ResponsiveContainer>
   );
 }
@@ -709,16 +829,21 @@ export type BubblePoint = {
   tipo?: string;
 };
 
-export function ChartBubble({ data }: { data: BubblePoint[] }) {
+export function ChartBubble({ data, avgLpm3 }: { data: BubblePoint[]; avgLpm3?: number }) {
   const colored = data.map((point) => {
-    const lpm3 = point.lpm3 ?? (point.m3 > 0 ? point.diesel / point.m3 : 0);
-    const color = lpm3 > 0 && lpm3 < 0.06 ? C.ok : lpm3 < 0.12 ? C.warn : C.danger;
+    const lpm3 = point.lpm3 ?? (point.diesel > 0 ? point.m3 / point.diesel : 0);
+    const color = lpm3 >= 16.7 ? C.ok : lpm3 >= 8.3 ? C.warn : C.danger;
     return { ...point, lpm3, color };
   });
+  const validLpm3 = colored.filter((point) => point.lpm3 > 0);
+  const avg =
+    avgLpm3 ??
+    validLpm3.reduce((sum, point) => sum + point.lpm3, 0) / Math.max(1, validLpm3.length);
+  const maxDiesel = Math.max(...colored.map((point) => point.diesel), 1);
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <ScatterChart margin={{ top: 16, right: 28, left: 8, bottom: 28 }}>
+      <ScatterChart margin={{ top: 28, right: 40, left: 8, bottom: 40 }}>
         <CartesianGrid stroke={C.grid} strokeDasharray="2 4" />
         <XAxis
           type="number"
@@ -728,6 +853,12 @@ export function ChartBubble({ data }: { data: BubblePoint[] }) {
           tick={TICK}
           axisLine={{ stroke: C.grid }}
           tickLine={false}
+          label={{
+            value: "Diesel (L)",
+            position: "bottom",
+            offset: 18,
+            style: { fontSize: 10, fill: "var(--fg-3)" },
+          }}
         />
         <YAxis
           type="number"
@@ -738,8 +869,52 @@ export function ChartBubble({ data }: { data: BubblePoint[] }) {
           axisLine={false}
           tickLine={false}
           tickFormatter={(value: number) => fmt.k(value)}
+          label={{
+            value: "m3",
+            angle: -90,
+            position: "insideLeft",
+            style: { fontSize: 10, fill: "var(--fg-3)" },
+          }}
         />
-        <ZAxis type="number" dataKey="horas" range={[70, 420]} />
+        <ZAxis type="number" dataKey="horas" range={[140, 600]} />
+        {avg > 0 && (
+          <ReferenceLine
+            segment={[
+              { x: 0, y: 0 },
+              { x: maxDiesel, y: maxDiesel * avg },
+            ]}
+            stroke="var(--fg-3)"
+            strokeDasharray="4 4"
+            label={{
+              value: `Media: ${fmt.dec(avg, 3)} m3/L`,
+              position: "insideTopRight",
+              fill: "var(--fg-3)",
+              fontSize: 10,
+            }}
+          />
+        )}
+        <text
+          x="98%"
+          y="22"
+          textAnchor="end"
+          fontSize={9}
+          fill="var(--ok)"
+          fontWeight={700}
+          letterSpacing="0.1em"
+        >
+          MAIS EFICIENTE
+        </text>
+        <text
+          x="98%"
+          y="96%"
+          textAnchor="end"
+          fontSize={9}
+          fill="var(--danger)"
+          fontWeight={700}
+          letterSpacing="0.1em"
+        >
+          MENOS EFICIENTE
+        </text>
         <Tooltip
           cursor={{ strokeDasharray: "3 3" }}
           content={({ active, payload }) => {
@@ -766,8 +941,8 @@ export function ChartBubble({ data }: { data: BubblePoint[] }) {
                 <AggregateRankingRow k="m³" v={`${fmt.dec(point.m3, 1)} m³`} />
                 <AggregateRankingRow k="Horas" v={`${fmt.dec(point.horas, 1)} h`} />
                 <AggregateRankingRow
-                  k="L/m³"
-                  v={point.lpm3 ? `${fmt.dec(point.lpm3, 3)} L/m³` : "sem producao"}
+                  k="m³/L"
+                  v={point.lpm3 ? `${fmt.dec(point.lpm3, 3)} m³/L` : "sem diesel"}
                 />
               </div>
             );
@@ -775,8 +950,20 @@ export function ChartBubble({ data }: { data: BubblePoint[] }) {
         />
         <Scatter data={colored} name="Equipamentos">
           {colored.map((point) => (
-            <Cell key={point.name} fill={point.color} fillOpacity={0.75} />
+            <Cell
+              key={point.name}
+              fill={point.color}
+              fillOpacity={0.85}
+              stroke="var(--bg-0)"
+              strokeWidth={1.5}
+            />
           ))}
+          <LabelList
+            dataKey="name"
+            position="top"
+            offset={8}
+            style={{ fontSize: 10, fill: "var(--fg)", fontWeight: 600 }}
+          />
         </Scatter>
       </ScatterChart>
     </ResponsiveContainer>
@@ -814,6 +1001,219 @@ export function ChartProductivity({
           activeDot={{ r: 3, strokeWidth: 0 }}
         />
       </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+export type EquipmentEfficiencyRankingPoint = {
+  id: string;
+  equipamento?: string;
+  litros?: number;
+  horas?: number;
+  lph?: number;
+  lpm3?: number;
+  m3?: number;
+};
+
+function lphTag(lph: number) {
+  if (lph <= 7.5) return { label: "Eficiente", color: C.ok };
+  if (lph <= 15) return { label: "Medio", color: C.warn };
+  return { label: "Alto consumo", color: C.danger };
+}
+
+function productivityColor(index: number, total: number) {
+  if (total <= 1) return C.ok;
+  const ratio = index / Math.max(1, total - 1);
+  if (ratio < 0.34) return C.ok;
+  if (ratio < 0.67) return C.warn;
+  return C.danger;
+}
+
+export function ChartLphRanking({
+  data,
+  topN = 10,
+}: {
+  data: EquipmentEfficiencyRankingPoint[];
+  topN?: number;
+}) {
+  const rows = data
+    .filter((row) => Number.isFinite(row.lph) && Number(row.lph) > 0)
+    .sort((a, b) => Number(b.lph ?? 0) - Number(a.lph ?? 0))
+    .slice(0, topN);
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart
+        data={rows}
+        layout="vertical"
+        margin={{ top: 12, right: 72, left: 14, bottom: 8 }}
+        barCategoryGap={8}
+      >
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+          label={{
+            value: "L/h",
+            position: "insideBottomRight",
+            offset: -4,
+            fill: C.fg3,
+            fontSize: 10,
+          }}
+        />
+        <YAxis
+          type="category"
+          dataKey="id"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={118}
+        />
+        <ReferenceLine
+          x={7.5}
+          stroke={C.ok}
+          strokeDasharray="3 4"
+          label={{ value: "7,5", position: "top", fill: C.ok, fontSize: 10 }}
+        />
+        <ReferenceLine
+          x={15}
+          stroke={C.warn}
+          strokeDasharray="3 4"
+          label={{ value: "15", position: "top", fill: C.warn, fontSize: 10 }}
+        />
+        <Tooltip
+          cursor={{ fill: "rgba(255,255,255,0.03)" }}
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const row = payload[0].payload as EquipmentEfficiencyRankingPoint;
+            const lph = Number(row.lph ?? 0);
+            const tag = lphTag(lph);
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: 10,
+                  fontSize: 11,
+                  minWidth: 180,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+                  {row.id}
+                </div>
+                <AggregateRankingRow k="Litros" v={`${fmt.dec(Number(row.litros ?? 0), 1)} L`} />
+                <AggregateRankingRow k="Horas" v={`${fmt.dec(Number(row.horas ?? 0), 1)} h`} />
+                <AggregateRankingRow k="L/h" v={`${fmt.dec(lph, 2)} L/h`} />
+                <AggregateRankingRow k="Classificacao" v={tag.label} />
+              </div>
+            );
+          }}
+        />
+        <Bar dataKey="lph" name="L/h" radius={[0, 4, 4, 0]} barSize={18}>
+          {rows.map((row) => (
+            <Cell key={row.id} fill={lphTag(Number(row.lph ?? 0)).color} />
+          ))}
+          <LabelList
+            dataKey="lph"
+            position="right"
+            formatter={(value) => `${fmt.dec(Number(value ?? 0), 2)} L/h`}
+            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO, fontWeight: 700 }}
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartM3PerLiterRanking({
+  data,
+  topN = 10,
+}: {
+  data: EquipmentEfficiencyRankingPoint[];
+  topN?: number;
+}) {
+  const rows = data
+    .filter((row) => Number.isFinite(row.lpm3) && Number(row.lpm3) > 0)
+    .sort((a, b) => Number(b.lpm3 ?? 0) - Number(a.lpm3 ?? 0))
+    .slice(0, topN);
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart
+        data={rows}
+        layout="vertical"
+        margin={{ top: 12, right: 82, left: 14, bottom: 8 }}
+        barCategoryGap={8}
+      >
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+          label={{
+            value: "m3/L",
+            position: "insideBottomRight",
+            offset: -4,
+            fill: C.fg3,
+            fontSize: 10,
+          }}
+        />
+        <YAxis
+          type="category"
+          dataKey="id"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={118}
+        />
+        <Tooltip
+          cursor={{ fill: "rgba(255,255,255,0.03)" }}
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const row = payload[0].payload as EquipmentEfficiencyRankingPoint;
+            const m3PerLiter = Number(row.lpm3 ?? 0);
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: 10,
+                  fontSize: 11,
+                  minWidth: 210,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+                  {row.id}
+                </div>
+                <AggregateRankingRow k="m3 produzido" v={`${fmt.dec(Number(row.m3 ?? 0), 1)} m3`} />
+                <AggregateRankingRow k="Diesel" v={`${fmt.dec(Number(row.litros ?? 0), 1)} L`} />
+                <AggregateRankingRow k="Horas" v={`${fmt.dec(Number(row.horas ?? 0), 1)} h`} />
+                <AggregateRankingRow k="L/h" v={`${fmt.dec(Number(row.lph ?? 0), 2)} L/h`} />
+                <AggregateRankingRow k="m3/L" v={`${fmt.dec(m3PerLiter, 3)} m3/L`} />
+                <div style={{ marginTop: 6, color: C.fg3 }}>
+                  produz {fmt.dec(m3PerLiter, 2)} m3 com 1 litro
+                </div>
+              </div>
+            );
+          }}
+        />
+        <Bar dataKey="lpm3" name="m3/L" radius={[0, 4, 4, 0]} barSize={18}>
+          {rows.map((row, index) => (
+            <Cell key={row.id} fill={productivityColor(index, rows.length)} />
+          ))}
+          <LabelList
+            dataKey="lpm3"
+            position="right"
+            formatter={(value) => `${fmt.dec(Number(value ?? 0), 3)} m3/L`}
+            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO, fontWeight: 700 }}
+          />
+        </Bar>
+      </BarChart>
     </ResponsiveContainer>
   );
 }
@@ -1373,3 +1773,4 @@ export function ChartDonut({
 }
 
 export { fmt };
+

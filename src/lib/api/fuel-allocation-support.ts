@@ -9,6 +9,7 @@ import {
 } from "@/db/schema";
 import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeFleet } from "@/lib/carcara-parser";
+import { normalizeEquipmentKey } from "@/lib/equipment-normalization";
 import { calculateFuelAllocation } from "@/services/fuelAllocation/calculateFuelAllocation";
 import type {
   FuelAllocationAuditResult,
@@ -64,12 +65,21 @@ export type FuelAllocationAuditRow = {
 
 const WRITE_BATCH_SIZE = 100;
 
-function sourceFleet(row: Pick<DbFueling, "prefix" | "vehicleId" | "plate">) {
-  return normalizeFleet(row.prefix || row.vehicleId || row.plate);
+function sourceFleet(
+  row: Pick<DbFueling, "prefix" | "vehicleId" | "plate" | "vehicleType" | "owner">,
+) {
+  return normalizeEquipmentKey(row.prefix || row.vehicleId || row.plate, {
+    source: "fueling",
+    description: [row.vehicleType, row.owner].filter(Boolean).join(" "),
+  });
 }
 
 function pdeFleet(row: Pick<DbEquipmentDailyPart, "fleet">) {
-  return normalizeFleet(row.fleet);
+  return normalizeEquipmentKey(row.fleet, "dailyPart");
+}
+
+function filterFleet(value: string) {
+  return normalizeEquipmentKey(value, "fuelAllocation") || normalizeFleet(value);
 }
 
 async function supportSchemaAvailable(d1: D1Database) {
@@ -112,7 +122,7 @@ async function deleteCachedResults(
   const analysisIds = scope.analysisIds?.filter(Boolean) ?? [];
   if (analysisIds.length > 0 && !scope.sourceFuelingId && !scope.dateFrom && !scope.dateTo) {
     const analysisFilter = analysisSourceWhere(analysisIds);
-    const fleet = scope.fleet ? normalizeFleet(scope.fleet) : "";
+    const fleet = scope.fleet ? filterFleet(scope.fleet) : "";
     const fleetSql = fleet ? " AND fleet = ?" : "";
     const params = fleet ? [...analysisFilter.params, fleet] : analysisFilter.params;
     await runBatch(d1, [
@@ -211,7 +221,7 @@ async function loadSourceData(d1: D1Database, scope: AllocationSupportScope) {
         .all()
     : await db.select().from(equipmentDailyParts).all();
   const historicalFuelRows = analysisIds.length ? await db.select().from(fueling).all() : fuelRows;
-  const selectedFleet = scope.fleet ? normalizeFleet(scope.fleet) : "";
+  const selectedFleet = scope.fleet ? filterFleet(scope.fleet) : "";
   const selectedSourceFuelingId = scope.sourceFuelingId?.trim() ?? "";
   const inFuelingDateRange = (row: DbFueling) => {
     const date = row.datetime.slice(0, 10);
@@ -259,6 +269,51 @@ function findPriorFuel(fuel: FuelEntry, historicalFuels: FuelEntry[], selectedId
     )
     .sort((a, b) => a.date.localeCompare(b.date) || a.currentHourmeter - b.currentHourmeter)
     .at(-1);
+}
+
+function median(values: number[]) {
+  const sorted = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+  if (sorted.length === 0) return 0;
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function inferPdeHourmeterScale(fuels: FuelEntry[], pdes: PDEEntry[]) {
+  const fuelMeters = fuels.flatMap((fuel) =>
+    [fuel.previousHourmeter, fuel.currentHourmeter].filter(
+      (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+    ),
+  );
+  const pdeMeters = pdes.flatMap((pde) =>
+    [pde.startHourmeter, pde.endHourmeter].filter(
+      (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+    ),
+  );
+  if (fuelMeters.length === 0 || pdeMeters.length === 0) return 1;
+
+  const fuelMedian = median(fuelMeters);
+  const pdeMedian = median(pdeMeters);
+  if (fuelMedian <= 0 || pdeMedian <= 0) return 1;
+
+  const ratio = fuelMedian / pdeMedian;
+  if (ratio < 8 || ratio > 12) return 1;
+
+  const scaledMin = Math.min(...pdeMeters) * 10;
+  const scaledMax = Math.max(...pdeMeters) * 10;
+  const fuelMin = Math.min(...fuelMeters);
+  const fuelMax = Math.max(...fuelMeters);
+  const overlapsFuelRange = scaledMax >= fuelMin && scaledMin <= fuelMax;
+  return overlapsFuelRange ? 10 : 1;
+}
+
+function normalizePdeHourmeterScale(fuels: FuelEntry[], pdes: PDEEntry[]) {
+  const scale = inferPdeHourmeterScale(fuels, pdes);
+  if (scale === 1) return pdes;
+  return pdes.map((pde) => ({
+    ...pde,
+    startHourmeter:
+      typeof pde.startHourmeter === "number" ? pde.startHourmeter * scale : pde.startHourmeter,
+    endHourmeter: typeof pde.endHourmeter === "number" ? pde.endHourmeter * scale : pde.endHourmeter,
+  }));
 }
 
 function calculateFromExistingData(
@@ -311,10 +366,11 @@ function calculateFromExistingData(
     const orderedFuel = [...group.fuels].sort(
       (a, b) => a.date.localeCompare(b.date) || a.currentHourmeter - b.currentHourmeter,
     );
+    const pdes = normalizePdeHourmeterScale(orderedFuel, group.pdes);
     let previousFuel: FuelEntry | undefined;
     for (const fuel of orderedFuel) {
       previousFuel ??= findPriorFuel(fuel, historicalFuels, selectedIds);
-      const calculated = calculateFuelAllocation(fuel, group.pdes, previousFuel, allocationState);
+      const calculated = calculateFuelAllocation(fuel, pdes, previousFuel, allocationState);
       allocations.push(...calculated.allocations);
       audits.push(...calculated.audits);
       previousFuel = fuel;
@@ -341,7 +397,7 @@ function buildFilterQuery(
   }
   if (filters.fleet) {
     where.push("fleet = ?");
-    params.push(normalizeFleet(filters.fleet));
+    params.push(filterFleet(filters.fleet));
   }
   if (filters.sourceFuelingId) {
     where.push("source_fueling_id = ?");

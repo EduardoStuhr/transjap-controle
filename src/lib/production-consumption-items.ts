@@ -1,5 +1,11 @@
 import { FLEET_EQUIPMENT_CATALOG } from "@/lib/fleet-equipment-catalog";
 import { normalizeFleet } from "@/lib/carcara-parser";
+import {
+  displayEquipmentLabel,
+  isAggregateEquipment,
+  normalizeEquipmentKey,
+  type EquipmentContext,
+} from "@/lib/equipment-normalization";
 
 export type OperationalItem =
   | "escavacao"
@@ -32,6 +38,13 @@ export type OperationalItemInput = {
   description?: string | null;
 };
 
+export type EquipmentOperationalClass = {
+  key: string;
+  label: string;
+  item: OperationalItem;
+  isAggregate: boolean;
+};
+
 const catalogByFleet = new Map(
   FLEET_EQUIPMENT_CATALOG.map((item) => [normalizeFleet(item.id), item.model]),
 );
@@ -46,16 +59,37 @@ function normalizeText(value: string | null | undefined) {
 }
 
 function joinedSearchText(input: OperationalItemInput) {
-  const fleet = normalizeFleet(input.fleet || input.equipment || "");
+  const value = input.fleet || input.equipment || "";
+  const context: EquipmentContext = {
+    description: [input.type, input.model, input.description].filter(Boolean).join(" "),
+  };
+  const equipmentKey = normalizeEquipmentKey(value, context);
+  const fleet = equipmentKey.startsWith("FROTA:")
+    ? equipmentKey.slice("FROTA:".length)
+    : normalizeFleet(input.fleet || input.equipment || "");
   const catalogModel = fleet ? catalogByFleet.get(fleet) : "";
   return normalizeText(
-    [input.fleet, input.equipment, input.type, input.model, input.description, catalogModel]
+    [
+      input.fleet,
+      input.equipment,
+      displayEquipmentLabel(value, context),
+      input.type,
+      input.model,
+      input.description,
+      catalogModel,
+    ]
       .filter(Boolean)
       .join(" "),
   );
 }
 
 export function resolveOperationalItem(input: OperationalItemInput): OperationalItem {
+  const value = input.fleet || input.equipment || "";
+  const context: EquipmentContext = {
+    description: [input.type, input.model, input.description].filter(Boolean).join(" "),
+  };
+  if (isAggregateEquipment(value, context)) return "transporte";
+
   const text = joinedSearchText(input);
 
   if (
@@ -82,6 +116,23 @@ export function resolveOperationalItem(input: OperationalItemInput): Operational
   }
 
   return "outros";
+}
+
+export function resolveEquipmentOperationalClass(
+  input: OperationalItemInput,
+): EquipmentOperationalClass {
+  const value = input.fleet || input.equipment || "";
+  const context: EquipmentContext = {
+    description: [input.type, input.model, input.description].filter(Boolean).join(" "),
+  };
+  const key = normalizeEquipmentKey(value, context);
+  const aggregate = isAggregateEquipment(value, context);
+  return {
+    key,
+    label: displayEquipmentLabel(value, context),
+    item: aggregate ? "transporte" : resolveOperationalItem(input),
+    isAggregate: aggregate,
+  };
 }
 
 export function operationalItemLabel(item: OperationalItem) {

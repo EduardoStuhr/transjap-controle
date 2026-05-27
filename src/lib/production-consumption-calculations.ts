@@ -14,6 +14,11 @@ import {
 } from "@/lib/production-consumption-utils";
 import { AGGREGATE_TRIP_PRICE } from "@/lib/production-analytics";
 import type { DailyMetrics, OperationalKPIs } from "@/lib/production-consumption-types";
+import {
+  displayEquipmentLabel,
+  normalizeEquipmentKey,
+  type EquipmentContext,
+} from "@/lib/equipment-normalization";
 
 /**
  * Calcula volume compactado a partir do volume solto
@@ -27,6 +32,17 @@ export function calculateCompactedVolume(
 
 function compactedTripVolume(trip: Pick<DbTrip, "cubicMLoose" | "swellFactorApplied">): number {
   return calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
+}
+
+function fuelingEquipmentContext(
+  fuel: Pick<DbFueling, "analysisId" | "vehicleType" | "owner" | "operator">,
+): EquipmentContext {
+  if (fuel.analysisId === "allocated") return "fuelAllocation";
+  if (fuel.analysisId === "attributed") return "fuelAttribution";
+  return {
+    source: "fueling",
+    description: [fuel.vehicleType, fuel.owner, fuel.operator].filter(Boolean).join(" "),
+  };
 }
 
 /**
@@ -94,7 +110,7 @@ export function calculateDailyMetrics(
   metricsMap.forEach((metrics) => {
     const aggregateCost = metrics.trips * AGGREGATE_TRIP_PRICE;
     metrics.margin = metrics.revenue - metrics.cost - aggregateCost;
-    metrics.fuelPerM3 = safeDivide(metrics.diesel, metrics.compactedM3);
+    metrics.fuelPerM3 = safeDivide(metrics.compactedM3, metrics.diesel);
     metrics.costPerM3 = safeDivide(metrics.cost, metrics.compactedM3);
   });
 
@@ -129,11 +145,11 @@ export function calculateOperationalKPIs(
     aggregateCost,
     revenue,
     operationalMargin,
-    fuelPerM3: safeDivide(diesel, compactedM3),
+    fuelPerM3: safeDivide(compactedM3, diesel),
     avgCostPerLiter: safeDivide(fuelCost, diesel),
     efficiencyPercent: calculateEfficiencyIndex(
       safeDivide(compactedM3, totalHours || 1),
-      safeDivide(diesel, compactedM3),
+      safeDivide(compactedM3, diesel),
       safeDivide(diesel, totalHours || 1),
     ),
     productivityIndex: calculateProductivityIndex(
@@ -172,9 +188,10 @@ export function calculateAggregateMetrics(
   >();
 
   trips.forEach((trip) => {
-    const key = trip.prefix || trip.vehicleId || trip.plate || "SEM_PREFIXO";
+    const value = trip.prefix || trip.vehicleId || trip.plate;
+    const key = normalizeEquipmentKey(value, "trip") || "SEM_PREFIXO";
     const current = map.get(key) ?? {
-      aggregate: key,
+      aggregate: displayEquipmentLabel(value, "trip"),
       trips: 0,
       looseM3: 0,
       compactedM3: 0,
@@ -225,9 +242,11 @@ export function calculateEquipmentMetrics(
 
   // Processa abastecimentos
   fueling.forEach((fuel) => {
-    const key = fuel.prefix || fuel.vehicleId || fuel.plate || "SEM_EQUIPAMENTO";
+    const value = fuel.prefix || fuel.vehicleId || fuel.plate;
+    const context = fuelingEquipmentContext(fuel);
+    const key = normalizeEquipmentKey(value, context) || "SEM_EQUIPAMENTO";
     const current = map.get(key) ?? {
-      equipment: key,
+      equipment: displayEquipmentLabel(value, context),
       liters: 0,
       cost: 0,
       hours: 0,
@@ -241,8 +260,10 @@ export function calculateEquipmentMetrics(
 
   // Processa partes diárias (horas)
   dailyParts.forEach((part) => {
-    const current = map.get(part.fleet) ?? {
-      equipment: part.fleet,
+    const value = part.fleet || part.fleetLabel;
+    const key = normalizeEquipmentKey(value, "dailyPart") || part.fleet;
+    const current = map.get(key) ?? {
+      equipment: displayEquipmentLabel(value, "dailyPart"),
       liters: 0,
       cost: 0,
       hours: 0,
@@ -251,7 +272,7 @@ export function calculateEquipmentMetrics(
 
     current.hours += part.hours || 0;
     if (part.status) current.statuses.add(part.status);
-    map.set(part.fleet, current);
+    map.set(key, current);
   });
 
   return Array.from(map.values())

@@ -230,18 +230,18 @@ export function getEfficiencyColor(status: "efficient" | "attention" | "critical
 
 /**
  * Calcula índice de eficiência ponderado
- * Considera m³/h, L/m³ e L/h
+ * Considera m³/h, m³/L e L/h
  */
 export function calculateEfficiencyIndex(
   m3PerHour: number,
-  literPerM3: number,
+  m3PerLiter: number,
   literPerHour: number,
 ): number {
-  if (!m3PerHour || !literPerM3 || !literPerHour) return 0;
+  if (!m3PerHour || !m3PerLiter || !literPerHour) return 0;
 
   // Normaliza cada métrica em uma escala 0-100
   const normalizedProduction = Math.min(100, (m3PerHour / 10) * 100);
-  const normalizedConsumption = Math.max(0, Math.min(100, 100 - literPerM3 * 20));
+  const normalizedConsumption = Math.max(0, Math.min(100, (m3PerLiter / 20) * 100));
   const normalizedFuelHour = Math.max(0, Math.min(100, 100 - (literPerHour / 5) * 100));
 
   // Média ponderada: 50% produção, 25% consumo, 25% combustível/hora

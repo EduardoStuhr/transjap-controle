@@ -15,6 +15,14 @@ interface DashboardFiltersProps {
   loading?: boolean;
 }
 
+function optionKey(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_");
+}
+
 export function DashboardFilters({
   state,
   onChange,
@@ -77,7 +85,7 @@ export function DashboardFilters({
       >
         <option value="all">Todos equipamentos</option>
         {equipment.map((value) => (
-          <option key={value} value={value}>
+          <option key={optionKey(value)} value={value}>
             {value}
           </option>
         ))}
@@ -91,7 +99,7 @@ export function DashboardFilters({
       >
         <option value="all">Todos agregados</option>
         {aggregates.map((value) => (
-          <option key={value} value={value}>
+          <option key={optionKey(value)} value={value}>
             {value}
           </option>
         ))}
