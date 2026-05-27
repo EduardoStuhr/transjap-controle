@@ -10,6 +10,16 @@ export function safeDivide(numerator: number, denominator: number, defaultValue 
   return denominator > 0 ? numerator / denominator : defaultValue;
 }
 
+export function calculateCompactedM3(
+  looseM3: number,
+  swellFactor: number | null | undefined = 0.3,
+): number {
+  if (!Number.isFinite(looseM3) || looseM3 <= 0) return 0;
+  const parsedFactor = Number.isFinite(swellFactor) ? Number(swellFactor) : 0.3;
+  const factor = Math.min(1, Math.max(0, parsedFactor));
+  return looseM3 * (1 - factor);
+}
+
 /**
  * Formatação de números com locale brasileira
  */
@@ -104,6 +114,44 @@ export function isEmpty(value: string | null | undefined): boolean {
  */
 export function uniqueValues<T>(values: (T | null | undefined)[]): T[] {
   return [...new Set(values.filter(Boolean))] as T[];
+}
+
+export function displayObraName(value: string | null | undefined): string {
+  return value?.trim().replace(/\s+/g, " ") || "Sem obra";
+}
+
+export function normalizeObraName(value: string | null | undefined): string {
+  return displayObraName(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\b\d+\b/g, (token) => String(Number(token)))
+    .replace(/\s+/g, "");
+}
+
+export function normalizeObraKey(value: string | null | undefined): string {
+  return displayObraName(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .replace(/\b\d+\b/g, (token) => String(Number(token)));
+}
+
+export function obraMatches(
+  value: string | null | undefined,
+  selected: string | null | undefined,
+): boolean {
+  return normalizeObraKey(value) === normalizeObraKey(selected);
+}
+
+export function uniqueNormalizedObras(values: (string | null | undefined)[]): string[] {
+  const names = new Map<string, string>();
+  values.forEach((value) => {
+    const label = displayObraName(value);
+    const key = normalizeObraKey(label);
+    if (!names.has(key)) names.set(key, label);
+  });
+  return Array.from(names.values()).sort((left, right) => left.localeCompare(right, "pt-BR"));
 }
 
 /**

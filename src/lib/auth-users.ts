@@ -4,7 +4,16 @@ export type UserRole = (typeof USER_ROLES)[number];
 
 export type AuthUser = {
   id: string;
-  name: "Eduardo" | "Davi" | "Luiz" | "Jean" | "Reginaldo" | "Wando" | "Diego" | "Natalia";
+  name:
+    | "Eduardo"
+    | "Davi"
+    | "Luiz"
+    | "Jean"
+    | "Reginaldo"
+    | "Wando"
+    | "Diego"
+    | "Natalia"
+    | "Teste";
   role: UserRole;
 };
 
@@ -19,6 +28,7 @@ export const LOCAL_USERS: AuthUserWithPassword[] = [
   { id: "usr-wando", name: "Wando", role: "admin", password: "Transjap2026*" },
   { id: "usr-diego", name: "Diego", role: "admin", password: "Transjap2026*" },
   { id: "usr-natalia", name: "Natalia", role: "admin", password: "Transjap2026*" },
+  { id: "usr-teste", name: "Teste", role: "operacional", password: "Transjap2026*" },
 ];
 
 export const AUTH_USER_OPTIONS = LOCAL_USERS.map(({ password: _password, ...user }) => user);

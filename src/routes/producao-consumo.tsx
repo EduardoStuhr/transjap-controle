@@ -6,7 +6,7 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { AppLayout, Icon } from "@/components/AppLayout";
@@ -26,17 +26,18 @@ import {
 
 import { ChartCard } from "@/components/charts/ChartCard";
 import {
+  ChartAggregateRanking,
   ChartBars,
-  ChartBubble,
-  ChartDieselPorM3Empolado,
   ChartDonut,
   ChartHBars,
+  ChartHourlyProduction,
   ChartLine,
   ChartMultiLine,
+  ChartProducaoEmpoladaDiesel,
   ChartProdConsumo,
   ChartProdStack,
   ChartVolumeLinePorObra,
-  type BubblePoint,
+  type AggregateRankingPoint,
 } from "@/components/charts/Charts";
 import { EmptyChartState } from "@/components/charts/ProductionConsumptionCharts";
 import { CHART_SERIES_COLORS } from "@/lib/chart-theme";
@@ -46,7 +47,7 @@ import {
   DashboardTabs,
   KpiCardCompact,
 } from "@/components/charts/DashboardFilters";
-import { MyAnalysesDialog, AnalysisHistoryPanel } from "@/components/charts/AnalysisSelector";
+import { AnalysesDialog, AnalysisHistoryPanel } from "@/components/charts/AnalysisSelector";
 import {
   useDashboardFilters,
   useAnalysisSelection,
@@ -57,6 +58,7 @@ import {
 } from "@/hooks/useProductionConsumption";
 import {
   calculateDailyMetrics,
+  calculateCompactedVolume,
   calculateOperationalKPIs,
   calculateAggregateMetrics,
   calculateEquipmentMetrics,
@@ -66,11 +68,24 @@ import {
 import {
   formatDate,
   formatBRL,
+  formatHours,
   formatM3,
   formatLiters,
   formatNumber,
+  displayObraName,
+  extractDateKey,
+  normalizeObraName,
+  normalizeObraKey,
+  obraMatches,
+  uniqueNormalizedObras,
   uniqueValues,
 } from "@/lib/production-consumption-utils";
+import {
+  buildWorksiteTimeSummaries,
+  buildWorksiteTimeSummary,
+  parseRcoOperationalDateTime,
+  type ShiftProductionSummary,
+} from "@/lib/production-time-analysis";
 import type {
   DbProductionAnalysis,
   DbTrip,
@@ -96,25 +111,49 @@ const COMPARISON_TOP_PER_OBRA = 5;
 
 type ComparisonSeries = {
   obra: string;
+  obraKey: string;
   key: string;
   color: string;
   compactedKey: string;
   looseKey: string;
   dieselKey: string;
   fuelPerM3Key: string;
-  fuelPerLooseM3Key: string;
 };
-
-function normalizeObraName(value: string | null | undefined) {
-  return value?.trim() || "Sem obra";
-}
 
 function equipmentKey(row: { prefix?: string | null; vehicleId?: string | null; plate?: string | null }) {
   return row.prefix || row.vehicleId || row.plate || "SEM_EQUIPAMENTO";
 }
 
+function isRcoProductiveTrip(row: DbTrip) {
+  return (
+    row.operation
+      .trim()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase() === "DESCARGA"
+  );
+}
+
+function formatHourlyM3(value: number) {
+  return `${formatNumber(value, 2)} m³`;
+}
+
 function withObraLabel(label: string, obra: string) {
   return `${label} · ${obra}`;
+}
+
+function scopeRowsToSelectedObras<T extends { obra: string }>(
+  rows: T[],
+  selectedObraLabels: ReadonlyMap<string, string>,
+) {
+  const singleSelectedObra =
+    selectedObraLabels.size === 1 ? selectedObraLabels.values().next().value : undefined;
+  return rows.flatMap((row) => {
+    const obra =
+      selectedObraLabels.get(normalizeObraKey(row.obra)) ||
+      (!row.obra.trim() ? singleSelectedObra : undefined);
+    return obra ? [{ ...row, obra }] : [];
+  });
 }
 
 function topPerObra<T extends { obra: string }>(
@@ -131,6 +170,44 @@ function topPerObra<T extends { obra: string }>(
 
   return Array.from(grouped.values()).flatMap((group) =>
     [...group].sort((a, b) => metric(b) - metric(a)).slice(0, limit),
+  );
+}
+
+function ShiftProductionCard({ shift }: { shift: ShiftProductionSummary }) {
+  const noTrips = shift.trips === 0;
+  return (
+    <div className="rounded border border-border-low bg-surface-low p-3">
+      <h4 className="text-[10px] font-black uppercase tracking-widest text-primary">
+        {shift.label}
+      </h4>
+      {noTrips ? (
+        <p className="mt-3 text-xs text-on-surface-variant">Sem viagens registradas no turno.</p>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+            <span className="text-on-surface-variant">Primeira viagem</span>
+            <span className="text-right tnum font-semibold">{shift.firstTrip}</span>
+            <span className="text-on-surface-variant">Última viagem</span>
+            <span className="text-right tnum font-semibold">{shift.lastTrip}</span>
+            <span className="text-on-surface-variant">Horas produtivas</span>
+            <span className="text-right tnum font-semibold">{formatHours(shift.productiveHours)}</span>
+            <span className="text-on-surface-variant">Viagens</span>
+            <span className="text-right tnum font-semibold">{shift.trips}</span>
+            <span className="text-on-surface-variant">Produção</span>
+            <span className="text-right tnum font-semibold">{formatHourlyM3(shift.m3)}</span>
+            <span className="text-on-surface-variant">Produção/hora</span>
+            <span className="text-right tnum font-semibold">
+              {shift.productiveHours > 0 ? `${formatNumber(shift.productionPerHour, 2)} m³/h` : "Dados insuficientes"}
+            </span>
+          </div>
+          {shift.hasSingleTrip && (
+            <p className="mt-3 text-[11px] text-status-warning">
+              Turno com apenas uma viagem registrada.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -244,7 +321,7 @@ const TAB_IDS_VISIBLE = [
   "trucks",
   "equipment",
   "efficiency",
-  "audit",
+  "hours",
 ] as const;
 
 function ProducaoConsumoRefactored() {
@@ -257,6 +334,9 @@ function ProducaoConsumoRefactored() {
     useState<DashboardLoadingState>(DASHBOARD_LOADING_IDLE);
   const [recalcLoading, setRecalcLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showTechnicalAudit, setShowTechnicalAudit] = useState(false);
+  const [productionDate, setProductionDate] = useState("");
+  const [hoursObraFilter, setHoursObraFilter] = useState<string>("all");
 
   const analysesQuery = useQuery({
     queryKey: productionQueryKeys.analyses(),
@@ -307,11 +387,36 @@ function ProducaoConsumoRefactored() {
     dashboardLoading.isHydratingAnalysis ||
     dashboardLoading.isReloadingDashboard;
 
+  const selectedObras = useMemo(
+    () => uniqueNormalizedObras(analysisSelection.selectedAnalyses.map((analysis) => analysis.obra)),
+    [analysisSelection.selectedAnalyses],
+  );
+  const selectedObraLabels = useMemo(
+    () => new Map(selectedObras.map((obra) => [normalizeObraKey(obra), obra])),
+    [selectedObras],
+  );
+  const obraScopedTripRows = useMemo(
+    () => scopeRowsToSelectedObras(tripRows, selectedObraLabels),
+    [selectedObraLabels, tripRows],
+  );
+  const obraScopedFuelRows = useMemo(
+    () => scopeRowsToSelectedObras(fuelRows, selectedObraLabels),
+    [fuelRows, selectedObraLabels],
+  );
+  const obraScopedDailyPartRows = useMemo(
+    () => scopeRowsToSelectedObras(dailyPartRows, selectedObraLabels),
+    [dailyPartRows, selectedObraLabels],
+  );
+  const obraScopedFuelAttrRows = useMemo(
+    () => scopeRowsToSelectedObras(fuelAttrRows, selectedObraLabels),
+    [fuelAttrRows, selectedObraLabels],
+  );
+
   const {
     page: tripPage,
     nextPage: tripNextPage,
     prevPage: tripPrevPage,
-  } = usePagination(tripRows.length, PAGE_SIZE);
+  } = usePagination(obraScopedTripRows.length, PAGE_SIZE);
 
   const visibleTabs = useMemo(
     () => tabs.filter((t) => TAB_IDS_VISIBLE.includes(t.id as (typeof TAB_IDS_VISIBLE)[number])),
@@ -319,37 +424,35 @@ function ProducaoConsumoRefactored() {
   );
 
   const { filteredTrips, filteredFueling, filteredDailyParts } = useFilteredData(
-    tripRows,
-    fuelRows,
-    dailyPartRows,
+    obraScopedTripRows,
+    obraScopedFuelRows,
+    obraScopedDailyPartRows,
     filters,
   );
 
-  const distinctObras = useMemo(
+  const visibleObras = useMemo(
     () =>
-      uniqueValues([
-        ...filteredTrips.map((t) => t.obra?.trim()),
-        ...filteredFueling.map((f) => f.obra?.trim()),
-        ...filteredDailyParts.map((p) => p.obra?.trim()),
-      ]),
-    [filteredDailyParts, filteredFueling, filteredTrips],
+      filters.obra === "all"
+        ? selectedObras
+        : selectedObras.filter((obra) => obraMatches(obra, filters.obra)),
+    [filters.obra, selectedObras],
   );
-  const compareByObra = filters.obra === "all" && distinctObras.length > 1;
+  const compareByObra = filters.obra === "all" && visibleObras.length > 1;
   const comparisonSeries = useMemo<ComparisonSeries[]>(
     () =>
       compareByObra
-        ? distinctObras.map((obra, index) => ({
+        ? visibleObras.map((obra, index) => ({
             obra,
+            obraKey: normalizeObraKey(obra),
             key: `obra${index}`,
             color: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
             compactedKey: `obra${index}CompactedM3`,
             looseKey: `obra${index}LooseM3`,
             dieselKey: `obra${index}Diesel`,
             fuelPerM3Key: `obra${index}FuelPerM3`,
-            fuelPerLooseM3Key: `obra${index}FuelPerLooseM3`,
           }))
         : [],
-    [compareByObra, distinctObras],
+    [compareByObra, visibleObras],
   );
   const distinctMaterials = useMemo(
     () => uniqueValues(filteredTrips.map((t) => t.material)),
@@ -369,13 +472,13 @@ function ProducaoConsumoRefactored() {
   );
 
   const filteredAttributions = useMemo(() => {
-    return fuelAttrRows.filter((row) => {
+    return obraScopedFuelAttrRows.filter((row) => {
       if (filters.dateFrom && row.date < filters.dateFrom) return false;
       if (filters.dateTo && row.date > filters.dateTo) return false;
-      if (filters.obra !== "all" && row.obra && row.obra !== filters.obra) return false;
+      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
       return true;
     });
-  }, [fuelAttrRows, filters.dateFrom, filters.dateTo, filters.obra]);
+  }, [obraScopedFuelAttrRows, filters.dateFrom, filters.dateTo, filters.obra]);
 
   const attributedFueling = useMemo<DbFueling[]>(() => {
     if (filteredAttributions.length === 0) return filteredFueling;
@@ -417,6 +520,167 @@ function ProducaoConsumoRefactored() {
     [attributedFueling, filteredDailyParts, filteredTrips],
   );
 
+  const hourlyAnalysisTrips = useMemo(() => {
+    const allowedIds = new Set(selectedAnalysisIds);
+    return tripRows.filter((trip) => allowedIds.has(trip.analysisId));
+  }, [selectedAnalysisIds, tripRows]);
+
+  const hourlyTripsWithActiveFilters = useMemo(
+    () =>
+      hourlyAnalysisTrips.filter((trip) => {
+        const date = parseRcoOperationalDateTime(trip.datetime)?.date ?? "";
+        if (filters.dateFrom && date < filters.dateFrom) return false;
+        if (filters.dateTo && date > filters.dateTo) return false;
+        if (!isRcoProductiveTrip(trip)) return false;
+        if (filters.material !== "all" && trip.material !== filters.material) return false;
+        if (filters.aggregate !== "all" && equipmentKey(trip) !== filters.aggregate) return false;
+        return true;
+      }),
+    [
+      filters.aggregate,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.material,
+      hourlyAnalysisTrips,
+    ],
+  );
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || activeTab !== "hours" || hourlyTripsWithActiveFilters.length === 0) {
+      return;
+    }
+    console.table(
+      uniqueValues(hourlyTripsWithActiveFilters.map((trip) => trip.obra)).map((obra) => ({
+        obraOriginal: obra,
+        obraNormalizada: normalizeObraName(obra),
+      })),
+    );
+  }, [activeTab, hourlyTripsWithActiveFilters]);
+
+  const productionDateOptions = useMemo(
+    () =>
+      uniqueValues(
+        hourlyTripsWithActiveFilters.map(
+          (trip) => parseRcoOperationalDateTime(trip.datetime)?.date ?? "",
+        ),
+      )
+        .filter(Boolean)
+        .sort((left, right) => right.localeCompare(left)),
+    [hourlyTripsWithActiveFilters],
+  );
+
+  useEffect(() => {
+    setProductionDate((current) =>
+      current && productionDateOptions.includes(current)
+        ? current
+        : (productionDateOptions[0] ?? ""),
+    );
+  }, [productionDateOptions]);
+
+  const hoursObrasAvailable = useMemo(() => {
+    if (!productionDate) return [];
+    const obras = new Map<string, string>();
+    hourlyTripsWithActiveFilters
+      .filter(
+        (trip) => parseRcoOperationalDateTime(trip.datetime)?.date === productionDate,
+      )
+      .forEach((trip) => {
+        const label = displayObraName(trip.obra);
+        const key = normalizeObraName(label);
+        if (!obras.has(key)) obras.set(key, label);
+      });
+    return Array.from(obras.values()).sort((left, right) => left.localeCompare(right, "pt-BR"));
+  }, [hourlyTripsWithActiveFilters, productionDate]);
+
+  useEffect(() => {
+    if (hoursObraFilter === "all") return;
+    if (
+      !hoursObrasAvailable.some(
+        (obra) => normalizeObraName(obra) === normalizeObraName(hoursObraFilter),
+      )
+    ) {
+      setHoursObraFilter("all");
+    }
+  }, [hoursObraFilter, hoursObrasAvailable]);
+
+  const hoursFilteredTrips = useMemo(
+    () =>
+      hourlyAnalysisTrips.filter((trip) => {
+        const date = parseRcoOperationalDateTime(trip.datetime)?.date ?? "";
+        if (date !== productionDate) return false;
+        if (
+          hoursObraFilter !== "all" &&
+          normalizeObraName(trip.obra) !== normalizeObraName(hoursObraFilter)
+        ) {
+          return false;
+        }
+        if (!isRcoProductiveTrip(trip)) return false;
+        if (filters.material !== "all" && trip.material !== filters.material) return false;
+        if (filters.aggregate !== "all" && equipmentKey(trip) !== filters.aggregate) return false;
+        if (filters.dateFrom && date < filters.dateFrom) return false;
+        if (filters.dateTo && date > filters.dateTo) return false;
+        return true;
+      }),
+    [
+      filters.aggregate,
+      filters.dateFrom,
+      filters.dateTo,
+      filters.material,
+      hourlyAnalysisTrips,
+      hoursObraFilter,
+      productionDate,
+    ],
+  );
+
+  const timeSummaries = useMemo(
+    () => (productionDate ? buildWorksiteTimeSummaries(hoursFilteredTrips, productionDate) : []),
+    [hoursFilteredTrips, productionDate],
+  );
+  const totalTimeSummary = useMemo(
+    () =>
+      productionDate
+        ? buildWorksiteTimeSummary(hoursFilteredTrips, productionDate, "Total filtrado", {
+            debug: activeTab === "hours",
+          })
+        : null,
+    [activeTab, hoursFilteredTrips, productionDate],
+  );
+  const dailyDieselByObra = useMemo(() => {
+    const liters = new Map<string, number>();
+    if (filters.material !== "all" || filters.aggregate !== "all") return liters;
+    attributedFueling
+      .filter((fuel) => extractDateKey(fuel.datetime) === productionDate)
+      .forEach((fuel) => {
+        const key = normalizeObraName(fuel.obra);
+        liters.set(key, (liters.get(key) ?? 0) + (fuel.liters || 0));
+      });
+    return liters;
+  }, [attributedFueling, filters.aggregate, filters.material, productionDate]);
+  const hourlyProductionSeries = useMemo(
+    () =>
+      timeSummaries.map((summary, index) => ({
+        obra: summary.obra,
+        dataKey: `obra${index}M3`,
+        color: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
+      })),
+    [timeSummaries],
+  );
+  const hourlyProductionData = useMemo(() => {
+    if (!totalTimeSummary) return [];
+    return totalTimeSummary.hourly.map((hour) => {
+      const row: Record<string, unknown> = {
+        d: `${String(hour.hour).padStart(2, "0")}h`,
+        m3: hour.m3,
+        trips: hour.trips,
+      };
+      timeSummaries.forEach((summary, index) => {
+        row[`obra${index}M3`] =
+          summary.hourly.find((item) => item.hour === hour.hour)?.m3 ?? 0;
+      });
+      return row;
+    });
+  }, [timeSummaries, totalTimeSummary]);
+
   const aggregateMetrics = useMemo(
     () => calculateAggregateMetrics(filteredTrips, kpis.compactedM3),
     [filteredTrips, kpis.compactedM3],
@@ -430,12 +694,14 @@ function ProducaoConsumoRefactored() {
   const obraComparison = useMemo(
     () =>
       comparisonSeries.map((series) => {
-        const trips = filteredTrips.filter((trip) => normalizeObraName(trip.obra) === series.obra);
+        const trips = filteredTrips.filter(
+          (trip) => normalizeObraKey(trip.obra) === series.obraKey,
+        );
         const fueling = attributedFueling.filter(
-          (fuel) => normalizeObraName(fuel.obra) === series.obra,
+          (fuel) => normalizeObraKey(fuel.obra) === series.obraKey,
         );
         const dailyParts = filteredDailyParts.filter(
-          (part) => normalizeObraName(part.obra) === series.obra,
+          (part) => normalizeObraKey(part.obra) === series.obraKey,
         );
         const obraKpis = calculateOperationalKPIs(trips, fueling, dailyParts);
         const daily = Array.from(calculateDailyMetrics(trips, fueling).values()).sort((a, b) =>
@@ -466,7 +732,6 @@ function ProducaoConsumoRefactored() {
         row[obra.looseKey] = day.looseM3;
         row[obra.dieselKey] = day.diesel;
         if (day.compactedM3 > 0) row[obra.fuelPerM3Key] = day.diesel / day.compactedM3;
-        if (day.looseM3 > 0) row[obra.fuelPerLooseM3Key] = day.diesel / day.looseM3;
         rows.set(day.date, row);
       });
     });
@@ -483,17 +748,6 @@ function ProducaoConsumoRefactored() {
         color: obra.color,
         volumeKey: obra.looseKey,
         lineKey: obra.dieselKey,
-      })),
-    [obraComparison],
-  );
-
-  const obraVolumeFuelPerLooseM3Series = useMemo(
-    () =>
-      obraComparison.map((obra) => ({
-        obra: obra.obra,
-        color: obra.color,
-        volumeKey: obra.looseKey,
-        lineKey: obra.fuelPerLooseM3Key,
       })),
     [obraComparison],
   );
@@ -598,22 +852,48 @@ function ProducaoConsumoRefactored() {
     [dailyData],
   );
 
-  const dieselPorM3EmpoladoData = useMemo(
+  const producaoEmpoladaDieselData = useMemo(
     () =>
       dailyData.map((d) => ({
         d: d.label,
         m3Empolado: d.looseM3,
         diesel: d.diesel,
-        litrosPorM3Empolado: d.looseM3 > 0 ? Number((d.diesel / d.looseM3).toFixed(3)) : 0,
       })),
     [dailyData],
   );
 
-  const mediaDieselPorM3Empolado = useMemo(() => {
-    const totalM3Empolado = dailyData.reduce((sum, d) => sum + d.looseM3, 0);
-    const totalDiesel = dailyData.reduce((sum, d) => sum + d.diesel, 0);
-    return totalM3Empolado > 0 ? totalDiesel / totalM3Empolado : 0;
-  }, [dailyData]);
+  const obraEfficiency = useMemo(() => {
+    const tripsByKey = new Map<string, { obra: string; compactedM3: number; trips: number }>();
+    filteredTrips.forEach((trip) => {
+      const key = normalizeObraKey(trip.obra);
+      const cur = tripsByKey.get(key) ?? { obra: trip.obra || "Sem obra", compactedM3: 0, trips: 0 };
+      cur.compactedM3 += calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
+      cur.trips += 1;
+      tripsByKey.set(key, cur);
+    });
+
+    const litersByKey = new Map<string, number>();
+    attributedFueling.forEach((fuel) => {
+      const key = normalizeObraKey(fuel.obra);
+      litersByKey.set(key, (litersByKey.get(key) ?? 0) + (fuel.liters || 0));
+    });
+
+    const totalM3 = [...tripsByKey.values()].reduce((s, o) => s + o.compactedM3, 0);
+    const totalLiters = [...litersByKey.values()].reduce((s, v) => s + v, 0);
+    const avgLpm3 = totalM3 > 0 ? totalLiters / totalM3 : 0;
+
+    return [...tripsByKey.entries()]
+      .map(([key, data]) => {
+        const liters = litersByKey.get(key) ?? 0;
+        const lpm3 = data.compactedM3 > 0 ? liters / data.compactedM3 : 0;
+        const delta = avgLpm3 > 0 ? ((lpm3 - avgLpm3) / avgLpm3) * 100 : 0;
+        const score: "ótima" | "média" | "ruim" =
+          delta < -10 ? "ótima" : delta < 10 ? "média" : "ruim";
+        return { obra: data.obra, compactedM3: data.compactedM3, liters, lpm3, avgLpm3, delta, score };
+      })
+      .filter((o) => o.compactedM3 > 0)
+      .sort((a, b) => a.lpm3 - b.lpm3);
+  }, [filteredTrips, attributedFueling]);
 
   const obraBarsData = useMemo(
     () => obraDistribution.map((o) => ({ obra: o.name, m3: o.value })),
@@ -706,48 +986,39 @@ function ProducaoConsumoRefactored() {
     [compareByObra, equipmentMetrics, obraComparison],
   );
 
-  // Bubble: agregados — eficiência (m³ × viagens × R$)
-  const bubbleData: BubblePoint[] = useMemo(
+  const aggregateRankingData: AggregateRankingPoint[] = useMemo(
     () => {
       if (compareByObra) {
-        return obraComparison
-          .flatMap((obra) =>
-            obra.aggregateMetrics.map((a) => ({
-              ...a,
-              obra: obra.obra,
-              dieselBase: obra.kpis.diesel,
-            })),
-          )
-          .filter((a) => a.compactedM3 > 0)
-          .map((a) => {
-            const proxyDiesel = (a.dieselBase * a.participation) / 100;
-            return {
-              name: a.aggregate,
-              tipo: a.obra,
-              horas: a.trips,
-              m3: a.compactedM3,
-              diesel: proxyDiesel,
-              lPorM3: proxyDiesel > 0 ? proxyDiesel / a.compactedM3 : 0,
-            };
-          });
+        return obraComparison.flatMap((obra) =>
+          obra.aggregateMetrics
+            .filter((a) => a.compactedM3 > 0)
+            .map((a) => {
+              const proxyDiesel = (obra.kpis.diesel * a.participation) / 100;
+              return {
+                name: withObraLabel(a.aggregate, obra.obra),
+                obra: obra.obra,
+                liters: proxyDiesel,
+                m3: a.compactedM3,
+                trips: a.trips,
+              };
+            }),
+        );
       }
 
       return aggregateMetrics
         .filter((a) => a.compactedM3 > 0)
         .map((a) => {
-          // Proxy de "diesel" por agregado: dividir o consumo total proporcional à participação.
           const proxyDiesel = (kpis.diesel * a.participation) / 100;
           return {
             name: a.aggregate,
-            tipo: "agregado",
-            horas: a.trips,
+            obra: visibleObras[0],
+            liters: proxyDiesel,
             m3: a.compactedM3,
-            diesel: proxyDiesel,
-            lPorM3: proxyDiesel > 0 ? proxyDiesel / a.compactedM3 : 0,
+            trips: a.trips,
           };
         });
     },
-    [aggregateMetrics, compareByObra, kpis.diesel, obraComparison],
+    [aggregateMetrics, compareByObra, kpis.diesel, obraComparison, visibleObras],
   );
 
   // Status dos equipamentos para o donut de auditoria
@@ -773,9 +1044,6 @@ function ProducaoConsumoRefactored() {
   );
 
   async function handleCreated(analysisId: string) {
-    const nextIds = [analysisId];
-    const nextKey = analysisIdsKey(nextIds);
-
     setDashboardLoading({
       isCreatingAnalysis: false,
       isHydratingAnalysis: true,
@@ -800,6 +1068,8 @@ function ProducaoConsumoRefactored() {
       if (!nextAnalyses.some((analysis) => analysis.id === analysisId)) {
         throw new Error("A analise foi criada, mas ainda nao ficou disponivel para leitura.");
       }
+      const nextIds = nextAnalyses.map((analysis) => analysis.id);
+      const nextKey = analysisIdsKey(nextIds);
 
       clearFilters();
       setActiveTab("overview");
@@ -941,7 +1211,7 @@ function ProducaoConsumoRefactored() {
             disabled={empty || globalBusy}
           >
             <Icon name="folder_open" className="text-base mr-1" />
-            Minhas Análises
+            Análises Disponíveis
           </Button>
           {canCreate && (
             <Button
@@ -993,7 +1263,7 @@ function ProducaoConsumoRefactored() {
           <DashboardFilters
             state={filters}
             onChange={updateFilters}
-            obras={distinctObras}
+            obras={selectedObras}
             materials={distinctMaterials}
             equipment={distinctEquipment}
             aggregates={distinctAggregates}
@@ -1001,11 +1271,22 @@ function ProducaoConsumoRefactored() {
           />
 
           <DashboardTabs tabs={visibleTabs} activeTab={activeTab} onChange={setActiveTab} />
+          <div className="mb-4 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={() => setShowTechnicalAudit((visible) => !visible)}
+            >
+              <Icon name="fact_check" className="text-base mr-1" />
+              {showTechnicalAudit ? "Ocultar auditoria técnica" : "Ver auditoria técnica"}
+            </Button>
+          </div>
 
           {/* KPI strip */}
           <div className="mb-5 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
             <KpiCardCompact
-              label="Produção m³"
+              label="Produção m³ compactado"
               value={formatM3(kpis.compactedM3)}
               icon="compress"
             />
@@ -1020,7 +1301,11 @@ function ProducaoConsumoRefactored() {
               icon="payments"
             />
             <KpiCardCompact label="Viagens" value={String(kpis.trips)} icon="local_shipping" />
-            <KpiCardCompact label="L/m³" value={formatNumber(kpis.fuelPerM3, 2)} icon="speed" />
+            {activeTab === "efficiency" ? (
+              <KpiCardCompact label="L/m³" value={formatNumber(kpis.fuelPerM3, 2)} icon="speed" />
+            ) : (
+              <KpiCardCompact label="Produção m³ solto" value={formatM3(kpis.looseM3)} icon="compress" />
+            )}
             <KpiCardCompact
               label="Eficiência"
               value={`${formatNumber(kpis.efficiencyPercent, 0)}%`}
@@ -1039,27 +1324,9 @@ function ProducaoConsumoRefactored() {
                     title="Produção × Consumo · diário"
                     description="m³ compactado, m³ solto e litros de diesel por dia"
                     height={340}
-                    hasData={
-                      compareByObra
-                        ? dailyObraComparisonData.length > 0
-                        : prodConsumoData.length > 0
-                    }
+                    hasData={prodConsumoData.length > 0}
                   >
-                    {compareByObra ? (
-                      <ChartVolumeLinePorObra
-                        data={dailyObraComparisonData}
-                        series={obraVolumeDieselSeries}
-                        volumeName="m³ empolado"
-                        volumeUnit="m³"
-                        lineName="diesel"
-                        lineUnit="L"
-                        volumeAxisLabel="m³ empolado"
-                        lineAxisLabel="L diesel"
-                        linePrecision={0}
-                      />
-                    ) : (
-                      <ChartProdConsumo data={prodConsumoData} />
-                    )}
+                    <ChartProdConsumo data={prodConsumoData} />
                   </ChartCard>
                 </div>
                 <ChartCard
@@ -1104,41 +1371,72 @@ function ProducaoConsumoRefactored() {
           )}
 
           {activeTab === "production" && (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="space-y-4">
               <ChartCard
-                title="Produção empilhada · compactada × solta"
-                description="Área stack — volume por dia"
-                height={320}
+                title="Produção m³ solto × diesel"
+                description="Barras: m³ solto por dia · linha: diesel total diário"
+                height={360}
                 hasData={
-                  compareByObra ? dailyObraComparisonData.length > 0 : prodConsumoData.length > 0
+                  compareByObra
+                    ? dailyObraComparisonData.length > 0
+                    : producaoEmpoladaDieselData.length > 0
                 }
               >
                 {compareByObra ? (
-                  <ChartMultiLine
+                  <ChartVolumeLinePorObra
                     data={dailyObraComparisonData}
-                    series={obraCompactedM3Series}
-                    unit="m³"
-                    yLabel="m³ compactado"
-                    precision={1}
+                    series={obraVolumeDieselSeries}
+                    volumeName="m³ solto"
+                    volumeUnit="m³"
+                    lineName="diesel"
+                    lineUnit="L"
+                    volumeAxisLabel="m³ solto"
+                    lineAxisLabel="L diesel"
+                    linePrecision={0}
                   />
                 ) : (
-                  <ChartProdStack
-                    data={prodConsumoData.map((d) => ({
-                      d: d.d,
-                      compactada: d.compactada,
-                      solta: d.solta,
-                    }))}
+                  <ChartProducaoEmpoladaDiesel
+                    data={producaoEmpoladaDieselData}
+                    seriesLabel={visibleObras[0]}
                   />
                 )}
               </ChartCard>
-              <ChartCard
-                title="Volume por obra"
-                description="m³ compactado total"
-                height={320}
-                hasData={obraBarsData.length > 0}
-              >
-                <ChartBars data={obraBarsData} dataKey="m3" nameKey="obra" unit="m³" />
-              </ChartCard>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <ChartCard
+                  title="Produção empilhada · m³ compactado × m³ solto"
+                  description="Área stack — volume por dia"
+                  height={320}
+                  hasData={
+                    compareByObra ? dailyObraComparisonData.length > 0 : prodConsumoData.length > 0
+                  }
+                >
+                  {compareByObra ? (
+                    <ChartMultiLine
+                      data={dailyObraComparisonData}
+                      series={obraCompactedM3Series}
+                      unit="m³"
+                      yLabel="m³ compactado"
+                      precision={1}
+                    />
+                  ) : (
+                    <ChartProdStack
+                      data={prodConsumoData.map((d) => ({
+                        d: d.d,
+                        compactada: d.compactada,
+                        solta: d.solta,
+                      }))}
+                    />
+                  )}
+                </ChartCard>
+                <ChartCard
+                  title="Volume por obra"
+                  description="m³ compactado total"
+                  height={320}
+                  hasData={obraBarsData.length > 0}
+                >
+                  <ChartBars data={obraBarsData} dataKey="m3" nameKey="obra" unit="m³" />
+                </ChartCard>
+              </div>
             </div>
           )}
 
@@ -1190,12 +1488,12 @@ function ProducaoConsumoRefactored() {
           {activeTab === "trucks" && (
             <>
               <ChartCard
-                title="Frota agregada — eficiência"
-                description="Bolha: viagens × m³ compactado · tamanho = litros diesel atribuídos"
-                height={420}
-                hasData={bubbleData.length > 0}
+                title="Agregados — produção e diesel"
+                description="Ranking por m³ compactado com diesel total atribuído · Top 15"
+                height={480}
+                hasData={aggregateRankingData.length > 0}
               >
-                <ChartBubble data={bubbleData} />
+                <ChartAggregateRanking data={aggregateRankingData} topN={15} />
               </ChartCard>
               <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <ChartCard
@@ -1266,38 +1564,8 @@ function ProducaoConsumoRefactored() {
           )}
 
           {activeTab === "efficiency" && (
+            <div className="space-y-4">
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <div className="xl:col-span-2">
-                <ChartCard
-                  title="Diesel por m³ empolado"
-                  description="Barras: produção empolada por dia · linha: litros por m³ empolado"
-                  height={360}
-                  hasData={
-                    compareByObra
-                      ? dailyObraComparisonData.length > 0
-                      : dieselPorM3EmpoladoData.length > 0
-                  }
-                >
-                  {compareByObra ? (
-                    <ChartVolumeLinePorObra
-                      data={dailyObraComparisonData}
-                      series={obraVolumeFuelPerLooseM3Series}
-                      volumeName="m³ empolado"
-                      volumeUnit="m³"
-                      lineName="L/m³ empolado"
-                      lineUnit="L/m³"
-                      volumeAxisLabel="m³ empolado"
-                      lineAxisLabel="L/m³"
-                      linePrecision={2}
-                    />
-                  ) : (
-                    <ChartDieselPorM3Empolado
-                      data={dieselPorM3EmpoladoData}
-                      media={mediaDieselPorM3Empolado}
-                    />
-                  )}
-                </ChartCard>
-              </div>
               <ChartCard
                 title="Eficiência diária · L/m³"
                 description="Consumo específico — menor é melhor"
@@ -1341,10 +1609,332 @@ function ProducaoConsumoRefactored() {
                 />
               </ChartCard>
             </div>
+
+            {obraEfficiency.length > 1 && (
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-widest mb-3">
+                  Eficiência por Obra
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {obraEfficiency.map((o) => (
+                    <div
+                      key={o.obra}
+                      className="rounded-lg border border-border-low bg-surface-container p-4"
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <span className="text-xs font-black uppercase tracking-widest truncate">
+                          {o.obra}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                            o.score === "ótima"
+                              ? "bg-status-success/15 text-status-success"
+                              : o.score === "ruim"
+                                ? "bg-status-error/15 text-status-error"
+                                : "bg-status-warning/15 text-status-warning"
+                          }`}
+                        >
+                          {o.score}
+                        </span>
+                      </div>
+                      <div className="text-xs text-on-surface-variant space-y-0.5">
+                        <div className="flex justify-between">
+                          <span>m³ compactado</span>
+                          <span className="tnum font-medium">{formatM3(o.compactedM3)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Diesel</span>
+                          <span className="tnum font-medium">{formatLiters(o.liters)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>L/m³</span>
+                          <span className="tnum font-medium">{formatNumber(o.lpm3, 3)} L/m³</span>
+                        </div>
+                        {o.avgLpm3 > 0 && (
+                          <div className="flex justify-between pt-1 border-t border-border-low/60">
+                            <span>vs média</span>
+                            <span
+                              className={`tnum font-bold ${
+                                o.delta < 0
+                                  ? "text-status-success"
+                                  : o.delta > 0
+                                    ? "text-status-error"
+                                    : "text-on-surface-variant"
+                              }`}
+                            >
+                              {o.delta > 0 ? "+" : ""}
+                              {formatNumber(o.delta, 1)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            </div>
           )}
 
-          {activeTab === "audit" && (
+          {activeTab === "hours" && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3 rounded border border-border-low bg-surface-container p-4">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest">
+                    Produção por hora e turno
+                  </h3>
+                  <p className="mt-1 text-xs text-on-surface-variant">
+                    Registros brutos de DESCARGA do RCO por obra e data, em m³ solto.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                    Data operacional
+                    <select
+                      value={productionDate}
+                      onChange={(event) => setProductionDate(event.target.value)}
+                      className="mt-1 block min-w-40 rounded border border-border-low bg-surface-highest px-3 py-2 text-xs font-normal normal-case tracking-normal text-on-surface"
+                    >
+                      {productionDateOptions.map((date) => (
+                        <option key={date} value={date}>
+                          {formatDate(date)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {hoursObrasAvailable.length > 0 && (
+                    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                      Obra
+                      <select
+                        value={hoursObraFilter}
+                        onChange={(event) => setHoursObraFilter(event.target.value)}
+                        className="mt-1 block min-w-48 rounded border border-border-low bg-surface-highest px-3 py-2 text-xs font-normal normal-case tracking-normal text-on-surface"
+                      >
+                        <option value="all">Todas as obras da análise</option>
+                        {hoursObrasAvailable.map((obra) => (
+                          <option key={obra} value={obra}>
+                            {obra}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              {!totalTimeSummary ? (
+                <EmptyChartState
+                  title="Sem viagens no período"
+                  message="Não há horários de viagens disponíveis para os filtros selecionados."
+                />
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+                    <KpiCardCompact
+                      label="Produção m³ solto do dia"
+                      value={formatHourlyM3(totalTimeSummary.m3)}
+                      icon="compress"
+                    />
+                    <KpiCardCompact
+                      label="Viagens do dia"
+                      value={String(totalTimeSummary.trips)}
+                      icon="local_shipping"
+                    />
+                    <KpiCardCompact
+                      label="Horas produtivas"
+                      value={formatHours(totalTimeSummary.productiveHours)}
+                      sub={`${totalTimeSummary.firstTrip} a ${totalTimeSummary.lastTrip}`}
+                      icon="schedule"
+                    />
+                    <KpiCardCompact
+                      label="Produção média/h"
+                      value={
+                        totalTimeSummary.productiveHours > 0
+                          ? `${formatNumber(totalTimeSummary.productionPerHour, 2)} m³/h`
+                          : "Dados insuficientes"
+                      }
+                      icon="query_stats"
+                    />
+                    <KpiCardCompact
+                      label="Melhor hora"
+                      value={totalTimeSummary.bestHour?.label ?? "—"}
+                      sub={
+                        totalTimeSummary.bestHour
+                          ? `${formatHourlyM3(totalTimeSummary.bestHour.m3)} · ${totalTimeSummary.bestHour.trips} viagens`
+                          : undefined
+                      }
+                      icon="schedule"
+                    />
+                    <KpiCardCompact
+                      label="Melhor turno"
+                      value={totalTimeSummary.bestShift?.label ?? "—"}
+                      sub={
+                        totalTimeSummary.bestShift
+                          ? `${formatHourlyM3(totalTimeSummary.bestShift.m3)} · ${totalTimeSummary.bestShift.trips} viagens`
+                          : undefined
+                      }
+                      icon="insights"
+                    />
+                    <KpiCardCompact
+                      label="Pico de viagens"
+                      value={totalTimeSummary.bestTripHour?.label ?? "—"}
+                      sub={
+                        totalTimeSummary.bestTripHour
+                          ? `${totalTimeSummary.bestTripHour.trips} viagens · ${formatHourlyM3(totalTimeSummary.bestTripHour.m3)}`
+                          : undefined
+                      }
+                      icon="local_shipping"
+                    />
+                    <KpiCardCompact
+                      label="Obra destaque"
+                      value={timeSummaries[0]?.obra ?? "—"}
+                      sub={
+                        timeSummaries[0]
+                          ? `${formatHourlyM3(timeSummaries[0].m3)} · ${timeSummaries[0].trips} viagens`
+                          : undefined
+                      }
+                      icon="leaderboard"
+                    />
+                  </div>
+
+                  <ChartCard
+                    title="Produção por hora"
+                    description="m³ solto e viagens por faixa horária de descarga"
+                    height={380}
+                    hasData={hourlyProductionData.length > 0}
+                  >
+                    <ChartHourlyProduction
+                      data={hourlyProductionData}
+                      series={hourlyProductionSeries}
+                    />
+                  </ChartCard>
+
+                  {timeSummaries.length > 1 && (
+                    <div className="rounded border border-border-low bg-surface-container p-4">
+                      <h3 className="text-xs font-black uppercase tracking-widest mb-3">
+                        Comparação entre obras · {formatDate(productionDate)}
+                      </h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-border-low text-on-surface-variant">
+                              <th className="py-2 pr-4 text-left font-black uppercase">Hora</th>
+                              {timeSummaries.map((summary) => (
+                                <th key={summary.obra} className="py-2 pr-4 text-right font-black uppercase">
+                                  {summary.obra}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {totalTimeSummary.hourly.map((hour) => (
+                              <tr key={hour.hour} className="border-b border-border-low/40">
+                                <td className="py-2 pr-4 tnum">{hour.label}</td>
+                                {timeSummaries.map((summary) => {
+                                  const item = summary.hourly.find((row) => row.hour === hour.hour);
+                                  return (
+                                    <td key={summary.obra} className="py-2 pr-4 text-right tnum">
+                                      {item
+                                        ? `${formatHourlyM3(item.m3)} · ${item.trips} viag.`
+                                        : "—"}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    {timeSummaries.map((summary) => {
+                      const diesel = dailyDieselByObra.get(normalizeObraName(summary.obra));
+                      return (
+                        <div
+                          key={summary.obra}
+                          className="rounded border border-border-low bg-surface-container p-4"
+                        >
+                          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <h3 className="text-sm font-black uppercase tracking-widest">
+                                {summary.obra}
+                              </h3>
+                              <p className="mt-1 text-xs text-on-surface-variant">
+                                Produção: {formatHourlyM3(summary.m3)} · Viagens: {summary.trips} ·{" "}
+                                {summary.firstTrip} a {summary.lastTrip}
+                              </p>
+                            </div>
+                            <div className="text-right text-xs text-on-surface-variant">
+                              <p>
+                                {summary.productiveHours > 0
+                                  ? `${formatNumber(summary.productionPerHour, 2)} m³/h`
+                                  : "Dados insuficientes"}
+                              </p>
+                              {diesel !== undefined && <p>{formatLiters(diesel)} diesel</p>}
+                              <p>{summary.aggregates.length} agregado(s)</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <ShiftProductionCard shift={summary.shifts.matutino} />
+                            <ShiftProductionCard shift={summary.shifts.vespertino} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="rounded border border-border-low bg-surface-container p-4">
+                    <h3 className="text-xs font-black uppercase tracking-widest mb-3">
+                      Detalhamento por faixa horária
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-border-low text-on-surface-variant">
+                            {["Hora", "Obra", "Material", "Viagens", "m³ solto", "m³/h estimado"].map((label) => (
+                              <th key={label} className="py-2 pr-4 text-left font-black uppercase">
+                                {label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {timeSummaries.flatMap((summary) =>
+                            summary.hourly.map((hour) => (
+                              <tr
+                                key={`${summary.obra}:${hour.hour}`}
+                                className="border-b border-border-low/40"
+                              >
+                                <td className="py-2 pr-4 tnum">{hour.label}</td>
+                                <td className="py-2 pr-4">{summary.obra}</td>
+                                <td className="py-2 pr-4">
+                                  {hour.materials.join(", ") || "—"}
+                                </td>
+                                <td className="py-2 pr-4 tnum">{hour.trips}</td>
+                                <td className="py-2 pr-4 tnum">{formatHourlyM3(hour.m3)}</td>
+                                <td className="py-2 pr-4 tnum">
+                                  {formatNumber(hour.m3, 2)} m³/h
+                                </td>
+                              </tr>
+                            )),
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {showTechnicalAudit && (
             <>
+              <div className="mt-6 mb-4 flex items-center gap-2 border-t border-border-low pt-5">
+                <Icon name="fact_check" className="text-on-surface-variant" />
+                <h2 className="text-sm font-black uppercase tracking-widest">Auditoria técnica</h2>
+              </div>
               {operationalAlerts.length === 0 ? (
                 <EmptyChartState
                   title="Sem alertas"
@@ -1385,11 +1975,11 @@ function ProducaoConsumoRefactored() {
                 </div>
               )}
 
-              {tripRows.length > 0 && (
+              {obraScopedTripRows.length > 0 && (
                 <div className="mt-5 rounded border border-border-low bg-surface-container overflow-hidden">
                   <div className="p-3 border-b border-border-low">
                     <h3 className="text-xs font-black uppercase tracking-widest">
-                      Viagens importadas ({tripRows.length})
+                      Viagens importadas ({obraScopedTripRows.length})
                     </h3>
                   </div>
                   <div className="overflow-x-auto">
@@ -1399,12 +1989,12 @@ function ProducaoConsumoRefactored() {
                           <th className="px-3 py-2 text-left font-black uppercase">Data</th>
                           <th className="px-3 py-2 text-left font-black uppercase">Agregado</th>
                           <th className="px-3 py-2 text-left font-black uppercase">Obra</th>
-                          <th className="px-3 py-2 text-right font-black uppercase">m³ Comp.</th>
+                          <th className="px-3 py-2 text-right font-black uppercase">m³ compactado</th>
                           <th className="px-3 py-2 text-right font-black uppercase">R$</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {tripRows
+                        {obraScopedTripRows
                           .slice(tripPage * PAGE_SIZE, (tripPage + 1) * PAGE_SIZE)
                           .map((trip) => (
                             <tr key={trip.id} className="border-b border-border-low/40">
@@ -1414,7 +2004,10 @@ function ProducaoConsumoRefactored() {
                               </td>
                               <td className="px-3 py-2">{trip.obra}</td>
                               <td className="px-3 py-2 text-right tnum">
-                                {formatNumber(trip.cubicMCompacted, 1)}
+                                {formatNumber(
+                                  calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied),
+                                  1,
+                                )}
                               </td>
                               <td className="px-3 py-2 text-right tnum">{formatBRL(trip.total)}</td>
                             </tr>
@@ -1424,7 +2017,7 @@ function ProducaoConsumoRefactored() {
                   </div>
                   <div className="flex justify-between items-center p-3 border-t border-border-low">
                     <span className="text-xs text-on-surface-variant">
-                      Página {tripPage + 1} de {Math.ceil(tripRows.length / PAGE_SIZE)}
+                      Página {tripPage + 1} de {Math.ceil(obraScopedTripRows.length / PAGE_SIZE)}
                     </span>
                     <div className="flex gap-2">
                       <Button
@@ -1438,7 +2031,9 @@ function ProducaoConsumoRefactored() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={tripPage >= Math.ceil(tripRows.length / PAGE_SIZE) - 1}
+                        disabled={
+                          tripPage >= Math.ceil(obraScopedTripRows.length / PAGE_SIZE) - 1
+                        }
                         onClick={tripNextPage}
                       >
                         Próxima
@@ -1473,7 +2068,7 @@ function ProducaoConsumoRefactored() {
       )}
 
       {analysesModal.isOpen && (
-        <MyAnalysesDialog
+        <AnalysesDialog
           isOpen={analysesModal.isOpen}
           analyses={analyses}
           selectedIds={analysisSelection.selectedIds}

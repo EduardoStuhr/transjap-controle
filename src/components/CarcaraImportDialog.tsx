@@ -12,6 +12,7 @@ import {
 import { Icon } from "@/components/AppLayout";
 import { ManualPdeDialog } from "@/components/ManualPdeDialog";
 import { createAnalysis } from "@/lib/api/production-consumption";
+import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
 import {
   normalizeDateKey,
   normalizeFleet,
@@ -209,7 +210,7 @@ export function CarcaraImportDialog({
       trips: rawTrips,
       fueling: rawFueling,
       looseM3,
-      compactedM3: looseM3 / (1 + factor),
+      compactedM3: calculateCompactedM3(looseM3, factor),
       liters: rawFueling.reduce((sum, row) => sum + row.liters, 0),
       fuelCost: rawFueling.reduce((sum, row) => sum + row.total, 0),
       pdeRows: rawPde,

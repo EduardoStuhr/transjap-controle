@@ -16,7 +16,7 @@ import { getInventoryAlerts, useInventoryStore } from "@/lib/inventory-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
 import { isTaskCompletedStatus } from "@/lib/task-types";
-import { hasUnread } from "@/lib/task-unread";
+import { getUnreadActivity, hasUnread } from "@/lib/task-unread";
 import { filterNotifiableTasks, filterVisibleTasks } from "@/lib/task-visibility";
 import { sortTasksStable } from "@/lib/task-sort";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
@@ -126,10 +126,11 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
       ),
     [tasks, user],
   );
-  const unreadTaskCount = useMemo(
-    () => filterVisibleTasks(tasks, user).filter((task) => hasUnread(task, user?.name)).length,
+  const unreadTasks = useMemo(
+    () => sortTasksStable(filterVisibleTasks(tasks, user).filter((task) => hasUnread(task, user?.name))),
     [tasks, user],
   );
+  const unreadTaskCount = unreadTasks.length;
   const activeAlertKeys = useMemo(
     () => [
       ...criticalTasks.map((task) => taskAlertKey(task)),
@@ -138,6 +139,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
     [criticalTasks, stockAlerts],
   );
   const unreadAlertCount = activeAlertKeys.filter((key) => !viewedAlertKeys.has(key)).length;
+  const totalNotifCount = unreadTaskCount + unreadAlertCount;
 
   const markAlertsViewed = (keys: readonly string[]) => {
     if (keys.length === 0) return;
@@ -175,6 +177,17 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
     ];
   }, [maintenances, query, tasks, user]);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const openTaskFromNotification = (taskId: string) => {
+    setNotifOpen(false);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("transjap:open-task-id", taskId);
+      if (pathname === "/agenda") {
+        window.dispatchEvent(new CustomEvent("transjap:open-task", { detail: taskId }));
+        return;
+      }
+    }
+    void navigate({ to: "/agenda" });
+  };
   const criticalCount = useTaskStore(
     (snapshot) =>
       filterNotifiableTasks(snapshot.tasks, user).filter(
@@ -193,7 +206,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
       <div className="fixed top-0 left-0 right-0 h-1 bg-primary z-[100]" />
 
       <aside className="hidden md:flex flex-col fixed left-0 top-0 h-full border-r border-border-low bg-surface-low w-64 z-50 shadow-industrial">
-        <SidebarInner pathname={pathname} />
+        <SidebarInner pathname={pathname} unreadTaskCount={unreadTaskCount} />
       </aside>
 
       {open && (
@@ -203,7 +216,11 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
             onClick={() => setOpen(false)}
           />
           <aside className="relative flex flex-col h-full border-r border-border-low bg-surface-low w-72 transition-industrial">
-            <SidebarInner pathname={pathname} onNavigate={() => setOpen(false)} />
+            <SidebarInner
+              pathname={pathname}
+              unreadTaskCount={unreadTaskCount}
+              onNavigate={() => setOpen(false)}
+            />
           </aside>
         </div>
       )}
@@ -283,20 +300,6 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           </div>
 
           <div className="flex items-center gap-3">
-            {unreadTaskCount > 0 && (
-              <button
-                type="button"
-                onClick={() => navigate({ to: "/agenda" })}
-                aria-label={`${unreadTaskCount} ${unreadTaskCount === 1 ? "novidade" : "novidades"} em tarefas`}
-                className="px-2 sm:px-3 py-1.5 rounded text-xs font-black uppercase tracking-wider bg-status-info/15 text-status-info border border-status-info/30 flex items-center gap-1.5"
-              >
-                <Icon name="notifications_active" className="text-sm" />
-                {unreadTaskCount}
-                <span className="hidden lg:inline">
-                  {unreadTaskCount === 1 ? "novidade" : "novidades"}
-                </span>
-              </button>
-            )}
             <div
               className="relative"
               onBlur={(e) => {
@@ -316,27 +319,90 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 aria-label="Central de alertas"
               >
                 <Icon name="notifications" />
-                {unreadAlertCount > 0 && (
-                  <span className="absolute top-2 right-2 w-2 h-2 bg-status-error rounded-full ring-2 ring-surface-container animate-pulse" />
+                {totalNotifCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-status-error text-white rounded-full text-[10px] font-black flex items-center justify-center ring-2 ring-surface-container">
+                    {totalNotifCount > 99 ? "99+" : totalNotifCount}
+                  </span>
                 )}
               </button>
               {notifOpen && (
                 <div className="absolute right-0 top-12 w-80 max-h-96 overflow-y-auto bg-surface-container border border-border-low rounded-lg shadow-industrial-lg z-50 animate-fade-in">
                   <div className="p-3 border-b border-border-low flex items-center justify-between">
-                    <span className="text-xs font-black uppercase tracking-widest">Alertas</span>
+                    <span className="text-xs font-black uppercase tracking-widest">
+                      Notificações
+                      {totalNotifCount > 0 && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded-full bg-status-error/15 text-status-error text-[10px] font-black">
+                          {totalNotifCount}
+                        </span>
+                      )}
+                    </span>
                     <button type="button" onClick={() => setNotifOpen(false)} aria-label="Fechar">
                       <Icon name="close" className="text-on-surface-variant text-base" />
                     </button>
                   </div>
-                  {totalAlertCount === 0 ? (
+                  {unreadTaskCount === 0 && totalAlertCount === 0 ? (
                     <div className="px-4 py-8 text-center">
                       <Icon name="check_circle" className="text-3xl text-on-surface-variant/30" />
                       <p className="text-xs text-on-surface-variant font-medium mt-2">
-                        Nenhum alerta no momento
+                        Nenhuma notificação no momento
                       </p>
                     </div>
                   ) : (
                     <ul className="divide-y divide-border-low">
+                      {unreadTasks.slice(0, 5).map((task) => {
+                        const kinds = getUnreadActivity(task, user?.name).kinds;
+                        const kindLabel = kinds
+                          .map((k) =>
+                            k === "new"
+                              ? "Nova tarefa"
+                              : k === "response"
+                              ? "Nova resposta"
+                              : k === "comment"
+                                ? "Novo comentário"
+                                : k === "update"
+                                  ? "Tarefa atualizada"
+                                  : "Status alterado",
+                          )
+                          .join(" · ");
+                        return (
+                          <li key={`unread-${task.id}`}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => openTaskFromNotification(task.id)}
+                              className="w-full text-left px-4 py-3 hover:bg-surface-highest transition-colors flex items-start gap-3"
+                            >
+                              <Icon
+                                name="notifications_active"
+                                className="text-status-info text-base mt-0.5 flex-shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold text-on-surface truncate">
+                                  {task.title}
+                                </p>
+                                <p className="text-[10px] text-status-info font-bold uppercase tracking-widest mt-0.5">
+                                  {kindLabel}
+                                </p>
+                              </div>
+                            </button>
+                          </li>
+                        );
+                      })}
+                      {unreadTaskCount > 5 && (
+                        <li>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setNotifOpen(false);
+                              navigate({ to: "/agenda" });
+                            }}
+                            className="w-full text-left px-4 py-2 hover:bg-surface-highest transition-colors text-[10px] font-bold text-on-surface-variant uppercase tracking-widest"
+                          >
+                            + {unreadTaskCount - 5} novidade{unreadTaskCount - 5 !== 1 ? "s" : ""} em tarefas
+                          </button>
+                        </li>
+                      )}
                       {criticalTasks.map((task) => {
                         const urgency = getUrgencyLevel(task.deadline);
                         return (
@@ -351,7 +417,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                               }}
                               className="w-full text-left px-4 py-3 hover:bg-surface-highest transition-colors flex items-start gap-3"
                             >
-                              <Icon name="report" className="text-status-error text-base mt-0.5" />
+                              <Icon name="report" className="text-status-error text-base mt-0.5 flex-shrink-0" />
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-bold text-on-surface truncate">
                                   {task.title}
@@ -378,7 +444,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                           >
                             <Icon
                               name="inventory_2"
-                              className={`text-base mt-0.5 ${alert.tone === "error" ? "text-status-error" : "text-status-warning"}`}
+                              className={`text-base mt-0.5 flex-shrink-0 ${alert.tone === "error" ? "text-status-error" : "text-status-warning"}`}
                             />
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-bold text-on-surface truncate">
@@ -529,7 +595,15 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   );
 }
 
-function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+function SidebarInner({
+  pathname,
+  unreadTaskCount,
+  onNavigate,
+}: {
+  pathname: string;
+  unreadTaskCount: number;
+  onNavigate?: () => void;
+}) {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   return (
@@ -560,7 +634,15 @@ function SidebarInner({ pathname, onNavigate }: { pathname: string; onNavigate?:
                 name={item.icon}
                 className={active ? "text-primary" : "group-hover:text-primary transition-colors"}
               />
-              <span className="text-xs uppercase tracking-widest">{item.label}</span>
+              <span className="flex-1 text-xs uppercase tracking-widest">{item.label}</span>
+              {item.to === "/agenda" && unreadTaskCount > 0 && (
+                <span
+                  aria-label={`${unreadTaskCount} ${unreadTaskCount === 1 ? "novidade não lida" : "novidades não lidas"}`}
+                  className="min-w-[20px] h-5 px-1.5 rounded-full bg-status-error text-white text-[10px] font-black flex items-center justify-center"
+                >
+                  {unreadTaskCount > 99 ? "99+" : unreadTaskCount}
+                </span>
+              )}
             </Link>
           );
         })}

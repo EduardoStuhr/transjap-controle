@@ -91,7 +91,13 @@ export function TaskDetailsPanel({
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const [sendingResponse, setSendingResponse] = useState(false);
 
-  const recipients = useMemo(() => (task ? resolveRecipients(task.assignedTo) : []), [task]);
+  const recipients = useMemo(
+    () =>
+      task
+        ? resolveRecipients(task.assignedTo).filter((recipient) => recipient !== task.createdBy)
+        : [],
+    [task],
+  );
   const isRecipient = Boolean(user && recipients.includes(user.name));
   const isCreator = Boolean(
     user && task && (task.createdBy === user.name || task.createdById === user.id),

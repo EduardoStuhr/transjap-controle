@@ -76,13 +76,21 @@ export function getTaskViewedAt(task: TaskRecord, user: AuthUser | null): string
 
 export function getTaskViewedAtForRecipient(task: TaskRecord, recipientName: string): string {
   const recipient = findUserByName(recipientName);
+  if (
+    task.createdBy === recipientName ||
+    Boolean(recipient && task.createdById === recipient.id)
+  ) {
+    return "";
+  }
   return (recipient ? task.viewedBy[recipient.id] : "") || task.viewedBy[recipientName] || "";
 }
 
 export function hasUserViewedTask(task: TaskRecord, user: AuthUser | null): boolean {
   if (!user) return false;
-  if (getTaskViewedAt(task, user)) return true;
-  return Object.keys(task.viewedBy).length === 0 && task.viewed;
+  if (getTaskCreatorIds(task).includes(user.id) || getTaskCreatorNames(task).includes(user.name)) {
+    return false;
+  }
+  return Boolean(getTaskViewedAt(task, user));
 }
 
 export function isTaskUnreadForUser(task: TaskRecord, user: AuthUser | null): boolean {

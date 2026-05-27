@@ -264,7 +264,7 @@ function useLocalInventoryMigration(remoteData: InventoryData | undefined, enabl
           : updateInventoryMovement({ data: { ...movement, syncStatus: "synced" } });
       }),
     ])
-      .then(() => queryClient.invalidateQueries({ queryKey: QK }))
+      .then(() => queryClient.refetchQueries({ queryKey: QK, type: "active" }))
       .catch(() => {
         localMigrationStarted = false;
       });
@@ -543,7 +543,7 @@ export function useInventoryActions() {
     },
 
     async syncPending() {
-      await queryClient.invalidateQueries({ queryKey: QK });
+      await queryClient.refetchQueries({ queryKey: QK, type: "active" });
       const { currentRole: _storedRole, ...data } = getCachedState(queryClient);
       writeStorage({ ...data, offlineQueue: [] });
     },

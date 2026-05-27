@@ -94,6 +94,22 @@ export const taskViews = sqliteTable(
   }),
 );
 
+export const taskNotificationReads = sqliteTable(
+  "task_notification_reads",
+  {
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    userName: text("user_name").notNull(),
+    readAt: text("read_at").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.taskId, table.userId] }),
+    userIdx: index("idx_task_notification_reads_user_id").on(table.userId),
+  }),
+);
+
 export const pushSubscriptions = sqliteTable(
   "push_subscriptions",
   {

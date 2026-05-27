@@ -421,7 +421,7 @@ function useLocalMaintenanceMigration(remoteState: MaintenanceState | undefined,
       .then(() => {
         writeStorage(remoteState);
         localMigrationStarted = false;
-        return queryClient.invalidateQueries({ queryKey: QK });
+        return queryClient.refetchQueries({ queryKey: QK, type: "active" });
       })
       .catch(() => {
         localMigrationStarted = false;

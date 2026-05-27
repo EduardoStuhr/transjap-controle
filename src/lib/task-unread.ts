@@ -1,6 +1,6 @@
 import type { TaskRecord, TimelineEvent } from "@/lib/task-types";
 
-export type UnreadKind = "response" | "comment" | "status";
+export type UnreadKind = "new" | "response" | "comment" | "status" | "update";
 
 export type UnreadActivity = {
   kinds: UnreadKind[];
@@ -51,9 +51,19 @@ function isStatusChangeEvent(event: TimelineEvent): boolean {
   );
 }
 
+function isUpdateEvent(event: TimelineEvent): boolean {
+  const action = event.action
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
+  return action.includes("tarefa atualizada") || action.includes("atualizou a tarefa");
+}
+
 /**
- * Returns the activity recorded after this user's most recent task view.
- * Activity authored by the same user is not considered unread for them.
+ * Returns activity recorded after this participant last opened the task.
+ * Reading notifications is separate from recipient visualization, so the creator
+ * may clear response/comment alerts without being counted in the eye indicator.
  */
 export function getUnreadActivity(
   task: TaskRecord,
@@ -62,14 +72,15 @@ export function getUnreadActivity(
   const empty: UnreadActivity = { kinds: [], count: 0 };
   if (!userName) return empty;
 
-  const isInvolved =
-    task.createdBy === userName ||
-    task.assignedTo.includes(userName) ||
-    task.assignedTo.includes("Todos");
-  if (!isInvolved) return empty;
+  const isCreator = task.createdBy === userName;
+  const isRecipient = task.assignedTo.includes(userName) || task.assignedTo.includes("Todos");
+  if (!isCreator && !isRecipient) return empty;
 
-  const lastSeenMs = timestampValue(task.viewedBy?.[userName]);
+  const lastSeenMs = timestampValue(
+    task.notificationReadBy?.[userName] || task.viewedBy?.[userName],
+  );
   const happenedAfterLastView = (timestamp: string) => timestampValue(timestamp) > lastSeenMs;
+  const isNewTask = isRecipient && !isCreator && lastSeenMs === 0;
 
   const newResponses = (task.responses ?? []).filter(
     (response) =>
@@ -87,17 +98,30 @@ export function getUnreadActivity(
       isStatusChangeEvent(event) &&
       happenedAfterLastView(event.timestamp),
   );
+  const taskUpdated = (task.timeline ?? []).some(
+    (event) =>
+      event.actor !== userName &&
+      isUpdateEvent(event) &&
+      happenedAfterLastView(event.timestamp),
+  );
 
   const kinds: UnreadKind[] = [];
+  if (isNewTask) kinds.push("new");
   if (newResponses.length > 0) kinds.push("response");
   if (newComments.length > 0) kinds.push("comment");
   if (statusChanged) kinds.push("status");
+  if (taskUpdated) kinds.push("update");
 
   return {
     kinds,
     lastResponseAt: newestTimestamp(newResponses),
     lastCommentAt: newestTimestamp(newComments),
-    count: newResponses.length + newComments.length + (statusChanged ? 1 : 0),
+    count:
+      (isNewTask ? 1 : 0) +
+      newResponses.length +
+      newComments.length +
+      (statusChanged ? 1 : 0) +
+      (taskUpdated ? 1 : 0),
   };
 }
 

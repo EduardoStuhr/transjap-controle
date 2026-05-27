@@ -11,6 +11,7 @@ import { getUnreadActivity, type UnreadKind } from "@/lib/task-unread";
 import {
   filterVisibleTasks,
   getTaskStatusForUser,
+  getTaskViewedAtForRecipient,
   getTaskVisibilityLabel,
   isTaskUnreadForUser,
 } from "@/lib/task-visibility";
@@ -23,7 +24,7 @@ import {
 } from "@/lib/task-types";
 import type { TaskModalData } from "@/components/TaskModal";
 import { useEquipmentStore } from "@/lib/equipment-store";
-import { formatEquipmentReference } from "@/lib/operational-options";
+import { formatEquipmentReference, resolveRecipients } from "@/lib/operational-options";
 
 const LazyTaskModal = lazy(() =>
   import("@/components/TaskModal").then((module) => ({ default: module.TaskModal })),
@@ -150,6 +151,18 @@ function Agenda() {
     if (!taskId || !visibleTasks.some((task) => task.id === taskId)) return;
     window.sessionStorage.removeItem("transjap:open-task-id");
     openTaskDetails(taskId);
+  }, [openTaskDetails, visibleTasks]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleNotificationOpen = (event: Event) => {
+      const taskId = (event as CustomEvent<string>).detail;
+      if (!taskId || !visibleTasks.some((task) => task.id === taskId)) return;
+      window.sessionStorage.removeItem("transjap:open-task-id");
+      openTaskDetails(taskId);
+    };
+    window.addEventListener("transjap:open-task", handleNotificationOpen);
+    return () => window.removeEventListener("transjap:open-task", handleNotificationOpen);
   }, [openTaskDetails, visibleTasks]);
 
   useEffect(() => {
@@ -389,6 +402,66 @@ const PendingRequestCard = memo(function PendingRequestCard({
   );
 });
 
+function formatRecipientViewedAt(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return value;
+
+  return timestamp.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function RecipientViewedDots({ task }: { task: TaskRecord }) {
+  const recipients = Array.from(
+    new Set(
+      resolveRecipients(task.assignedTo)
+        .map((name) => name.trim())
+        .filter((name) => Boolean(name) && name !== task.createdBy),
+    ),
+  );
+  if (recipients.length === 0) return null;
+
+  const viewedEntries = recipients
+    .map((name) => ({ name, seenAt: getTaskViewedAtForRecipient(task, name) }))
+    .filter((entry) => Boolean(entry.seenAt));
+  const pendingRecipients = recipients.filter(
+    (name) => !viewedEntries.some((entry) => entry.name === name),
+  );
+  const viewedCount = viewedEntries.length;
+  const complete = viewedCount === recipients.length;
+  const label = [
+    "Visualizado por:",
+    ...(viewedEntries.length
+      ? viewedEntries.map(
+          (entry) => `- ${entry.name} (${formatRecipientViewedAt(entry.seenAt)})`,
+        )
+      : ["- Ninguém"]),
+    "",
+    "Não visualizaram:",
+    ...(pendingRecipients.length ? pendingRecipients.map((name) => `- ${name}`) : ["- Ninguém"]),
+  ].join("\n");
+
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className={`inline-flex h-5 items-center justify-center gap-1 rounded-full px-1.5 text-[10px] font-bold ${
+        complete
+          ? "bg-status-success/15 text-status-success"
+          : viewedCount > 0
+            ? "bg-status-warning/15 text-status-warning"
+          : "bg-surface-bright/30 text-on-surface-variant"
+      }`}
+    >
+      <Icon name={viewedCount > 0 ? "visibility" : "visibility_off"} className="text-xs" />
+      {viewedCount}/{recipients.length}
+    </span>
+  );
+}
+
 function VirtualTaskList({
   tasks,
   onOpen,
@@ -460,8 +533,6 @@ const TaskListItem = memo(function TaskListItem({
     ? formatTaskCompletionLabel(task)
     : null;
   const urgency = !completionLabel && task.deadline ? getUrgencyLevel(task.deadline) : null;
-  const displayStatus = getTaskStatusForUser(task, user);
-  const config = TASK_STATUS_CONFIG[displayStatus];
 
   return (
     <button
@@ -472,8 +543,8 @@ const TaskListItem = memo(function TaskListItem({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-2">
-            <Icon name={config.icon} className={`text-lg ${config.color.split(" ")[1]}`} />
             <span className="text-xs font-mono text-on-surface-variant font-bold">#{task.id}</span>
+            <RecipientViewedDots task={task} />
             <UnreadActivityBadges task={task} user={user} />
           </div>
           <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors truncate">
@@ -587,7 +658,10 @@ const TaskGridCard = memo(function TaskGridCard({
         )}
       </div>
       <div className="pt-3 border-t border-border-low flex items-center justify-between">
-        <span className="text-[10px] font-mono text-on-surface-variant">#{task.id}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-on-surface-variant">#{task.id}</span>
+          <RecipientViewedDots task={task} />
+        </div>
         <div className="flex items-center gap-2">
           <div className="px-2 py-1 rounded text-[10px] font-bold bg-surface-high text-on-surface-variant flex items-center gap-1">
             <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm" />
@@ -619,6 +693,11 @@ function TaskBadges({ task, user }: { task: TaskRecord; user: AuthUser | null })
 }
 
 const UNREAD_BADGES: Record<UnreadKind, { icon: string; label: string; className: string }> = {
+  new: {
+    icon: "fiber_new",
+    label: "Nova tarefa",
+    className: "bg-status-warning/15 text-status-warning border-status-warning/30",
+  },
   response: {
     icon: "reply",
     label: "Nova resposta",
@@ -633,6 +712,11 @@ const UNREAD_BADGES: Record<UnreadKind, { icon: string; label: string; className
     icon: "sync_alt",
     label: "Status alterado",
     className: "bg-status-warning/15 text-status-warning border-status-warning/30",
+  },
+  update: {
+    icon: "edit_note",
+    label: "Tarefa atualizada",
+    className: "bg-status-info/15 text-status-info border-status-info/30",
   },
 };
 

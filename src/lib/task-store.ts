@@ -106,6 +106,32 @@ function normalizeViewedBy(value: unknown): Record<string, string> {
   return Object.fromEntries(entries);
 }
 
+/**
+ * A tarefa e considerada vista quando ao menos um destinatario registrou visualizacao.
+ * Visualizacoes do criador ou de usuarios sem atribuicao nao participam do agregado.
+ */
+function computeViewedByRecipients(task: {
+  assignedTo?: string[];
+  responsibleIds?: string[];
+  createdBy?: string;
+  createdById?: string;
+  viewedBy?: Record<string, string>;
+}): boolean {
+  const viewedBy = task.viewedBy ?? {};
+  const recipientNames = (task.assignedTo ?? []).filter((name) => name !== task.createdBy);
+  if (recipientNames.some((name) => Boolean(viewedBy[name]))) return true;
+
+  return resolveResponsibleUsers([
+    ...recipientNames,
+    ...(task.responsibleIds ?? []),
+  ]).some(
+    (recipient) =>
+      recipient.id !== task.createdById &&
+      recipient.name !== task.createdBy &&
+      Boolean(viewedBy[recipient.id] || viewedBy[recipient.name]),
+  );
+}
+
 function normalizeResponses(value: unknown): TaskResponse[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => {
@@ -160,6 +186,8 @@ function normalizeTask(
     : Array.isArray(source.responsible_ids)
       ? source.responsible_ids.filter((id): id is string => typeof id === "string")
       : resolveResponsibleIds(assignedTo);
+  const viewedBy = normalizeViewedBy(task.viewedBy);
+  const notificationReadBy = normalizeViewedBy(task.notificationReadBy);
   const status = normalizeTaskStatus(task.status);
   const completedAt =
     typeof task.completedAt === "string" && task.completedAt
@@ -191,7 +219,8 @@ function normalizeTask(
       timestamp: comment.timestamp || createdAt,
     })),
     responses: normalizeResponses(task.responses),
-    viewedBy: normalizeViewedBy(task.viewedBy),
+    viewedBy,
+    notificationReadBy,
     timeline: (task.timeline || []).map((event) => ({
       id: event.id || newId("EV"),
       timestamp: event.timestamp || createdAt,
@@ -203,7 +232,13 @@ function normalizeTask(
     updatedAt,
     completedAt,
     completedBy: typeof task.completedBy === "string" ? task.completedBy : "",
-    viewed: Boolean(task.viewed),
+    viewed: computeViewedByRecipients({
+      assignedTo,
+      responsibleIds,
+      createdBy,
+      createdById,
+      viewedBy,
+    }),
   };
 }
 
@@ -295,20 +330,35 @@ function userHasViewed(task: TaskRecord, user: NonNullable<ReturnType<typeof get
   return Boolean(task.viewedBy[user.id] || task.viewedBy[user.name]);
 }
 
-function allRecipientsViewed(task: TaskRecord, viewedBy: Record<string, string>) {
+function userIsRecipient(task: TaskRecord, user: NonNullable<ReturnType<typeof getCurrentUser>>) {
+  const isCreator =
+    Boolean(task.createdById && task.createdById === user.id) ||
+    Boolean(task.createdBy && task.createdBy === user.name);
+  if (isCreator) return false;
+
+  if (task.assignedTo.includes(user.name) || task.responsibleIds.includes(user.id)) return true;
+
   const recipients = resolveResponsibleUsers([...task.assignedTo, ...task.responsibleIds]);
-  if (recipients.length === 0) return false;
-  return recipients.every((recipient) =>
-    Boolean(viewedBy[recipient.id] || viewedBy[recipient.name]),
+  return recipients.some(
+    (recipient) => recipient.id === user.id || recipient.name === user.name,
   );
 }
 
 function withViewedByUser(task: TaskRecord, user: NonNullable<ReturnType<typeof getCurrentUser>>) {
   const viewedAt = nowIso();
+  const notificationReadBy = {
+    ...task.notificationReadBy,
+    [user.id]: viewedAt,
+    [user.name]: viewedAt,
+  };
+  if (!userIsRecipient(task, user)) {
+    return { changed: true, task: { ...task, notificationReadBy } };
+  }
+
   const alreadyViewed = userHasViewed(task, user);
   const viewedBy = { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
-  const fullyViewed = allRecipientsViewed(task, viewedBy);
-  const shouldFlipStatus = task.status === "Não visualizado" && fullyViewed;
+  const viewed = computeViewedByRecipients({ ...task, viewedBy });
+  const shouldFlipStatus = task.status === "Não visualizado" && !alreadyViewed;
 
   return {
     changed: true,
@@ -316,7 +366,8 @@ function withViewedByUser(task: TaskRecord, user: NonNullable<ReturnType<typeof 
       ...task,
       status: shouldFlipStatus ? "Visualizado" : task.status,
       viewedBy,
-      viewed: fullyViewed,
+      notificationReadBy,
+      viewed,
       timeline: alreadyViewed
         ? task.timeline
         : [
@@ -358,6 +409,7 @@ function taskFromInput(input: TaskInput): TaskRecord {
     comments: [],
     responses: [],
     viewedBy: {},
+    notificationReadBy: {},
     timeline: [
       {
         id: newId("EV"),
@@ -478,7 +530,7 @@ function useLocalTaskMigration(remoteState: TaskState | undefined, enabled: bool
       .then(() => {
         writeStorage(remoteState);
         localMigrationStarted = false;
-        return queryClient.invalidateQueries({ queryKey: QK });
+        return queryClient.refetchQueries({ queryKey: QK, type: "active" });
       })
       .catch(() => {
         localMigrationStarted = false;
@@ -613,7 +665,7 @@ export function useTaskActions() {
         equipment: input.equipment.trim(),
         assignedTo: existing.assignedTo,
         responsibleIds: existing.responsibleIds,
-        sector: input.sector.trim(),
+        sector: existing.sector,
         priority: input.priority,
         deadline: input.deadline,
         status: nextStatus,
@@ -636,7 +688,7 @@ export function useTaskActions() {
           nextStatus,
           getCurrentUser()?.name || "Sistema",
         ),
-        viewed: existing.viewed,
+        viewed: computeViewedByRecipients(existing),
       };
 
       return saveTask("task", task);
@@ -649,7 +701,8 @@ export function useTaskActions() {
       if (!existing || !user) return existing ?? null;
 
       const { task, changed } = withViewedByUser(existing, user);
-      if (changed) upsertCachedTask("task", task);
+      if (!changed) return existing;
+      upsertCachedTask("task", task);
       try {
         const result = await viewedMutation.mutateAsync(id);
         upsertCachedTask(result.kind, normalizeTask(result.task));
@@ -754,7 +807,7 @@ export function useTaskActions() {
           ...(statusChanged ? [statusEvent(existing.status, finalStatus, user.name)] : []),
           ...existing.timeline,
         ],
-        viewed: existing.viewed,
+        viewed: computeViewedByRecipients(existing),
         completedAt: completionTimestampForStatus(
           existing.completedAt,
           existing.status,
@@ -842,7 +895,7 @@ export function useTaskActions() {
       const task: TaskRecord = {
         ...existing,
         status: nextStatus,
-        viewed: existing.viewed,
+        viewed: computeViewedByRecipients(existing),
         completedAt: completionTimestampForStatus(
           existing.completedAt,
           existing.status,

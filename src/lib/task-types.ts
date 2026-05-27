@@ -66,6 +66,7 @@ export type TaskRecord = {
   comments: TaskComment[];
   responses: TaskResponse[];
   viewedBy: Record<string, string>;
+  notificationReadBy: Record<string, string>;
   timeline: TimelineEvent[];
   createdAt: string;
   updatedAt: string;

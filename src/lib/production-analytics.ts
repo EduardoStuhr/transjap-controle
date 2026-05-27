@@ -1,5 +1,6 @@
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import type { DbEquipmentDailyPart, DbFueling, DbProductionAnalysis, DbTrip } from "@/db/schema";
+import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
 
 export const AGGREGATE_TRIP_PRICE = 1.65;
 
@@ -253,7 +254,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function compacted(row: ProductionTripLike) {
-  return row.cubicMCompacted || safeDivide(row.cubicMLoose, 1 + row.swellFactorApplied);
+  return calculateCompactedM3(row.cubicMLoose, row.swellFactorApplied);
 }
 
 function shortDate(key: string) {
@@ -338,6 +339,13 @@ function rowMatchesFilters(
   }
   return true;
 }
+
+function normalizeObra(obra: string | null | undefined): string {
+  if (!obra) return "";
+  return obra.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+export { normalizeObra };
 
 export function normalizeAggregatePrefix(value: unknown): string {
   const text = String(value ?? "")
@@ -750,7 +758,6 @@ export function buildAccumulatedMetrics({
     obraCount: new Set([
       ...analyses.map((row) => row.obra).filter(Boolean),
       ...trips.map((row) => row.obra).filter(Boolean),
-      ...fueling.map((row) => row.obra).filter(Boolean),
     ]).size,
     materialCount: new Set([
       ...analyses.map((row) => row.material).filter(Boolean),
@@ -1237,11 +1244,7 @@ export function buildProductionAnalytics({
       scopes: ["daily", "weekly", "monthly", "worksite", "global"],
       obras: [
         ...new Set(
-          [
-            ...scopedAnalyses.map((row) => row.obra),
-            ...filteredTrips.map((row) => row.obra),
-            ...filteredFueling.map((row) => row.obra),
-          ].filter(Boolean),
+          filteredTrips.map((row) => row.obra).filter(Boolean),
         ),
       ].sort(),
       materials: [

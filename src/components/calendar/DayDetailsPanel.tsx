@@ -5,6 +5,7 @@ import type { DbReminder } from "@/db/schema";
 import { Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { ReminderDialog } from "@/components/calendar/ReminderDialog";
+import { updateCachedReminders } from "@/components/calendar/reminder-query-cache";
 import {
   CALENDAR_TYPE_META,
   priorityMeta,
@@ -18,6 +19,7 @@ type Props = {
   reminders: DbReminder[];
   userId: string;
   focusedItemId?: string | null;
+  onRemindersChanged: () => Promise<unknown>;
   onClose: () => void;
   onOpenTask: (taskId: string) => void;
   onCompleteTask: (taskId: string) => void;
@@ -111,6 +113,7 @@ export function DayDetailsPanel({
   reminders,
   userId,
   focusedItemId,
+  onRemindersChanged,
   onClose,
   onOpenTask,
   onCompleteTask,
@@ -120,16 +123,6 @@ export function DayDetailsPanel({
   const queryClient = useQueryClient();
   const [activeItemId, setActiveItemId] = useState<string | null>(focusedItemId ?? null);
   const [editingReminder, setEditingReminder] = useState<DbReminder | null>(null);
-
-  const refreshReminders = () => {
-    void queryClient.invalidateQueries({ queryKey: ["reminders"] });
-  };
-  const updateCachedReminders = (update: (rows: DbReminder[]) => DbReminder[]) => {
-    queryClient.setQueriesData<DbReminder[]>({ queryKey: ["reminders"] }, (current) =>
-      current ? update(current) : current,
-    );
-    refreshReminders();
-  };
 
   useEffect(() => {
     setActiveItemId(focusedItemId ?? null);
@@ -152,8 +145,8 @@ export function DayDetailsPanel({
           },
         },
       }),
-    onSuccess: (_, item) => {
-      updateCachedReminders((rows) =>
+    onSuccess: async (_, item) => {
+      updateCachedReminders(queryClient, (rows) =>
         rows.map((row) =>
           row.id === item.sourceId
             ? {
@@ -165,6 +158,7 @@ export function DayDetailsPanel({
             : row,
         ),
       );
+      await onRemindersChanged();
     },
   });
 
@@ -176,9 +170,10 @@ export function DayDetailsPanel({
           id: item.sourceId,
         },
       }),
-    onSuccess: (_, item) => {
-      updateCachedReminders((rows) => rows.filter((row) => row.id !== item.sourceId));
+    onSuccess: async (_, item) => {
+      updateCachedReminders(queryClient, (rows) => rows.filter((row) => row.id !== item.sourceId));
       toast.success("Item removido");
+      await onRemindersChanged();
     },
   });
 
@@ -363,6 +358,7 @@ export function DayDetailsPanel({
           userId={userId}
           reminder={editingReminder}
           kind={editingReminder.kind === "event" ? "event" : "reminder"}
+          onRemindersChanged={onRemindersChanged}
         />
       )}
     </>

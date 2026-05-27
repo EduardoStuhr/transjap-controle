@@ -3,9 +3,10 @@
  * Gerencia estado, cálculos e persistência
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DbProductionAnalysis, DbTrip, DbFueling, DbEquipmentDailyPart } from "@/db/schema";
 import type { DashboardFilterState } from "@/lib/production-consumption-types";
+import { obraMatches } from "@/lib/production-consumption-utils";
 
 const DEFAULT_FILTERS: DashboardFilterState = {
   dateFrom: "",
@@ -19,16 +20,6 @@ const DEFAULT_FILTERS: DashboardFilterState = {
 
 function defaultFilters(): DashboardFilterState {
   return { ...DEFAULT_FILTERS };
-}
-
-function readJsonArray(value: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
 }
 
 function readStoredFilters(storageKey: string): DashboardFilterState {
@@ -84,38 +75,34 @@ export function useDashboardFilters(storageKey = "dashboard_filters") {
 
 /**
  * Hook para gerenciar seleção de análises
- * Persiste em localStorage automaticamente
+ * Inicia cada abertura do modulo com todas as analises compartilhadas selecionadas.
+ * Escolhas manuais continuam valendo enquanto o usuario permanece na pagina.
  */
-export function useAnalysisSelection(
-  analyses: DbProductionAnalysis[],
-  storageKey = "dashboard_selectedAnalysisIds",
-) {
-  const [selectedIds, setSelectedIds] = useState<string[]>(() => {
-    if (typeof window === "undefined") return [];
-    const ids = readJsonArray(localStorage.getItem(storageKey));
-    if (ids.length > 0) {
-      const validIds = ids.filter((id) => analyses.some((a) => a.id === id));
-      if (validIds.length > 0) return validIds;
-    }
-    // Fallback to first analysis if none stored or all are invalid
-    return analyses.length > 0 ? [analyses[0].id] : [];
-  });
-
-  // Persist whenever selectedIds changes
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(storageKey, JSON.stringify(selectedIds));
-    }
-  }, [selectedIds, storageKey]);
+export function useAnalysisSelection(analyses: DbProductionAnalysis[]) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const previousAvailableIdsRef = useRef<string[]>([]);
+  const hasLoadedAnalysesRef = useRef(false);
 
   useEffect(() => {
+    const allIds = analyses.map((analysis) => analysis.id);
+    const previousAvailableIds = previousAvailableIdsRef.current;
+    const isInitialSelection = !hasLoadedAnalysesRef.current;
+
     setSelectedIds((current) => {
       if (analyses.length === 0) return current.length ? [] : current;
-      const availableIds = new Set(analyses.map((analysis) => analysis.id));
+      const availableIds = new Set(allIds);
       const kept = current.filter((id) => availableIds.has(id));
+      if (isInitialSelection) return allIds;
+      const allPreviouslySelected =
+        previousAvailableIds.length > 0 &&
+        previousAvailableIds.every((id) => current.includes(id));
+      if (allPreviouslySelected) return allIds;
       if (kept.length > 0) return kept.length === current.length ? current : kept;
-      return [analyses[0].id];
+      return allIds;
     });
+
+    previousAvailableIdsRef.current = allIds;
+    if (allIds.length > 0) hasLoadedAnalysesRef.current = true;
   }, [analyses]);
 
   const updateSelectedIds = useCallback(
@@ -170,7 +157,7 @@ export function useFilteredData(
     return trips.filter((row) => {
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
-      if (filters.obra !== "all" && row.obra !== filters.obra) return false;
+      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
       if (filters.material !== "all" && row.material !== filters.material) return false;
       if (filters.aggregate !== "all" && equipmentKey(row) !== filters.aggregate) return false;
       if (filters.analysisType === "production-only" && row.cubicMLoose <= 0) return false;
@@ -182,7 +169,7 @@ export function useFilteredData(
     return fueling.filter((row) => {
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
-      if (filters.obra !== "all" && row.obra !== filters.obra) return false;
+      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
       if (filters.equipment !== "all" && equipmentKey(row) !== filters.equipment) return false;
       if (filters.analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
@@ -193,7 +180,7 @@ export function useFilteredData(
     return dailyParts.filter((row) => {
       if (filters.dateFrom && row.date < filters.dateFrom) return false;
       if (filters.dateTo && row.date > filters.dateTo) return false;
-      if (filters.obra !== "all" && row.obra && row.obra !== filters.obra) return false;
+      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
       if (
         filters.equipment !== "all" &&
         row.fleet !== filters.equipment &&
@@ -224,10 +211,10 @@ export function useDashboardTabs(storageKey = "dashboard_activeTab") {
     { id: "trucks", label: "Agregados" },
     { id: "equipment", label: "Equipamentos Próprios" },
     { id: "efficiency", label: "Eficiência" },
+    { id: "hours", label: "Produção por Hora" },
     { id: "financial", label: "Financeiro" },
     { id: "accumulated", label: "Acumulado" },
     { id: "comparison", label: "Comparativo" },
-    { id: "audit", label: "Auditoria" },
     { id: "history", label: "Histórico" },
     { id: "crossAudit", label: "Cruzamento" },
     { id: "data", label: "Dados" },

@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, gte, lte } from "drizzle-orm";
+import { and, asc, gte, lte } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { getOptionalD1 } from "@/lib/cf-env";
 import { fuelAttribution } from "@/db/schema";
@@ -13,6 +14,27 @@ type FuelAttributionFilters = {
   fleet?: string;
   analysisIds?: string[];
 };
+
+const D1_SELECT_PAGE_SIZE = 2_000;
+
+async function paginatedSelect<T>(
+  query: (limit: number, offset: number) => Promise<T[]>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  let offset = 0;
+  for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+    const page = await query(D1_SELECT_PAGE_SIZE, offset);
+    rows.push(...page);
+    if (page.length < D1_SELECT_PAGE_SIZE) break;
+    offset += D1_SELECT_PAGE_SIZE;
+  }
+  if (rows.length > 20_000) {
+    console.warn(
+      `[paginatedSelect] query retornou ${rows.length} linhas - confira se filtro esta correto`,
+    );
+  }
+  return rows;
+}
 
 function sourceBelongsToAnalyses(sourceFuelingId: string | null, analysisIds: Set<string>) {
   if (!sourceFuelingId) return false;
@@ -44,12 +66,27 @@ export const listFuelAttributionFn = createServerFn({ method: "POST" })
     const d1 = getOptionalD1();
     if (!d1) return [];
     const db = getDb(d1);
-    const conditions = [];
+    const conditions: SQL[] = [];
     if (data?.dateFrom) conditions.push(gte(fuelAttribution.date, data.dateFrom));
     if (data?.dateTo) conditions.push(lte(fuelAttribution.date, data.dateTo));
-    let rows = conditions.length
-      ? await db.select().from(fuelAttribution).where(and(...conditions)).all()
-      : await db.select().from(fuelAttribution).all();
+    let rows = await paginatedSelect<DbFuelAttribution>((limit, offset) =>
+      conditions.length
+        ? db
+            .select()
+            .from(fuelAttribution)
+            .where(and(...conditions))
+            .orderBy(asc(fuelAttribution.id))
+            .limit(limit)
+            .offset(offset)
+            .all()
+        : db
+            .select()
+            .from(fuelAttribution)
+            .orderBy(asc(fuelAttribution.id))
+            .limit(limit)
+            .offset(offset)
+            .all(),
+    );
     const analysisIds = new Set(data?.analysisIds?.filter(Boolean) ?? []);
     if (analysisIds.size > 0) {
       rows = rows.filter((row) => sourceBelongsToAnalyses(row.sourceFuelingId, analysisIds));

@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { upsertCachedReminder } from "@/components/calendar/reminder-query-cache";
 import { createReminder, updateReminder } from "@/lib/api/reminders";
 
 type CalendarPersonalKind = "reminder" | "event";
@@ -25,6 +26,7 @@ type Props = {
   userId: string;
   kind?: CalendarPersonalKind;
   reminder?: DbReminder | null;
+  onRemindersChanged: () => Promise<unknown>;
 };
 
 function inferKind(reminder: DbReminder | null | undefined, fallback: CalendarPersonalKind) {
@@ -64,6 +66,7 @@ export function ReminderDialog({
   userId,
   kind = "reminder",
   reminder,
+  onRemindersChanged,
 }: Props) {
   const resolvedKind = useMemo(() => inferKind(reminder, kind), [kind, reminder]);
   const queryClient = useQueryClient();
@@ -90,21 +93,6 @@ export function ReminderDialog({
     );
   }, [initialDate, kind, open, reminder]);
 
-  const refreshReminders = () => {
-    void queryClient.invalidateQueries({ queryKey: ["reminders"] });
-  };
-  const upsertCachedReminder = (nextReminder: DbReminder) => {
-    queryClient.setQueriesData<DbReminder[]>({ queryKey: ["reminders"] }, (current) =>
-      current
-        ? [
-            nextReminder,
-            ...current.filter((currentReminder) => currentReminder.id !== nextReminder.id),
-          ]
-        : current,
-    );
-    refreshReminders();
-  };
-
   const createMutation = useMutation({
     mutationFn: () =>
       createReminder({
@@ -122,10 +110,11 @@ export function ReminderDialog({
           status: form.status,
         },
       }),
-    onSuccess: (created) => {
-      upsertCachedReminder(created);
+    onSuccess: async (created) => {
+      upsertCachedReminder(queryClient, created);
       toast.success(isEvent ? "Evento criado" : "Lembrete criado");
       onClose();
+      await onRemindersChanged();
     },
     onError: (error) => {
       toast.error(
@@ -158,9 +147,9 @@ export function ReminderDialog({
           },
         },
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
       if (reminder) {
-        upsertCachedReminder({
+        upsertCachedReminder(queryClient, {
           ...reminder,
           kind: resolvedKind,
           title: form.title.trim(),
@@ -175,11 +164,10 @@ export function ReminderDialog({
           completed: form.status === "concluído",
           updatedAt: new Date().toISOString(),
         });
-      } else {
-        refreshReminders();
       }
       toast.success(isEvent ? "Evento atualizado" : "Lembrete atualizado");
       onClose();
+      await onRemindersChanged();
     },
     onError: (error) => {
       toast.error(

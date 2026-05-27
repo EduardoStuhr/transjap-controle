@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { DbReminder } from "@/db/schema";
 import { AppLayout, Icon } from "@/components/AppLayout";
@@ -205,6 +205,7 @@ function itemSort(a: CalendarItem, b: CalendarItem) {
 
 function CalendarPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const user = useAuthStore((snapshot) => snapshot.user);
   const taskActions = useTaskActions();
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
@@ -218,7 +219,7 @@ function CalendarPage() {
 
   const currentRange = useMemo(() => rangeFor(anchorDate, viewMode), [anchorDate, viewMode]);
 
-  const { data: reminders = [] } = useQuery({
+  const { data: reminders = [], refetch: refetchReminders } = useQuery({
     queryKey: ["reminders", user?.id, currentRange],
     queryFn: () =>
       listReminders({
@@ -230,6 +231,14 @@ function CalendarPage() {
       }),
     enabled: Boolean(user?.id),
   });
+
+  const syncVisibleReminders = async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ["reminders"],
+      refetchType: "none",
+    });
+    await refetchReminders();
+  };
 
   const visibleTasks = useMemo(
     () => filterVisibleTasks(tasks, user).filter((task) => task.deadline),
@@ -481,6 +490,7 @@ function CalendarPage() {
               reminders={reminders}
               userId={user.id}
               focusedItemId={focusedItemId}
+              onRemindersChanged={syncVisibleReminders}
               onClose={() => {
                 setSelectedDay(null);
                 setFocusedItemId(null);
@@ -513,6 +523,7 @@ function CalendarPage() {
           initialDate={selectedDay ?? todayIso()}
           userId={user.id}
           kind={personalDialogKind}
+          onRemindersChanged={syncVisibleReminders}
         />
       )}
     </AppLayout>

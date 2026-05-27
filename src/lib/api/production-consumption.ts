@@ -1,11 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { getDb, type Db } from "@/db/client";
 import { equipmentDailyParts, fueling, productionAnalyses, swellFactors, trips } from "@/db/schema";
 import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import { buildAnalysisSnapshot } from "@/lib/production-analytics";
 import { recalculateFuelAttribution } from "@/lib/fuel-attribution";
+import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
 import type { ParsedDailyPart, ParsedFueling, ParsedTrip } from "@/lib/carcara-parser";
 import type {
   DbEquipmentDailyPart,
@@ -58,6 +60,30 @@ type PreviewResult = {
 };
 
 const D1_INSERT_BATCH_SIZE = 100;
+const D1_SELECT_PAGE_SIZE = 2_000;
+
+/**
+ * Le tabelas grandes em paginas menores para cada resposta do D1 permanecer limitada.
+ * Um limite defensivo evita varrer mais de 100.000 linhas sem um filtro adequado.
+ */
+async function paginatedSelect<T>(
+  query: (limit: number, offset: number) => Promise<T[]>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  let offset = 0;
+  for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+    const page = await query(D1_SELECT_PAGE_SIZE, offset);
+    rows.push(...page);
+    if (page.length < D1_SELECT_PAGE_SIZE) break;
+    offset += D1_SELECT_PAGE_SIZE;
+  }
+  if (rows.length > 20_000) {
+    console.warn(
+      `[paginatedSelect] query retornou ${rows.length} linhas - confira se filtro esta correto`,
+    );
+  }
+  return rows;
+}
 
 const localAnalyses: DbProductionAnalysis[] = [];
 const localTrips: DbTrip[] = [];
@@ -255,7 +281,7 @@ function makeTripRow(
   factor: number,
   scopedId = analysisScopedId(analysisId, row.id),
 ): DbTrip {
-  const compactedM3 = row.cubicMLoose > 0 ? row.cubicMLoose / (1 + factor) : 0;
+  const compactedM3 = calculateCompactedM3(row.cubicMLoose, factor);
   return {
     id: scopedId,
     analysisId,
@@ -507,19 +533,30 @@ export const listDailyParts = createServerFn({ method: "POST" })
       });
     }
     const db = getDb(d1);
-    const conditions = [];
+    const conditions: SQL[] = [];
     const ids = data.analysisIds?.filter(Boolean);
     if (data.analysisId) conditions.push(eq(equipmentDailyParts.analysisId, data.analysisId));
     if (ids?.length) conditions.push(inArray(equipmentDailyParts.analysisId, ids));
     if (data.dateFrom) conditions.push(gte(equipmentDailyParts.date, data.dateFrom));
     if (data.dateTo) conditions.push(lte(equipmentDailyParts.date, data.dateTo));
-    return conditions.length
-      ? db
-          .select()
-          .from(equipmentDailyParts)
-          .where(and(...conditions))
-          .all()
-      : db.select().from(equipmentDailyParts).all();
+    return paginatedSelect<DbEquipmentDailyPart>((limit, offset) =>
+      conditions.length
+        ? db
+            .select()
+            .from(equipmentDailyParts)
+            .where(and(...conditions))
+            .orderBy(asc(equipmentDailyParts.id))
+            .limit(limit)
+            .offset(offset)
+            .all()
+        : db
+            .select()
+            .from(equipmentDailyParts)
+            .orderBy(asc(equipmentDailyParts.id))
+            .limit(limit)
+            .offset(offset)
+            .all(),
+    );
   });
 
 export const listAnalyses = createServerFn({ method: "POST" })
@@ -549,9 +586,14 @@ export const listAnalyses = createServerFn({ method: "POST" })
           .select()
           .from(productionAnalyses)
           .where(and(...conditions))
+          .orderBy(desc(productionAnalyses.createdAt))
           .all()
-      : await db.select().from(productionAnalyses).all();
-    return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      : await db
+          .select()
+          .from(productionAnalyses)
+          .orderBy(desc(productionAnalyses.createdAt))
+          .all();
+    return rows;
   });
 
 export const getAnalysis = createServerFn({ method: "POST" })
@@ -583,18 +625,23 @@ export const listTrips = createServerFn({ method: "POST" })
     }
 
     const db = getDb(d1);
-    const conditions = [];
+    const conditions: SQL[] = [];
     if (data.analysisId) conditions.push(eq(trips.analysisId, data.analysisId));
     if (data.analysisIds?.length) conditions.push(inArray(trips.analysisId, data.analysisIds));
     if (data.dateFrom) conditions.push(gte(trips.datetime, data.dateFrom));
     if (data.dateTo) conditions.push(lte(trips.datetime, `${data.dateTo}T23:59:59.999Z`));
-    return conditions.length
-      ? db
-          .select()
-          .from(trips)
-          .where(and(...conditions))
-          .all()
-      : db.select().from(trips).all();
+    return paginatedSelect<DbTrip>((limit, offset) =>
+      conditions.length
+        ? db
+            .select()
+            .from(trips)
+            .where(and(...conditions))
+            .orderBy(asc(trips.id))
+            .limit(limit)
+            .offset(offset)
+            .all()
+        : db.select().from(trips).orderBy(asc(trips.id)).limit(limit).offset(offset).all(),
+    );
   });
 
 export const listFueling = createServerFn({ method: "POST" })
@@ -611,18 +658,23 @@ export const listFueling = createServerFn({ method: "POST" })
     }
 
     const db = getDb(d1);
-    const conditions = [];
+    const conditions: SQL[] = [];
     if (data.analysisId) conditions.push(eq(fueling.analysisId, data.analysisId));
     if (data.analysisIds?.length) conditions.push(inArray(fueling.analysisId, data.analysisIds));
     if (data.dateFrom) conditions.push(gte(fueling.datetime, data.dateFrom));
     if (data.dateTo) conditions.push(lte(fueling.datetime, `${data.dateTo}T23:59:59.999Z`));
-    return conditions.length
-      ? db
-          .select()
-          .from(fueling)
-          .where(and(...conditions))
-          .all()
-      : db.select().from(fueling).all();
+    return paginatedSelect<DbFueling>((limit, offset) =>
+      conditions.length
+        ? db
+            .select()
+            .from(fueling)
+            .where(and(...conditions))
+            .orderBy(asc(fueling.id))
+            .limit(limit)
+            .offset(offset)
+            .all()
+        : db.select().from(fueling).orderBy(asc(fueling.id)).limit(limit).offset(offset).all(),
+    );
   });
 
 export const listSwellFactors = createServerFn({ method: "GET" }).handler(

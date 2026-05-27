@@ -16,14 +16,10 @@ import {
   Line,
   Pie,
   PieChart,
-  ReferenceLine,
   ResponsiveContainer,
-  Scatter,
-  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
-  ZAxis,
 } from "recharts";
 
 import {
@@ -130,7 +126,7 @@ export function ChartProdConsumo({ data }: { data: ProdConsumoPoint[] }) {
         <Bar
           yAxisId="m"
           dataKey="solta"
-          name="Solta"
+          name="m³ solto"
           stackId="m"
           fill={C.sand}
           radius={[2, 2, 0, 0]}
@@ -151,90 +147,175 @@ export function ChartProdConsumo({ data }: { data: ProdConsumoPoint[] }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// 2. BUBBLE — horas × m³ × diesel por frota
-// ═══════════════════════════════════════════════════════════════════
-export type BubblePoint = {
-  name: string;
-  tipo?: string;
-  horas: number;
-  m3: number;
-  diesel: number;
-  lPorM3: number;
+export type HourlyProductionSeries = {
+  obra: string;
+  dataKey: string;
+  color: string;
 };
 
-function Row({ k, v, highlight }: { k: string; v: string; highlight?: boolean }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        padding: "2px 0",
-        color: highlight ? "var(--accent)" : "var(--fg-2)",
-      }}
-    >
-      <span style={{ color: highlight ? "var(--accent)" : "var(--fg-3)" }}>{k}</span>
-      <span style={{ fontFamily: MONO, fontWeight: 600 }}>{v}</span>
-    </div>
-  );
-}
-
-export function ChartBubble({ data }: { data: BubblePoint[] }) {
-  if (!data.length) return null;
-  const eff = data.map((d) => d.m3 / Math.max(d.diesel, 1));
-  const sorted = [...eff].sort((a, b) => a - b);
-  const q1 = sorted[Math.floor(sorted.length * 0.33)] ?? 0;
-  const q2 = sorted[Math.floor(sorted.length * 0.66)] ?? 0;
-  const colored = data.map((d, i) => {
-    const e = eff[i];
-    const color = e >= q2 ? C.ok : e >= q1 ? C.yellow : C.danger;
-    return { ...d, eff: e, color };
-  });
-  const horasArr = data.map((d) => d.horas);
-  const m3Arr = data.map((d) => d.m3);
-  const xRef = (Math.max(...horasArr) + Math.min(...horasArr)) / 2;
-  const yRef = (Math.max(...m3Arr) + Math.min(...m3Arr)) / 2;
+export function ChartHourlyProduction({
+  data,
+  series = [],
+}: {
+  data: Array<Record<string, unknown>>;
+  series?: HourlyProductionSeries[];
+}) {
+  const multipleObras = series.length > 1;
+  const units = Object.fromEntries([
+    ["m3", "m³"],
+    ["trips", ""],
+    ...series.map((item) => [item.dataKey, "m³"]),
+  ]) as Record<string, string>;
+  const format = Object.fromEntries([
+    ["m3", (value: number) => fmt.dec(value, 2)],
+    ["trips", (value: number) => fmt.int(value)],
+    ...series.map((item) => [item.dataKey, (value: number) => fmt.dec(value, 2)]),
+  ]) as Record<string, (value: number) => string>;
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <ScatterChart margin={{ top: 14, right: 18, left: 4, bottom: 20 }}>
-        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" />
-        <XAxis
-          type="number"
-          dataKey="horas"
-          name="Horas"
-          tick={TICK}
-          axisLine={{ stroke: C.grid }}
-          tickLine={false}
-          label={{
-            value: "Horas trabalhadas (PDE) →",
-            position: "insideBottom",
-            offset: -10,
-            style: { fontSize: 10, fill: C.fg3 },
-          }}
-        />
+      <ComposedChart data={data} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
         <YAxis
-          type="number"
-          dataKey="m3"
-          name="m³"
+          yAxisId="m3"
           tick={TICK}
           axisLine={false}
           tickLine={false}
-          width={48}
+          width={50}
+          tickFormatter={(value: number) => fmt.k(value)}
           label={{
-            value: "↑ m³ compactado",
+            value: "m³ solto",
             angle: -90,
             position: "insideLeft",
             offset: 14,
             style: { fontSize: 10, fill: C.fg3 },
           }}
         />
-        <ZAxis type="number" dataKey="diesel" range={[60, 800]} name="Litros" />
+        <YAxis
+          yAxisId="trips"
+          orientation="right"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={42}
+          label={{
+            value: "viagens",
+            angle: 90,
+            position: "insideRight",
+            offset: 12,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <Tooltip content={<RichTooltip units={units} format={format} />} />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        {multipleObras ? (
+          series.map((item) => (
+            <Bar
+              key={item.dataKey}
+              yAxisId="m3"
+              dataKey={item.dataKey}
+              name={`${item.obra} - m³ solto`}
+              fill={item.color}
+              radius={[2, 2, 0, 0]}
+              barSize={10}
+            />
+          ))
+        ) : (
+          <Bar
+            yAxisId="m3"
+            dataKey="m3"
+            name={series[0] ? `${series[0].obra} - m³ solto` : "m³ solto"}
+            fill={series[0]?.color ?? C.yellow}
+            radius={[2, 2, 0, 0]}
+            barSize={18}
+          />
+        )}
+        <Line
+          yAxisId="trips"
+          type="monotone"
+          dataKey="trips"
+          name="Viagens"
+          stroke={C.steel}
+          strokeWidth={2.3}
+          dot={false}
+          activeDot={{ r: 4, strokeWidth: 0 }}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 2. AGREGADOS — ranking horizontal por produção e diesel
+// ═══════════════════════════════════════════════════════════════════
+export type AggregateRankingPoint = {
+  name: string;
+  obra?: string;
+  liters: number;
+  m3: number;
+  trips: number;
+};
+
+function AggregateRankingRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        padding: "2px 0",
+      }}
+    >
+      <span style={{ color: "var(--fg-3)" }}>{k}</span>
+      <span style={{ fontFamily: MONO, fontWeight: 600, color: "var(--fg)" }}>
+        {v}
+      </span>
+    </div>
+  );
+}
+
+export function ChartAggregateRanking({
+  data,
+  topN = 15,
+}: {
+  data: AggregateRankingPoint[];
+  topN?: number;
+}) {
+  if (!data.length) return null;
+  const ranked = [...data]
+    .sort((a, b) => b.m3 - a.m3 || b.trips - a.trips)
+    .slice(0, topN);
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={ranked} layout="vertical" margin={{ top: 4, right: 56, left: 18, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v: number) => fmt.k(v)}
+          label={{
+            value: "m³ compactado",
+            position: "insideBottomRight",
+            offset: -2,
+            style: { fontSize: 10, fill: C.fg3 },
+          }}
+        />
+        <YAxis
+          type="category"
+          dataKey="name"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={132}
+        />
         <Tooltip
-          cursor={{ strokeDasharray: "3 3", stroke: C.grid }}
+          cursor={{ fill: "oklch(0.45 0.02 90 / 0.15)" }}
           content={({ active, payload }) => {
             if (!active || !payload?.length) return null;
-            const p = payload[0].payload as BubblePoint;
+            const p = payload[0].payload as AggregateRankingPoint;
             return (
               <div
                 style={{
@@ -243,39 +324,41 @@ export function ChartBubble({ data }: { data: BubblePoint[] }) {
                   borderRadius: 6,
                   padding: 10,
                   fontSize: 11,
-                  minWidth: 170,
+                  minWidth: 190,
                 }}
               >
                 <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
-                  {p.name}{" "}
-                  {p.tipo && (
-                    <span style={{ color: "var(--fg-3)", fontWeight: 400, fontSize: 10 }}>
-                      {p.tipo}
-                    </span>
-                  )}
+                  {p.name}
                 </div>
-                <Row k="Horas" v={`${fmt.dec(p.horas, 1)} h`} />
-                <Row k="Produção" v={`${fmt.int(p.m3)} m³`} />
-                <Row k="Diesel" v={`${fmt.int(p.diesel)} L`} />
-                <Row k="L/m³" v={`${fmt.dec(p.lPorM3, 2)} L/m³`} highlight />
+                {p.obra && p.obra !== p.name && (
+                  <div style={{ color: "var(--fg-3)", fontSize: 10, marginBottom: 6 }}>
+                    {p.obra}
+                  </div>
+                )}
+                <AggregateRankingRow k="m³ compactado" v={`${fmt.dec(p.m3, 1)} m³`} />
+                <AggregateRankingRow k="Diesel atribuído" v={`${fmt.dec(p.liters, 1)} L`} />
+                <AggregateRankingRow k="Viagens" v={fmt.int(p.trips)} />
               </div>
             );
           }}
         />
-        <ReferenceLine x={xRef} stroke={C.grid} strokeDasharray="2 4" />
-        <ReferenceLine y={yRef} stroke={C.grid} strokeDasharray="2 4" />
-        <Scatter data={colored} fill={C.yellow}>
-          {colored.map((entry, i) => (
+        <Bar dataKey="m3" name="m³ compactado" radius={[0, 2, 2, 0]} barSize={16}>
+          {ranked.map((_, index) => (
             <Cell
-              key={i}
-              fill={entry.color}
-              fillOpacity={0.75}
-              stroke={entry.color}
-              strokeWidth={1}
+              key={index}
+              fill={index === 0 ? C.yellow : index < 3 ? C.yellowD : "oklch(0.55 0.06 90)"}
             />
           ))}
-        </Scatter>
-      </ScatterChart>
+          <LabelList
+            dataKey="m3"
+            position="right"
+            formatter={(value) =>
+              typeof value === "number" ? `${fmt.k(value)} m³` : String(value ?? "")
+            }
+            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
+          />
+        </Bar>
+      </BarChart>
     </ResponsiveContainer>
   );
 }
@@ -397,7 +480,7 @@ export function ChartLine({
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 5. DIESEL POR M3 EMPOLADO — volume × consumo específico
+// 5. PRODUÇÃO EMPOLADA X DIESEL — volume x diesel diário
 // ═══════════════════════════════════════════════════════════════════
 export type ChartSeriesConfig = {
   dataKey: string;
@@ -559,7 +642,7 @@ export function ChartVolumeLinePorObra({
             key={s.volumeKey}
             yAxisId="volume"
             dataKey={s.volumeKey}
-            name={`${s.obra} · ${volumeName}`}
+            name={`${s.obra} - ${volumeName}`}
             fill={s.color}
             fillOpacity={0.62}
             radius={[2, 2, 0, 0]}
@@ -572,7 +655,7 @@ export function ChartVolumeLinePorObra({
             yAxisId="line"
             type="monotone"
             dataKey={s.lineKey}
-            name={`${s.obra} · ${lineName}`}
+            name={`${s.obra} - ${lineName}`}
             stroke={s.color}
             strokeWidth={2.4}
             dot={false}
@@ -585,20 +668,22 @@ export function ChartVolumeLinePorObra({
   );
 }
 
-export type DieselPorM3EmpoladoPoint = {
+export type ProducaoEmpoladaDieselPoint = {
   d: string;
   m3Empolado: number;
   diesel: number;
-  litrosPorM3Empolado: number;
 };
 
-export function ChartDieselPorM3Empolado({
+export function ChartProducaoEmpoladaDiesel({
   data,
-  media,
+  seriesLabel,
 }: {
-  data: DieselPorM3EmpoladoPoint[];
-  media: number;
+  data: ProducaoEmpoladaDieselPoint[];
+  seriesLabel?: string;
 }) {
+  const m3Name = seriesLabel ? `${seriesLabel} - m³ solto` : "m³ solto";
+  const dieselName = seriesLabel ? `${seriesLabel} - diesel` : "diesel";
+
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 10, right: 18, left: 0, bottom: 4 }}>
@@ -618,7 +703,7 @@ export function ChartDieselPorM3Empolado({
           width={48}
           tickFormatter={(v: number) => fmt.k(v)}
           label={{
-            value: "m³ empolado",
+            value: "m³ solto",
             angle: -90,
             position: "insideLeft",
             offset: 14,
@@ -626,15 +711,15 @@ export function ChartDieselPorM3Empolado({
           }}
         />
         <YAxis
-          yAxisId="lpm3"
+          yAxisId="diesel"
           orientation="right"
           tick={TICK}
           axisLine={false}
           tickLine={false}
           width={48}
-          tickFormatter={(v: number) => fmt.dec(v, 1)}
+          tickFormatter={(v: number) => fmt.k(v)}
           label={{
-            value: "L/m³",
+            value: "L diesel",
             angle: 90,
             position: "insideRight",
             offset: 12,
@@ -647,12 +732,10 @@ export function ChartDieselPorM3Empolado({
               units={{
                 m3Empolado: "m³",
                 diesel: "L",
-                litrosPorM3Empolado: "L/m³",
               }}
               format={{
                 m3Empolado: (v) => fmt.dec(v, 1),
                 diesel: (v) => fmt.dec(v, 1),
-                litrosPorM3Empolado: (v) => fmt.dec(v, 2),
               }}
             />
           }
@@ -661,30 +744,21 @@ export function ChartDieselPorM3Empolado({
         <Bar
           yAxisId="m3"
           dataKey="m3Empolado"
-          name="m³ empolado"
+          name={m3Name}
           fill={C.sand}
           radius={[2, 2, 0, 0]}
           barSize={12}
         />
         <Line
-          yAxisId="lpm3"
+          yAxisId="diesel"
           type="monotone"
-          dataKey="litrosPorM3Empolado"
-          name="L/m³ empolado"
+          dataKey="diesel"
+          name={dieselName}
           stroke={C.yellow}
           strokeWidth={2.5}
           dot={false}
           activeDot={{ r: 4, strokeWidth: 0 }}
         />
-        {media > 0 && (
-          <ReferenceLine
-            yAxisId="lpm3"
-            y={media}
-            stroke={C.danger}
-            strokeDasharray="3 4"
-            ifOverflow="extendDomain"
-          />
-        )}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -834,7 +908,7 @@ export function ChartProdStack({ data }: { data: ProdStackPoint[] }) {
         <Area
           type="monotone"
           dataKey="solta"
-          name="Solta"
+          name="m³ solto"
           stackId="1"
           stroke={C.sand}
           strokeWidth={1.5}

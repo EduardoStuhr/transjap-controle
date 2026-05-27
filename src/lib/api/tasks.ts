@@ -121,6 +121,13 @@ type TaskViewRow = {
   viewed_at: string;
 };
 
+type TaskNotificationReadRow = {
+  task_id: string;
+  user_id: string;
+  user_name: string;
+  read_at: string;
+};
+
 let taskMigrationStarted = false;
 let taskMigrationPromise: Promise<void> | null = null;
 
@@ -213,24 +220,63 @@ function mergeTaskViews(
   return next;
 }
 
+function mergeTaskNotificationReads(
+  readBy: Record<string, string>,
+  rows: readonly TaskNotificationReadRow[],
+): Record<string, string> {
+  const next = { ...readBy };
+  rows.forEach((row) => {
+    if (row.user_id) next[row.user_id] = row.read_at;
+    if (row.user_name) next[row.user_name] = row.read_at;
+  });
+  return next;
+}
+
 function hasUserViewedTask(viewedBy: Record<string, string>, user: AuthUser): boolean {
   return Boolean(viewedBy[user.id] || viewedBy[user.name]);
 }
 
-function allRecipientsViewed(task: TaskRecord, viewedBy: Record<string, string>): boolean {
-  const recipients = resolveTaskRecipientUsers(task);
-  if (recipients.length === 0) return false;
-  return recipients.every((recipient) =>
-    Boolean(viewedBy[recipient.id] || viewedBy[recipient.name]),
+function isTaskCreator(
+  task: Pick<TaskRecord, "createdBy" | "createdById">,
+  user: AuthUser,
+): boolean {
+  return task.createdById === user.id || task.createdBy === user.name;
+}
+
+function isTaskRecipient(
+  task: Pick<TaskRecord, "assignedTo" | "responsibleIds" | "createdBy" | "createdById">,
+  user: AuthUser,
+): boolean {
+  if (isTaskCreator(task, user)) return false;
+  return resolveTaskRecipientUsers(task).some(
+    (recipient) => recipient.id === user.id || recipient.name === user.name,
+  );
+}
+
+function hasRecipientViewed(
+  task: Pick<TaskRecord, "assignedTo" | "responsibleIds" | "createdBy" | "createdById">,
+  viewedBy: Record<string, string>,
+): boolean {
+  return resolveTaskRecipientUsers(task).some(
+    (recipient) => isTaskRecipient(task, recipient) && hasUserViewedTask(viewedBy, recipient),
   );
 }
 
 function withUserView(task: TaskRecord, user: AuthUser): { task: TaskRecord; changed: boolean } {
   const viewedAt = nowIso();
+  const notificationReadBy = {
+    ...task.notificationReadBy,
+    [user.id]: viewedAt,
+    [user.name]: viewedAt,
+  };
+  if (!isTaskRecipient(task, user)) {
+    return { task: { ...task, notificationReadBy }, changed: true };
+  }
+
   const alreadyViewed = hasUserViewedTask(task.viewedBy, user);
   const viewedBy = { ...task.viewedBy, [user.id]: viewedAt, [user.name]: viewedAt };
-  const fullyViewed = allRecipientsViewed(task, viewedBy);
-  const shouldFlipStatus = task.status === "Não visualizado" && fullyViewed;
+  const viewed = hasRecipientViewed(task, viewedBy);
+  const shouldFlipStatus = task.status === "Não visualizado" && !alreadyViewed;
 
   return {
     changed: true,
@@ -238,7 +284,8 @@ function withUserView(task: TaskRecord, user: AuthUser): { task: TaskRecord; cha
       ...task,
       status: shouldFlipStatus ? "Visualizado" : task.status,
       viewedBy,
-      viewed: fullyViewed,
+      notificationReadBy,
+      viewed,
       timeline: alreadyViewed
         ? task.timeline
         : [
@@ -304,7 +351,7 @@ function normalizeStoredTask(task: Partial<TaskRecord>): TaskRecord {
         ? task.updatedAt
         : "";
 
-  return {
+  const normalized: TaskRecord = {
     id: task.id || crypto.randomUUID(),
     createdBy: normalizeCreatedBy(task),
     createdById: normalizeCreatedById(task),
@@ -333,12 +380,21 @@ function normalizeStoredTask(task: Partial<TaskRecord>): TaskRecord {
         }))
       : [],
     viewedBy: task.viewedBy && typeof task.viewedBy === "object" ? task.viewedBy : {},
+    notificationReadBy:
+      task.notificationReadBy && typeof task.notificationReadBy === "object"
+        ? task.notificationReadBy
+        : {},
     timeline: Array.isArray(task.timeline) ? task.timeline : [],
     createdAt,
     updatedAt,
     completedAt,
     completedBy: typeof task.completedBy === "string" ? task.completedBy : "",
-    viewed: Boolean(task.viewed),
+    viewed: false,
+  };
+
+  return {
+    ...normalized,
+    viewed: hasRecipientViewed(normalized, normalized.viewedBy),
   };
 }
 
@@ -419,31 +475,50 @@ function canDeleteTask(task: TaskRecord, user: AuthUser): boolean {
   return canMutateWholeTask(task, user);
 }
 
+const FORBIDDEN_TASK_UPDATE_FIELDS = [
+  "createdBy",
+  "createdByUserId",
+  "assignedTo",
+  "responsibleIds",
+  "taskRecipients",
+  "sector",
+  "kind",
+] as const;
+
+function attemptedForbiddenTaskUpdates(
+  document: StoredTaskDocument,
+  existing: StoredTaskDocument,
+): string[] {
+  const next = document.task;
+  const current = existing.task;
+  const differs = new Map<string, boolean>([
+    ["createdBy", next.createdBy !== current.createdBy],
+    ["createdByUserId", next.createdById !== current.createdById],
+    ["assignedTo", JSON.stringify(next.assignedTo) !== JSON.stringify(current.assignedTo)],
+    [
+      "responsibleIds",
+      JSON.stringify(next.responsibleIds) !== JSON.stringify(current.responsibleIds),
+    ],
+    ["taskRecipients", false],
+    ["sector", next.sector !== current.sector],
+    ["kind", document.kind !== existing.kind],
+  ]);
+
+  return FORBIDDEN_TASK_UPDATE_FIELDS.filter((field) => differs.get(field));
+}
+
 function preserveProtectedFields(
   next: TaskRecord,
   existing: TaskRecord,
-  user: AuthUser,
 ): TaskRecord {
-  if (canMutateWholeTask(existing, user)) {
-    return {
-      ...next,
-      createdBy: existing.createdBy,
-      createdById: existing.createdById,
-      assignedTo: existing.assignedTo,
-      responsibleIds: existing.responsibleIds,
-    };
-  }
-
   return {
-    ...existing,
-    status: next.status,
-    responses: next.responses,
-    viewedBy: next.viewedBy,
-    viewed: next.viewed,
-    completedAt: next.completedAt,
-    completedBy: next.completedBy,
-    timeline: next.timeline,
-    updatedAt: next.updatedAt || nowIso(),
+    ...next,
+    createdBy: existing.createdBy,
+    createdById: existing.createdById,
+    assignedTo: existing.assignedTo,
+    responsibleIds: existing.responsibleIds,
+    sector: existing.sector,
+    createdAt: existing.createdAt,
   };
 }
 
@@ -591,6 +666,18 @@ async function ensureTaskTables(d1: D1Database) {
       )`,
     )
     .run();
+  await d1
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS task_notification_reads (
+        task_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        user_name TEXT NOT NULL,
+        read_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, user_id),
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE cascade
+      )`,
+    )
+    .run();
 
   await d1.prepare("CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind)").run();
   await d1
@@ -602,6 +689,11 @@ async function ensureTaskTables(d1: D1Database) {
     .run();
   await d1
     .prepare("CREATE INDEX IF NOT EXISTS idx_task_views_user_id ON task_views(user_id)")
+    .run();
+  await d1
+    .prepare(
+      "CREATE INDEX IF NOT EXISTS idx_task_notification_reads_user_id ON task_notification_reads(user_id)",
+    )
     .run();
 }
 
@@ -618,18 +710,12 @@ async function upsertTaskRows(d1: D1Database, document: StoredTaskDocument) {
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
-        kind = excluded.kind,
         title = excluded.title,
         description = excluded.description,
         equipment = excluded.equipment,
-        assigned_to = excluded.assigned_to,
-        responsible_ids = excluded.responsible_ids,
-        sector = excluded.sector,
         priority = excluded.priority,
         deadline = excluded.deadline,
         status = excluded.status,
-        created_by = excluded.created_by,
-        created_by_user_id = excluded.created_by_user_id,
         attachments = excluded.attachments,
         viewed_by = excluded.viewed_by,
         viewed = excluded.viewed,
@@ -661,7 +747,6 @@ async function upsertTaskRows(d1: D1Database, document: StoredTaskDocument) {
     )
     .run();
 
-  await d1.prepare("DELETE FROM task_recipients WHERE task_id = ?").bind(task.id).run();
   for (const recipient of resolveTaskRecipientUsers(task)) {
     await d1
       .prepare(
@@ -674,7 +759,8 @@ async function upsertTaskRows(d1: D1Database, document: StoredTaskDocument) {
       .run();
   }
 
-  for (const viewer of resolveResponsibleUsers(["Todos"])) {
+  for (const viewer of resolveTaskRecipientUsers(task)) {
+    if (!isTaskRecipient(task, viewer)) continue;
     const viewedAt = task.viewedBy[viewer.id] || task.viewedBy[viewer.name];
     if (!viewedAt) continue;
     await d1
@@ -686,6 +772,21 @@ async function upsertTaskRows(d1: D1Database, document: StoredTaskDocument) {
            viewed_at = excluded.viewed_at`,
       )
       .bind(task.id, viewer.id, viewer.name, viewedAt)
+      .run();
+  }
+
+  for (const [readerKey, readAt] of Object.entries(task.notificationReadBy)) {
+    const reader = findUserById(readerKey) ?? findUserByName(readerKey);
+    if (!reader || !readAt) continue;
+    await d1
+      .prepare(
+        `INSERT INTO task_notification_reads (task_id, user_id, user_name, read_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(task_id, user_id) DO UPDATE SET
+           user_name = excluded.user_name,
+           read_at = excluded.read_at`,
+      )
+      .bind(task.id, reader.id, reader.name, readAt)
       .run();
   }
 
@@ -744,6 +845,7 @@ function taskFromRow(
   comments: TaskComment[],
   responses: TaskResponse[],
   timeline: TimelineEvent[],
+  notificationReadBy: Record<string, string>,
 ): TaskRecord {
   return normalizeStoredTask({
     id: row.id,
@@ -762,6 +864,7 @@ function taskFromRow(
     comments,
     responses,
     viewedBy: parseJson<Record<string, string>>(row.viewed_by, {}),
+    notificationReadBy,
     timeline,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -774,24 +877,33 @@ function taskFromRow(
 }
 
 async function documentFromRow(d1: D1Database, row: TaskRow): Promise<StoredTaskDocument> {
-  const [commentsResult, responsesResult, timelineResult, viewsResult] = await Promise.all([
-    d1
-      .prepare("SELECT * FROM task_comments WHERE task_id = ? ORDER BY timestamp DESC")
-      .bind(row.id)
-      .all<TaskCommentRow>(),
-    d1
-      .prepare("SELECT * FROM task_responses WHERE task_id = ? ORDER BY timestamp DESC")
-      .bind(row.id)
-      .all<TaskResponseRow>(),
-    d1
-      .prepare("SELECT * FROM task_timeline WHERE task_id = ? ORDER BY timestamp DESC")
-      .bind(row.id)
-      .all<TaskTimelineRow>(),
-    d1.prepare("SELECT * FROM task_views WHERE task_id = ?").bind(row.id).all<TaskViewRow>(),
-  ]);
+  const [commentsResult, responsesResult, timelineResult, viewsResult, notificationReadsResult] =
+    await Promise.all([
+      d1
+        .prepare("SELECT * FROM task_comments WHERE task_id = ? ORDER BY timestamp DESC")
+        .bind(row.id)
+        .all<TaskCommentRow>(),
+      d1
+        .prepare("SELECT * FROM task_responses WHERE task_id = ? ORDER BY timestamp DESC")
+        .bind(row.id)
+        .all<TaskResponseRow>(),
+      d1
+        .prepare("SELECT * FROM task_timeline WHERE task_id = ? ORDER BY timestamp DESC")
+        .bind(row.id)
+        .all<TaskTimelineRow>(),
+      d1.prepare("SELECT * FROM task_views WHERE task_id = ?").bind(row.id).all<TaskViewRow>(),
+      d1
+        .prepare("SELECT * FROM task_notification_reads WHERE task_id = ?")
+        .bind(row.id)
+        .all<TaskNotificationReadRow>(),
+    ]);
   const viewedBy = mergeTaskViews(
     parseJson<Record<string, string>>(row.viewed_by, {}),
     viewsResult.results ?? [],
+  );
+  const notificationReadBy = mergeTaskNotificationReads(
+    {},
+    notificationReadsResult.results ?? [],
   );
 
   return {
@@ -822,6 +934,7 @@ async function documentFromRow(d1: D1Database, row: TaskRow): Promise<StoredTask
         actor: event.actor,
         status: event.status ? normalizeTaskStatus(event.status) : undefined,
       })),
+      notificationReadBy,
     ),
   };
 }
@@ -844,6 +957,7 @@ async function repairStoredTaskCreators(d1: D1Database) {
       .bind(repaired.createdBy, repaired.createdById, repaired.id)
       .run();
   }
+
 }
 
 async function backfillTaskAccessTables(d1: D1Database) {
@@ -942,6 +1056,9 @@ async function createDocument(document: StoredTaskDocument, user: AuthUser) {
       createdBy: user.name,
       createdById: user.id,
       responsibleIds: resolveResponsibleIds(document.task.assignedTo),
+      viewedBy: {},
+      notificationReadBy: {},
+      viewed: false,
     }),
     undefined,
     user.name,
@@ -950,9 +1067,18 @@ async function createDocument(document: StoredTaskDocument, user: AuthUser) {
   let savedDocument: StoredTaskDocument;
 
   if (!d1) {
+    const existing = (await listStoreDocuments<StoredTaskDocument>(TASKS_MODULE)).some(
+      (entry) => entry.task.id === task.id,
+    );
+    if (existing) {
+      throw new Response("Ja existe uma tarefa com este identificador.", { status: 409 });
+    }
     savedDocument = await upsertStoreDocument(TASKS_MODULE, task.id, nextDocument);
   } else {
     await migrateStoreDocumentsToTasks(d1);
+    if (await getTaskDocument(d1, task.id)) {
+      throw new Response("Ja existe uma tarefa com este identificador.", { status: 409 });
+    }
     savedDocument = await upsertTaskRows(d1, nextDocument);
   }
 
@@ -966,6 +1092,37 @@ async function createDocument(document: StoredTaskDocument, user: AuthUser) {
   return savedDocument;
 }
 
+function taskEditableFieldsChanged(next: TaskRecord, existing: TaskRecord): boolean {
+  return (
+    next.title !== existing.title ||
+    next.description !== existing.description ||
+    next.equipment !== existing.equipment ||
+    next.priority !== existing.priority ||
+    next.deadline !== existing.deadline ||
+    next.status !== existing.status ||
+    JSON.stringify(next.attachments) !== JSON.stringify(existing.attachments)
+  );
+}
+
+function withTaskEditActivity(next: TaskRecord, existing: TaskRecord, user: AuthUser): TaskRecord {
+  if (!taskEditableFieldsChanged(next, existing)) return next;
+
+  const timestamp = nowIso();
+  return {
+    ...next,
+    updatedAt: timestamp,
+    timeline: [
+      {
+        id: `EV-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+        timestamp,
+        action: `Tarefa atualizada por ${user.name}`,
+        actor: user.name,
+      },
+      ...next.timeline,
+    ],
+  };
+}
+
 async function updateDocument(document: StoredTaskDocument, user: AuthUser) {
   const d1 = getOptionalD1();
 
@@ -973,21 +1130,31 @@ async function updateDocument(document: StoredTaskDocument, user: AuthUser) {
     const documents = await listTaskDocumentsLocal(user);
     const existing = documents.find((entry) => entry.task.id === document.task.id);
     if (!existing) throw new Response("Tarefa nao encontrada ou sem permissao.", { status: 404 });
+    if (!canMutateWholeTask(existing.task, user)) {
+      throw new Response("Somente o criador pode editar a tarefa.", { status: 403 });
+    }
+    const ignoredFields = attemptedForbiddenTaskUpdates(document, existing);
+    if (ignoredFields.length > 0) {
+      console.warn(`[tasks] Campos imutaveis ignorados no update: ${ignoredFields.join(", ")}`);
+    }
     const preserved = preserveProtectedFields(
       normalizeStoredTask(document.task),
       existing.task,
-      user,
     );
-    const task = withCompletionTimestamp(
+    const viewedBy = existing.task.viewedBy;
+    const task = withTaskEditActivity(withCompletionTimestamp(
       {
         ...preserved,
-        viewedBy: { ...existing.task.viewedBy, ...preserved.viewedBy },
-        viewed: existing.task.viewed || preserved.viewed,
+        comments: existing.task.comments,
+        responses: existing.task.responses,
+        viewedBy,
+        notificationReadBy: existing.task.notificationReadBy,
+        viewed: hasRecipientViewed(preserved, viewedBy),
       },
       existing.task,
       user.name,
-    );
-    const nextDocument: StoredTaskDocument = { kind: document.kind, task };
+    ), existing.task, user);
+    const nextDocument: StoredTaskDocument = { kind: existing.kind, task };
     return upsertStoreDocument(TASKS_MODULE, task.id, nextDocument);
   }
 
@@ -996,22 +1163,73 @@ async function updateDocument(document: StoredTaskDocument, user: AuthUser) {
   if (!existing || !canSeeTask(existing.task, user)) {
     throw new Response("Tarefa nao encontrada ou sem permissao.", { status: 404 });
   }
+  if (!canMutateWholeTask(existing.task, user)) {
+    throw new Response("Somente o criador pode editar a tarefa.", { status: 403 });
+  }
+  const ignoredFields = attemptedForbiddenTaskUpdates(document, existing);
+  if (ignoredFields.length > 0) {
+    console.warn(`[tasks] Campos imutaveis ignorados no update: ${ignoredFields.join(", ")}`);
+  }
 
   const preserved = preserveProtectedFields(
     normalizeStoredTask(document.task),
     existing.task,
-    user,
   );
-  const task = withCompletionTimestamp(
+  const viewedBy = existing.task.viewedBy;
+  const task = withTaskEditActivity(withCompletionTimestamp(
     {
       ...preserved,
-      viewedBy: { ...existing.task.viewedBy, ...preserved.viewedBy },
-      viewed: existing.task.viewed || preserved.viewed,
+      comments: existing.task.comments,
+      responses: existing.task.responses,
+      viewedBy,
+      notificationReadBy: existing.task.notificationReadBy,
+      viewed: hasRecipientViewed(preserved, viewedBy),
     },
     existing.task,
     user.name,
+  ), existing.task, user);
+  const newTimelineEvents = task.timeline.filter(
+    (event) => !existing.task.timeline.some((current) => current.id === event.id),
   );
-  return upsertTaskRows(d1, { kind: document.kind, task });
+  const statements = [
+    d1
+      .prepare(
+        `UPDATE tasks
+         SET title = ?, description = ?, equipment = ?, priority = ?, deadline = ?,
+             status = ?, attachments = ?, completed_at = ?, completed_by = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .bind(
+        task.title,
+        task.description,
+        task.equipment,
+        task.priority,
+        task.deadline || null,
+        task.status,
+        JSON.stringify(task.attachments),
+        task.completedAt,
+        task.completedBy,
+        task.updatedAt,
+        task.id,
+      ),
+    ...newTimelineEvents.map((event) =>
+      d1
+        .prepare(
+          `INSERT INTO task_timeline (id, task_id, timestamp, action, actor, status)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          event.id,
+          task.id,
+          event.timestamp,
+          event.action,
+          event.actor,
+          event.status || null,
+        ),
+    ),
+  ];
+  await d1.batch(statements);
+  return (await getTaskDocument(d1, task.id)) ?? { kind: existing.kind, task };
 }
 
 function canRespondToTask(task: TaskRecord, user: AuthUser): boolean {
@@ -1278,6 +1496,7 @@ async function deleteDocument(id: string, user: AuthUser) {
 
   const result = await d1.batch([
     d1.prepare("DELETE FROM task_views WHERE task_id = ?").bind(id),
+    d1.prepare("DELETE FROM task_notification_reads WHERE task_id = ?").bind(id),
     d1.prepare("DELETE FROM task_recipients WHERE task_id = ?").bind(id),
     d1.prepare("DELETE FROM task_responses WHERE task_id = ?").bind(id),
     d1.prepare("DELETE FROM task_comments WHERE task_id = ?").bind(id),
@@ -1314,9 +1533,25 @@ async function markDocumentViewed(id: string, user: AuthUser) {
   }
 
   const viewedAt = nowIso();
+  const isRecipient = isTaskRecipient(existing.task, user);
   const alreadyViewed = hasUserViewedTask(existing.task.viewedBy, user);
   const eventId = `EV-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const writes = [
+    d1
+      .prepare(
+        `INSERT INTO task_notification_reads (task_id, user_id, user_name, read_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(task_id, user_id) DO UPDATE SET
+           user_name = excluded.user_name,
+           read_at = excluded.read_at`,
+      )
+      .bind(id, user.id, user.name, viewedAt),
+  ];
+  if (!isRecipient) {
+    await d1.batch(writes);
+    return (await getTaskDocument(d1, id)) ?? existing;
+  }
+  writes.push(
     d1
       .prepare(
         `INSERT INTO task_views (task_id, user_id, user_name, viewed_at)
@@ -1326,7 +1561,7 @@ async function markDocumentViewed(id: string, user: AuthUser) {
            viewed_at = excluded.viewed_at`,
       )
       .bind(id, user.id, user.name, viewedAt),
-  ];
+  );
   if (!alreadyViewed) {
     writes.push(
       d1
@@ -1339,13 +1574,10 @@ async function markDocumentViewed(id: string, user: AuthUser) {
   }
   await d1.batch(writes);
 
-  const recipients = resolveTaskRecipientUsers(existing.task);
   const row = await d1.prepare("SELECT * FROM tasks WHERE id = ?").bind(id).first<TaskRow>();
   if (!row) throw new Response("Tarefa nao encontrada.", { status: 404 });
   const updated = await documentFromRow(d1, row);
-  const fullyViewed =
-    recipients.length > 0 &&
-    recipients.every((recipient) => hasUserViewedTask(updated.task.viewedBy, recipient));
+  const viewed = hasRecipientViewed(updated.task, updated.task.viewedBy);
   await d1
     .prepare(
       `UPDATE tasks
@@ -1357,7 +1589,7 @@ async function markDocumentViewed(id: string, user: AuthUser) {
            END
        WHERE id = ?`,
     )
-    .bind(viewedAt, fullyViewed ? 1 : 0, fullyViewed ? 1 : 0, id)
+    .bind(viewedAt, viewed ? 1 : 0, viewed ? 1 : 0, id)
     .run();
 
   return (await getTaskDocument(d1, id)) ?? updated;

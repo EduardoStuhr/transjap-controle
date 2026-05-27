@@ -132,7 +132,7 @@ async function ensureReminderTable(d1: D1Database) {
   await remindersSchemaPromise;
 }
 
-export const listReminders = createServerFn({ method: "GET" })
+export const listReminders = createServerFn({ method: "POST" })
   .inputValidator((args: ReminderFilters) => args)
   .handler(async ({ data }) => {
     const user = requireUser(data.userId);

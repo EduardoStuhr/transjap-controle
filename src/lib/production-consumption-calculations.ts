@@ -6,6 +6,7 @@
 import type { DbTrip, DbFueling, DbEquipmentDailyPart } from "@/db/schema";
 import {
   safeDivide,
+  calculateCompactedM3,
   calculateEfficiencyIndex,
   calculateProductivityIndex,
   extractDateKey,
@@ -17,8 +18,15 @@ import type { DailyMetrics, OperationalKPIs } from "@/lib/production-consumption
 /**
  * Calcula volume compactado a partir do volume solto
  */
-export function calculateCompactedVolume(looseM3: number, swellFactor: number = 0.3): number {
-  return looseM3 > 0 ? looseM3 / (1 + swellFactor) : 0;
+export function calculateCompactedVolume(
+  looseM3: number,
+  swellFactor: number | null | undefined = 0.3,
+): number {
+  return calculateCompactedM3(looseM3, swellFactor);
+}
+
+function compactedTripVolume(trip: Pick<DbTrip, "cubicMLoose" | "swellFactorApplied">): number {
+  return calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
 }
 
 /**
@@ -50,7 +58,7 @@ export function calculateDailyMetrics(
       costPerM3: 0,
     };
 
-    current.compactedM3 += trip.cubicMCompacted || 0;
+    current.compactedM3 += compactedTripVolume(trip);
     current.looseM3 += trip.cubicMLoose || 0;
     current.trips += 1;
     current.revenue += trip.total || 0;
@@ -102,7 +110,7 @@ export function calculateOperationalKPIs(
   dailyParts: DbEquipmentDailyPart[],
 ): OperationalKPIs {
   const looseM3 = trips.reduce((sum, t) => sum + (t.cubicMLoose || 0), 0);
-  const compactedM3 = trips.reduce((sum, t) => sum + (t.cubicMCompacted || 0), 0);
+  const compactedM3 = trips.reduce((sum, t) => sum + compactedTripVolume(t), 0);
   const diesel = fueling.reduce((sum, f) => sum + (f.liters || 0), 0);
   const fuelCost = fueling.reduce((sum, f) => sum + (f.total || 0), 0);
   const revenue = trips.reduce((sum, t) => sum + (t.total || 0), 0);
@@ -175,7 +183,7 @@ export function calculateAggregateMetrics(
 
     current.trips += 1;
     current.looseM3 += trip.cubicMLoose || 0;
-    current.compactedM3 += trip.cubicMCompacted || 0;
+    current.compactedM3 += compactedTripVolume(trip);
     current.cost += AGGREGATE_TRIP_PRICE;
     map.set(key, current);
   });
@@ -274,7 +282,7 @@ export function calculateObraDistribution(trips: DbTrip[]) {
 
   trips.forEach((trip) => {
     const obra = trip.obra || "Sem obra";
-    map.set(obra, (map.get(obra) ?? 0) + (trip.cubicMCompacted || 0));
+    map.set(obra, (map.get(obra) ?? 0) + compactedTripVolume(trip));
   });
 
   const sorted = Array.from(map.entries())
@@ -301,7 +309,7 @@ export function calculateProductionHeatmap(trips: DbTrip[]) {
     const key = `${dayIndex}-${hour}`;
 
     const current = map.get(key) ?? { dayIndex, hour, m3: 0, trips: 0 };
-    current.m3 += trip.cubicMCompacted || 0;
+    current.m3 += compactedTripVolume(trip);
     current.trips += 1;
     map.set(key, current);
   });
@@ -343,7 +351,7 @@ export function detectOperationalAlerts(
     const key = t.prefix || t.vehicleId || t.plate || "SEM_PREFIXO";
     const curr = aggregateMap.get(key) ?? { trips: 0, volume: 0 };
     curr.trips += 1;
-    curr.volume += t.cubicMCompacted || 0;
+    curr.volume += compactedTripVolume(t);
     aggregateMap.set(key, curr);
   });
 

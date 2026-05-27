@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import type { DbProductionAnalysis } from "@/db/schema";
 
-interface MyAnalysesDialogProps {
+interface AnalysesDialogProps {
   isOpen: boolean;
   analyses: DbProductionAnalysis[];
   selectedIds: string[];
@@ -33,14 +33,14 @@ function uniqueValues<T>(arr: T[]): T[] {
   return [...new Set(arr.filter(Boolean))].sort() as T[];
 }
 
-export function MyAnalysesDialog({
+export function AnalysesDialog({
   isOpen,
   analyses,
   selectedIds,
   onClose,
   onSelect,
   onDelete,
-}: MyAnalysesDialogProps) {
+}: AnalysesDialogProps) {
   const [obra, setObra] = useState("");
   const [material, setMaterial] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -90,9 +90,9 @@ export function MyAnalysesDialog({
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Minhas Análises</DialogTitle>
+          <DialogTitle>Análises Disponíveis</DialogTitle>
           <DialogDescription>
-            Selecione uma ou mais análises para comparação, histórico ou abertura.
+            Todas as análises compartilhadas do módulo estão disponíveis para comparação e abertura.
           </DialogDescription>
         </DialogHeader>
 
@@ -186,6 +186,9 @@ export function MyAnalysesDialog({
                       {analysis.obra} · {analysis.material} · {formatDate(analysis.dateStart)} a{" "}
                       {formatDate(analysis.dateEnd)}
                     </span>
+                    <span className="mt-1 block text-[10px] uppercase tracking-widest text-on-surface-variant">
+                      Criado por: {analysis.createdBy || "Sistema"}
+                    </span>
                   </span>
                 </label>
                 <div className="flex shrink-0 items-center gap-2">
@@ -265,7 +268,7 @@ export function AnalysisHistoryPanel({
         <div>
           <h3 className="text-[10px] font-black uppercase tracking-widest">Histórico Acumulado</h3>
           <p className="mt-1 text-xs text-on-surface-variant">
-            Cada análise permanece disponível para acumulado, comparação e auditoria.
+            Todas as análises compartilhadas permanecem disponíveis para acumulado, comparação e auditoria.
           </p>
         </div>
         <Button
@@ -282,7 +285,7 @@ export function AnalysisHistoryPanel({
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-border-low text-on-surface-variant">
-              {["", "Análise", "Obra", "Material", "Período", "Criada em"].map((header) => (
+              {["", "Análise", "Obra", "Material", "Período", "Criado por", "Criada em"].map((header) => (
                 <th key={header} className="py-2 text-left font-black uppercase tracking-widest">
                   {header}
                 </th>
@@ -313,6 +316,7 @@ export function AnalysisHistoryPanel({
                   <td className="py-2 pr-4">
                     {formatDate(analysis.dateStart)} a {formatDate(analysis.dateEnd)}
                   </td>
+                  <td className="py-2 pr-4">{analysis.createdBy || "Sistema"}</td>
                   <td className="py-2 pr-4">{formatDate(analysis.createdAt)}</td>
                 </tr>
               );
