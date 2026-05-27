@@ -205,6 +205,10 @@ export function useFilteredData(
  */
 export function useDashboardTabs(storageKey = "dashboard_activeTab") {
   const tabs = [
+    { id: "escavacao", label: "Escavação" },
+    { id: "transporte", label: "Transporte" },
+    { id: "tratamento", label: "Tratamento" },
+    { id: "compactacao", label: "Compactação" },
     { id: "overview", label: "Visão Geral" },
     { id: "production", label: "Produção" },
     { id: "consumption", label: "Consumo Diesel" },

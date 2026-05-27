@@ -16,10 +16,14 @@ import {
   Line,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
+  ZAxis,
 } from "recharts";
 
 import {
@@ -475,6 +479,388 @@ export function ChartLine({
           activeDot={{ r: 3, strokeWidth: 0 }}
         />
       </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartLineLpm3({
+  data,
+  color = C.mint,
+}: {
+  data: Array<Record<string, unknown>>;
+  color?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={data} margin={{ top: 14, right: 18, left: 0, bottom: 4 }}>
+        <defs>
+          <linearGradient id="g-lpm3-item" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis tick={TICK} axisLine={false} tickLine={false} width={48} />
+        <Tooltip
+          content={
+            <RichTooltip
+              units={{ lPorM3: "L/m³" }}
+              format={{ lPorM3: (value: number) => fmt.dec(value, 3) }}
+            />
+          }
+        />
+        <Area
+          type="monotone"
+          dataKey="lPorM3"
+          name="L/m³"
+          stroke={color}
+          strokeWidth={2}
+          fill="url(#g-lpm3-item)"
+          dot={false}
+          activeDot={{ r: 3, strokeWidth: 0 }}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartM3Diesel({
+  data,
+  mColor = C.yellow,
+  lColor = C.steel,
+  mName = "m³",
+  lName = "Diesel (L)",
+}: {
+  data: Array<Record<string, unknown>>;
+  mColor?: string;
+  lColor?: string;
+  mName?: string;
+  lName?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 14, right: 24, left: 4, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis
+          yAxisId="m3"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(value: number) => fmt.k(value)}
+        />
+        <YAxis
+          yAxisId="diesel"
+          orientation="right"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(value: number) => fmt.k(value)}
+        />
+        <Tooltip
+          content={
+            <RichTooltip
+              units={{ m3: "m³", diesel: "L" }}
+              format={{ m3: (value: number) => fmt.dec(value, 1), diesel: fmt.int }}
+            />
+          }
+        />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        <Bar yAxisId="m3" dataKey="m3" name={mName} fill={mColor} radius={[2, 2, 0, 0]} barSize={12} />
+        <Line
+          yAxisId="diesel"
+          type="monotone"
+          dataKey="diesel"
+          name={lName}
+          stroke={lColor}
+          strokeWidth={2.4}
+          dot={false}
+          activeDot={{ r: 4, strokeWidth: 0 }}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartLineRef({
+  data,
+  dataKey,
+  refValue,
+  refLabel = "Meta",
+  color = C.yellow,
+  unit = "",
+}: {
+  data: Array<Record<string, unknown>>;
+  dataKey: string;
+  refValue?: number;
+  refLabel?: string;
+  color?: string;
+  unit?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 14, right: 24, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis tick={TICK} axisLine={false} tickLine={false} width={48} />
+        <Tooltip content={<RichTooltip units={{ [dataKey]: unit }} />} />
+        {typeof refValue === "number" && Number.isFinite(refValue) && (
+          <ReferenceLine
+            y={refValue}
+            stroke={C.warn}
+            strokeDasharray="4 4"
+            label={{ value: refLabel, fill: C.fg3, fontSize: 10 }}
+          />
+        )}
+        <Line
+          type="monotone"
+          dataKey={dataKey}
+          name={unit ? `${dataKey} (${unit})` : dataKey}
+          stroke={color}
+          strokeWidth={2.4}
+          dot={false}
+          activeDot={{ r: 4, strokeWidth: 0 }}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartHistogram({
+  data,
+  color = C.yellow,
+  refIndex,
+}: {
+  data: Array<Record<string, unknown>>;
+  color?: string;
+  refIndex?: number;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data} margin={{ top: 14, right: 14, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="range" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis tick={TICK} axisLine={false} tickLine={false} width={42} />
+        <Tooltip content={<RichTooltip units={{ count: "itens" }} />} />
+        {typeof refIndex === "number" && refIndex >= 0 && (
+          <ReferenceLine x={data[refIndex]?.range as string} stroke={C.warn} strokeDasharray="4 4" />
+        )}
+        <Bar dataKey="count" name="Quantidade" radius={[3, 3, 0, 0]} barSize={28}>
+          {data.map((_, index) => (
+            <Cell key={index} fill={index === refIndex ? C.warn : color} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export type StackedBarSeries = {
+  dataKey: string;
+  name: string;
+  color: string;
+};
+
+export function ChartStackedBars({
+  data,
+  series,
+}: {
+  data: Array<Record<string, unknown>>;
+  series: StackedBarSeries[];
+}) {
+  const units = Object.fromEntries(series.map((item) => [item.dataKey, "L"])) as Record<
+    string,
+    string
+  >;
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data} margin={{ top: 14, right: 18, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis tick={TICK} axisLine={false} tickLine={false} width={44} />
+        <Tooltip content={<RichTooltip units={units} />} />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        {series.map((item) => (
+          <Bar
+            key={item.dataKey}
+            dataKey={item.dataKey}
+            name={item.name}
+            stackId="diesel"
+            fill={item.color}
+            radius={[2, 2, 0, 0]}
+            barSize={18}
+          />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export type BubblePoint = {
+  name: string;
+  diesel: number;
+  m3: number;
+  horas: number;
+  lpm3?: number;
+  tipo?: string;
+};
+
+export function ChartBubble({ data }: { data: BubblePoint[] }) {
+  const colored = data.map((point) => {
+    const lpm3 = point.lpm3 ?? (point.m3 > 0 ? point.diesel / point.m3 : 0);
+    const color = lpm3 > 0 && lpm3 < 0.06 ? C.ok : lpm3 < 0.12 ? C.warn : C.danger;
+    return { ...point, lpm3, color };
+  });
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ScatterChart margin={{ top: 16, right: 28, left: 8, bottom: 28 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" />
+        <XAxis
+          type="number"
+          dataKey="diesel"
+          name="Diesel"
+          unit=" L"
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+        />
+        <YAxis
+          type="number"
+          dataKey="m3"
+          name="m³"
+          unit=" m³"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(value: number) => fmt.k(value)}
+        />
+        <ZAxis type="number" dataKey="horas" range={[70, 420]} />
+        <Tooltip
+          cursor={{ strokeDasharray: "3 3" }}
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const point = payload[0].payload as BubblePoint;
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: 10,
+                  fontSize: 11,
+                  minWidth: 190,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+                  {point.name}
+                </div>
+                {point.tipo && (
+                  <div style={{ color: "var(--fg-3)", marginBottom: 6 }}>{point.tipo}</div>
+                )}
+                <AggregateRankingRow k="Diesel" v={`${fmt.dec(point.diesel, 1)} L`} />
+                <AggregateRankingRow k="m³" v={`${fmt.dec(point.m3, 1)} m³`} />
+                <AggregateRankingRow k="Horas" v={`${fmt.dec(point.horas, 1)} h`} />
+                <AggregateRankingRow
+                  k="L/m³"
+                  v={point.lpm3 ? `${fmt.dec(point.lpm3, 3)} L/m³` : "sem producao"}
+                />
+              </div>
+            );
+          }}
+        />
+        <Scatter data={colored} name="Equipamentos">
+          {colored.map((point) => (
+            <Cell key={point.name} fill={point.color} fillOpacity={0.75} />
+          ))}
+        </Scatter>
+      </ScatterChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartProductivity({
+  data,
+  color = C.mint,
+}: {
+  data: Array<Record<string, unknown>>;
+  color?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={data} margin={{ top: 14, right: 18, left: 0, bottom: 4 }}>
+        <defs>
+          <linearGradient id="g-productivity-item" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis tick={TICK} axisLine={false} tickLine={false} width={48} />
+        <Tooltip content={<RichTooltip units={{ m3PorH: "m³/h" }} />} />
+        <Area
+          type="monotone"
+          dataKey="m3PorH"
+          name="m³/h"
+          stroke={color}
+          strokeWidth={2}
+          fill="url(#g-productivity-item)"
+          dot={false}
+          activeDot={{ r: 3, strokeWidth: 0 }}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function ChartCompareBars({
+  data,
+  dataKey,
+  nameKey = "id",
+  unit = "",
+  color = C.yellow,
+}: {
+  data: Array<Record<string, unknown>>;
+  dataKey: string;
+  nameKey?: string;
+  unit?: string;
+  color?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data} margin={{ top: 14, right: 18, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis
+          dataKey={nameKey}
+          tick={TICK}
+          axisLine={{ stroke: C.grid }}
+          tickLine={false}
+          interval={0}
+        />
+        <YAxis tick={TICK} axisLine={false} tickLine={false} width={44} />
+        <Tooltip content={<RichTooltip units={{ [dataKey]: unit }} />} />
+        <Bar dataKey={dataKey} radius={[3, 3, 0, 0]} barSize={26}>
+          {data.map((_, index) => (
+            <Cell
+              key={index}
+              fill={index === 0 ? color : index === 1 ? C.yellowD : "oklch(0.5 0.05 90)"}
+            />
+          ))}
+          <LabelList
+            dataKey={dataKey}
+            position="top"
+            formatter={(value) =>
+              typeof value === "number" ? `${fmt.dec(value, 2)}${unit ? ` ${unit}` : ""}` : ""
+            }
+            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
+          />
+        </Bar>
+      </BarChart>
     </ResponsiveContainer>
   );
 }

@@ -30,19 +30,36 @@ import { ChartCard } from "@/components/charts/ChartCard";
 import {
   ChartAggregateRanking,
   ChartBars,
+  ChartBubble,
+  ChartCompareBars,
   ChartDonut,
   ChartHBars,
+  ChartHistogram,
   ChartHourlyProduction,
   ChartLine,
+  ChartLineLpm3,
+  ChartLineRef,
+  ChartM3Diesel,
   ChartMultiLine,
+  ChartProductivity,
   ChartProducaoEmpoladaDiesel,
   ChartProdConsumo,
   ChartProdStack,
+  ChartStackedBars,
   ChartVolumeLinePorObra,
   type AggregateRankingPoint,
+  type BubblePoint,
+  type StackedBarSeries,
 } from "@/components/charts/Charts";
 import { EmptyChartState } from "@/components/charts/ProductionConsumptionCharts";
 import { CHART_SERIES_COLORS } from "@/lib/chart-theme";
+import {
+  OPERATIONAL_ITEM_ORDER,
+  operationalItemLabel,
+  operationalItemRank,
+  resolveOperationalItem,
+  type OperationalItem,
+} from "@/lib/production-consumption-items";
 
 import {
   DashboardFilters,
@@ -67,6 +84,7 @@ import {
   calculateObraDistribution,
   detectOperationalAlerts,
 } from "@/lib/production-consumption-calculations";
+import { AGGREGATE_TRIP_PRICE } from "@/lib/production-analytics";
 import {
   formatDate,
   formatBRL,
@@ -176,6 +194,484 @@ function topPerObra<T extends { obra: string }>(
 
   return Array.from(grouped.values()).flatMap((group) =>
     [...group].sort((a, b) => metric(b) - metric(a)).slice(0, limit),
+  );
+}
+
+type ItemEquipmentMetric = {
+  equipment: string;
+  label: string;
+  item: OperationalItem;
+  hours: number;
+  liters: number;
+  cost: number;
+  m3: number;
+  trips: number;
+  fuelPerHour: number;
+  fuelPerM3: number;
+  fuelPerTrip: number;
+  productionPerHour: number;
+};
+
+type ItemSummary = {
+  item: OperationalItem;
+  label: string;
+  compactedM3: number;
+  looseM3: number;
+  diesel: number;
+  cost: number;
+  hours: number;
+  trips: number;
+  revenue: number;
+  fuelPerM3: number;
+  fuelPerHour: number;
+  fuelPerTrip: number;
+  costPerM3: number;
+  margin: number;
+  equipment: ItemEquipmentMetric[];
+  daily: Array<{
+    date: string;
+    d: string;
+    m3: number;
+    looseM3: number;
+    diesel: number;
+    cost: number;
+    hours: number;
+    trips: number;
+    lPorM3: number;
+    m3PorH: number;
+  }>;
+};
+
+function shortDateLabel(date: string) {
+  return date && date.length >= 10 ? `${date.slice(8, 10)}/${date.slice(5, 7)}` : date;
+}
+
+function emptyItemSummary(item: OperationalItem): ItemSummary {
+  return {
+    item,
+    label: operationalItemLabel(item),
+    compactedM3: 0,
+    looseM3: 0,
+    diesel: 0,
+    cost: 0,
+    hours: 0,
+    trips: 0,
+    revenue: 0,
+    fuelPerM3: 0,
+    fuelPerHour: 0,
+    fuelPerTrip: 0,
+    costPerM3: 0,
+    margin: 0,
+    equipment: [],
+    daily: [],
+  };
+}
+
+function divide(numerator: number, denominator: number) {
+  return denominator > 0 ? numerator / denominator : 0;
+}
+
+type ItemStackView = {
+  data: Array<Record<string, unknown>>;
+  series: StackedBarSeries[];
+};
+
+const EMPTY_ITEM_STACK: ItemStackView = { data: [], series: [] };
+
+function fixedNumber(value: number, decimals = 2) {
+  return Number.isFinite(value) ? Number(value.toFixed(decimals)) : 0;
+}
+
+function itemDailyChartRows(summary: ItemSummary) {
+  return summary.daily.map((day) => ({
+    ...day,
+    diesel: fixedNumber(day.diesel, 2),
+    m3: fixedNumber(day.m3, 2),
+    lPorM3: fixedNumber(day.lPorM3, 3),
+    m3PorH: fixedNumber(day.m3PorH, 2),
+  }));
+}
+
+function itemEquipmentChartRows(summary: ItemSummary) {
+  return summary.equipment
+    .filter((row) => row.liters > 0 || row.hours > 0 || row.m3 > 0 || row.trips > 0)
+    .map((row) => ({
+      id: row.label,
+      equipamento: row.label,
+      litros: fixedNumber(row.liters, 2),
+      horas: fixedNumber(row.hours, 2),
+      lph: fixedNumber(row.fuelPerHour, 2),
+      lpm3: fixedNumber(row.fuelPerM3, 3),
+      m3: fixedNumber(row.m3, 2),
+      viagens: fixedNumber(row.trips, 0),
+      lViagem: fixedNumber(row.fuelPerTrip, 2),
+      m3PorH: fixedNumber(row.productionPerHour, 2),
+    }));
+}
+
+function itemBubbleRows(summary: ItemSummary): BubblePoint[] {
+  return summary.equipment
+    .filter((row) => row.liters > 0 || row.m3 > 0 || row.hours > 0)
+    .slice(0, 12)
+    .map((row) => ({
+      name: row.label,
+      diesel: fixedNumber(row.liters, 2),
+      m3: fixedNumber(row.m3, 2),
+      horas: fixedNumber(row.hours, 2),
+      lpm3: row.m3 > 0 ? fixedNumber(row.fuelPerM3, 3) : undefined,
+      tipo: summary.label,
+    }));
+}
+
+function histogramRows(values: number[], unit: string) {
+  const clean = values.filter((value) => Number.isFinite(value) && value > 0);
+  if (clean.length === 0) return [];
+  const max = Math.max(...clean);
+  const bins = Math.min(5, Math.max(3, Math.ceil(Math.sqrt(clean.length))));
+  const step = max / bins || 1;
+
+  return Array.from({ length: bins }, (_, index) => {
+    const from = index * step;
+    const to = index === bins - 1 ? max : (index + 1) * step;
+    const count = clean.filter((value) =>
+      index === bins - 1 ? value >= from && value <= to : value >= from && value < to,
+    ).length;
+    return {
+      range: `${formatNumber(from, 1)}-${formatNumber(to, 1)} ${unit}`,
+      count,
+    };
+  });
+}
+
+function ItemKpiGrid({ summary, mode }: { summary: ItemSummary; mode: OperationalItem }) {
+  if (mode === "transporte") {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <KpiCardCompact label="Viagens" value={formatNumber(summary.trips, 0)} icon="local_shipping" />
+        <KpiCardCompact label="m3 transportado" value={formatM3(summary.compactedM3)} icon="compress" />
+        <KpiCardCompact label="Diesel dos agregados" value={formatLiters(summary.diesel)} icon="local_gas_station" />
+        <KpiCardCompact label="Custo logistico" value={formatBRL(summary.cost)} icon="payments" />
+        <KpiCardCompact label="L/m3" value={formatNumber(summary.fuelPerM3, 3)} icon="speed" />
+        <KpiCardCompact label="L/viagem" value={formatNumber(summary.fuelPerTrip, 2)} icon="route" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <KpiCardCompact label="Diesel" value={formatLiters(summary.diesel)} icon="local_gas_station" />
+      <KpiCardCompact label="Horas trabalhadas" value={formatHours(summary.hours)} icon="schedule" />
+      <KpiCardCompact label="L/h" value={formatNumber(summary.fuelPerHour, 2)} icon="speed" />
+      <KpiCardCompact label="L/m3" value={formatNumber(summary.fuelPerM3, 3)} icon="query_stats" />
+      <KpiCardCompact label="m3 relacionado" value={formatM3(summary.compactedM3)} icon="compress" />
+      <KpiCardCompact label="Equipamentos" value={String(summary.equipment.length)} icon="precision_manufacturing" />
+    </div>
+  );
+}
+
+function ItemEquipmentTable({
+  rows,
+  mode,
+}: {
+  rows: ReturnType<typeof itemEquipmentChartRows>;
+  mode: OperationalItem;
+}) {
+  if (rows.length === 0) return null;
+
+  const headings =
+    mode === "transporte"
+      ? ["Equipamento", "Viagens", "m3", "Diesel", "L/viagem", "L/m3"]
+      : ["Equipamento", "Horas", "Diesel", "L/h", "m3", "L/m3"];
+
+  return (
+    <div className="rounded border border-border-low bg-surface-container p-4">
+      <h3 className="text-xs font-black uppercase tracking-widest mb-3">
+        Ranking operacional por equipamento
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border-low text-on-surface-variant">
+              {headings.map((heading) => (
+                <th key={heading} className="py-2 pr-4 text-left font-black uppercase">
+                  {heading}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 12).map((row) => (
+              <tr key={row.id} className="border-b border-border-low/40">
+                <td className="py-2 pr-4 font-semibold">{row.equipamento}</td>
+                {mode === "transporte" ? (
+                  <>
+                    <td className="py-2 pr-4 tnum">{formatNumber(row.viagens, 0)}</td>
+                    <td className="py-2 pr-4 tnum">{formatM3(row.m3)}</td>
+                    <td className="py-2 pr-4 tnum">{formatLiters(row.litros)}</td>
+                    <td className="py-2 pr-4 tnum">{formatNumber(row.lViagem, 2)}</td>
+                    <td className="py-2 pr-4 tnum">{formatNumber(row.lpm3, 3)}</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="py-2 pr-4 tnum">{formatHours(row.horas)}</td>
+                    <td className="py-2 pr-4 tnum">{formatLiters(row.litros)}</td>
+                    <td className="py-2 pr-4 tnum">{formatNumber(row.lph, 2)}</td>
+                    <td className="py-2 pr-4 tnum">{formatM3(row.m3)}</td>
+                    <td className="py-2 pr-4 tnum">{formatNumber(row.lpm3, 3)}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function OperationalItemPanel({
+  summary,
+  stack,
+}: {
+  summary: ItemSummary;
+  stack: ItemStackView;
+}) {
+  const dailyRows = itemDailyChartRows(summary);
+  const equipmentRows = itemEquipmentChartRows(summary);
+  const bubbleRows = itemBubbleRows(summary);
+  const histogramMetric =
+    summary.item === "transporte"
+      ? equipmentRows.map((row) => row.lViagem)
+      : equipmentRows.map((row) => row.lph);
+  const histogramUnit = summary.item === "transporte" ? "L/viagem" : "L/h";
+  const lpm3Target = summary.fuelPerM3 > 0 ? summary.fuelPerM3 : 0.06;
+
+  return (
+    <div className="space-y-4">
+      <ItemKpiGrid summary={summary} mode={summary.item} />
+
+      {summary.item === "escavacao" && (
+        <>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Escavacao - eficiencia diaria"
+              description="Litros por m3 alocado na data da PDE"
+              height={320}
+              hasData={dailyRows.length > 0}
+            >
+              <ChartLineLpm3 data={dailyRows} />
+            </ChartCard>
+            <ChartCard
+              title="Escavacao - m3 x diesel"
+              description="Volume relacionado e diesel alocado"
+              height={320}
+              hasData={dailyRows.length > 0}
+            >
+              <ChartM3Diesel data={dailyRows} />
+            </ChartCard>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Ranking de escavacao"
+              description="Litros por frota/equipamento"
+              height={340}
+              hasData={equipmentRows.length > 0}
+            >
+              <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
+            </ChartCard>
+            <ChartCard
+              title="Bolhas de eficiencia"
+              description="X diesel, Y m3, tamanho por horas"
+              height={340}
+              hasData={bubbleRows.length > 0}
+            >
+              <ChartBubble data={bubbleRows} />
+            </ChartCard>
+          </div>
+        </>
+      )}
+
+      {summary.item === "transporte" && (
+        <>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Transporte - m3 x diesel"
+              description="m3 transportado e diesel dos caminhoes/agregados"
+              height={330}
+              hasData={dailyRows.length > 0}
+            >
+              <ChartM3Diesel data={dailyRows} />
+            </ChartCard>
+            <ChartCard
+              title="Ranking por agregado"
+              description="Viagens por caminhao/agregado"
+              height={330}
+              hasData={equipmentRows.length > 0}
+            >
+              <ChartHBars
+                data={equipmentRows}
+                dataKey="viagens"
+                nameKey="id"
+                unit=""
+                topN={10}
+                color="oklch(0.74 0.13 220)"
+              />
+            </ChartCard>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Distribuicao L/viagem"
+              description="Faixas de consumo logistico"
+              height={320}
+              hasData={histogramMetric.length > 0}
+            >
+              <ChartHistogram data={histogramRows(histogramMetric, histogramUnit)} />
+            </ChartCard>
+            <ChartCard
+              title="Comparacao L/m3"
+              description="Eficiencia por caminhao/agregado"
+              height={320}
+              hasData={equipmentRows.some((row) => row.lpm3 > 0)}
+            >
+              <ChartCompareBars
+                data={equipmentRows.filter((row) => row.lpm3 > 0).slice(0, 8)}
+                dataKey="lpm3"
+                nameKey="id"
+                unit="L/m3"
+              />
+            </ChartCard>
+          </div>
+        </>
+      )}
+
+      {summary.item === "tratamento" && (
+        <>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Tratamento - eficiencia diaria"
+              description="L/m3 por data operacional da PDE"
+              height={320}
+              hasData={dailyRows.length > 0}
+            >
+              <ChartLineLpm3 data={dailyRows} />
+            </ChartCard>
+            <ChartCard
+              title="Tratamento - diesel empilhado"
+              description="Barras empilhadas por equipamento"
+              height={320}
+              hasData={stack.data.length > 0 && stack.series.length > 0}
+            >
+              <ChartStackedBars data={stack.data} series={stack.series} />
+            </ChartCard>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Ranking de tratamento"
+              description="Litros por frota/equipamento"
+              height={340}
+              hasData={equipmentRows.length > 0}
+            >
+              <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
+            </ChartCard>
+            <ChartCard
+              title="Bolhas de eficiencia"
+              description="X diesel, Y m3, tamanho por horas"
+              height={340}
+              hasData={bubbleRows.length > 0}
+            >
+              <ChartBubble data={bubbleRows} />
+            </ChartCard>
+          </div>
+        </>
+      )}
+
+      {summary.item === "compactacao" && (
+        <>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Compactacao - produtividade"
+              description="m3 por hora dos rolos/compactadores"
+              height={320}
+              hasData={dailyRows.length > 0}
+            >
+              <ChartProductivity data={dailyRows} />
+            </ChartCard>
+            <ChartCard
+              title="Compactacao - L/m3 com referencia"
+              description="Linha diaria comparada com referencia do periodo"
+              height={320}
+              hasData={dailyRows.length > 0}
+            >
+              <ChartLineRef
+                data={dailyRows}
+                dataKey="lPorM3"
+                refValue={lpm3Target}
+                refLabel="Ref."
+                unit="L/m3"
+              />
+            </ChartCard>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ChartCard
+              title="Produtividade por equipamento"
+              description="m3/h por rolo ou compactador"
+              height={330}
+              hasData={equipmentRows.some((row) => row.m3PorH > 0)}
+            >
+              <ChartCompareBars
+                data={equipmentRows.filter((row) => row.m3PorH > 0).slice(0, 8)}
+                dataKey="m3PorH"
+                nameKey="id"
+                unit="m3/h"
+              />
+            </ChartCard>
+            <ChartCard
+              title="Consumo por hora"
+              description="L/h por frota/equipamento"
+              height={330}
+              hasData={equipmentRows.some((row) => row.lph > 0)}
+            >
+              <ChartHBars
+                data={equipmentRows.filter((row) => row.lph > 0)}
+                dataKey="lph"
+                nameKey="id"
+                unit="L/h"
+                topN={10}
+              />
+            </ChartCard>
+          </div>
+        </>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <ChartCard
+          title={`Distribuicao ${histogramUnit}`}
+          description="Faixas por equipamento"
+          height={300}
+          hasData={histogramMetric.length > 0}
+        >
+          <ChartHistogram data={histogramRows(histogramMetric, histogramUnit)} />
+        </ChartCard>
+        <ChartCard
+          title="Ranking por eficiencia"
+          description="Menor L/m3 entre equipamentos com producao relacionada"
+          height={300}
+          hasData={equipmentRows.some((row) => row.lpm3 > 0)}
+        >
+          <ChartCompareBars
+            data={equipmentRows
+              .filter((row) => row.lpm3 > 0)
+              .sort((a, b) => a.lpm3 - b.lpm3)
+              .slice(0, 8)}
+            dataKey="lpm3"
+            nameKey="id"
+            unit="L/m3"
+          />
+        </ChartCard>
+      </div>
+
+      <ItemEquipmentTable rows={equipmentRows} mode={summary.item} />
+    </div>
   );
 }
 
@@ -336,13 +832,21 @@ async function fetchDashboardRows(ids: string[], signal?: AbortSignal): Promise<
 
 const TAB_IDS_VISIBLE = [
   "overview",
-  "production",
-  "consumption",
-  "trucks",
-  "equipment",
-  "efficiency",
+  "escavacao",
+  "transporte",
+  "tratamento",
+  "compactacao",
   "hours",
 ] as const;
+
+const ITEM_DASHBOARD_TABS = [
+  { id: "overview", label: "Visão Geral" },
+  { id: "escavacao", label: "Escavação" },
+  { id: "transporte", label: "Transporte" },
+  { id: "tratamento", label: "Tratamento" },
+  { id: "compactacao", label: "Compactação" },
+  { id: "hours", label: "Produção por Hora" },
+];
 
 function ProducaoConsumoRefactored() {
   const queryClient = useQueryClient();
@@ -375,7 +879,7 @@ function ProducaoConsumoRefactored() {
     [analysisSelection.selectedIds],
   );
   const { filters, updateFilters, clearFilters } = useDashboardFilters();
-  const { activeTab, setActiveTab, tabs } = useDashboardTabs();
+  const { activeTab, setActiveTab } = useDashboardTabs();
   const analysesModal = useAnalysesModal();
 
   const dashboardQuery = useQuery({
@@ -444,16 +948,23 @@ function ProducaoConsumoRefactored() {
     prevPage: tripPrevPage,
   } = usePagination(obraScopedTripRows.length, PAGE_SIZE);
 
-  const visibleTabs = useMemo(
-    () => tabs.filter((t) => TAB_IDS_VISIBLE.includes(t.id as (typeof TAB_IDS_VISIBLE)[number])),
-    [tabs],
-  );
+  const visibleTabs = useMemo(() => ITEM_DASHBOARD_TABS, []);
+
+  useEffect(() => {
+    if (!TAB_IDS_VISIBLE.includes(activeTab as (typeof TAB_IDS_VISIBLE)[number])) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, setActiveTab]);
 
   const { filteredTrips, filteredFueling, filteredDailyParts } = useFilteredData(
     obraScopedTripRows,
     obraScopedFuelRows,
     obraScopedDailyPartRows,
     filters,
+  );
+  const productiveTrips = useMemo(
+    () => filteredTrips.filter((trip) => isRcoProductiveTrip(trip)),
+    [filteredTrips],
   );
 
   const visibleObras = useMemo(
@@ -481,8 +992,8 @@ function ProducaoConsumoRefactored() {
     [compareByObra, visibleObras],
   );
   const distinctMaterials = useMemo(
-    () => uniqueValues(filteredTrips.map((t) => t.material)),
-    [filteredTrips],
+    () => uniqueValues(productiveTrips.map((t) => t.material)),
+    [productiveTrips],
   );
   const distinctEquipment = useMemo(
     () =>
@@ -493,8 +1004,8 @@ function ProducaoConsumoRefactored() {
     [filteredDailyParts, filteredFueling],
   );
   const distinctAggregates = useMemo(
-    () => uniqueValues(filteredTrips.map((t) => equipmentKey(t))),
-    [filteredTrips],
+    () => uniqueValues(productiveTrips.map((t) => equipmentKey(t))),
+    [productiveTrips],
   );
 
   const filteredFuelAllocations = useMemo(() => {
@@ -616,8 +1127,8 @@ function ProducaoConsumoRefactored() {
   ]);
 
   const dailyMetricsMap = useMemo(
-    () => calculateDailyMetrics(filteredTrips, attributedFueling),
-    [attributedFueling, filteredTrips],
+    () => calculateDailyMetrics(productiveTrips, attributedFueling),
+    [attributedFueling, productiveTrips],
   );
   const dailyData = useMemo(
     () => Array.from(dailyMetricsMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
@@ -625,8 +1136,8 @@ function ProducaoConsumoRefactored() {
   );
 
   const kpis = useMemo(
-    () => calculateOperationalKPIs(filteredTrips, attributedFueling, filteredDailyParts),
-    [attributedFueling, filteredDailyParts, filteredTrips],
+    () => calculateOperationalKPIs(productiveTrips, attributedFueling, filteredDailyParts),
+    [attributedFueling, filteredDailyParts, productiveTrips],
   );
 
   const hourlyAnalysisTrips = useMemo(() => {
@@ -786,8 +1297,8 @@ function ProducaoConsumoRefactored() {
   }, [timeSummaries, totalTimeSummary]);
 
   const aggregateMetrics = useMemo(
-    () => calculateAggregateMetrics(filteredTrips, kpis.compactedM3),
-    [filteredTrips, kpis.compactedM3],
+    () => calculateAggregateMetrics(productiveTrips, kpis.compactedM3),
+    [productiveTrips, kpis.compactedM3],
   );
 
   const equipmentMetrics = useMemo(
@@ -795,10 +1306,359 @@ function ProducaoConsumoRefactored() {
     [filteredDailyParts, attributedFueling],
   );
 
+  const itemSummaries = useMemo(() => {
+    const summaries = new Map<OperationalItem, ItemSummary>(
+      OPERATIONAL_ITEM_ORDER.map((item) => [item, emptyItemSummary(item)]),
+    );
+    const equipmentByKey = new Map<string, ItemEquipmentMetric>();
+    const dailyByItem = new Map<OperationalItem, Map<string, ItemSummary["daily"][number]>>();
+    const aggregateKeys = new Set(productiveTrips.map((trip) => equipmentKey(trip)));
+
+    const ensureSummary = (item: OperationalItem) => {
+      const current = summaries.get(item) ?? emptyItemSummary(item);
+      summaries.set(item, current);
+      return current;
+    };
+    const ensureDaily = (item: OperationalItem, date: string) => {
+      const byDate = dailyByItem.get(item) ?? new Map<string, ItemSummary["daily"][number]>();
+      dailyByItem.set(item, byDate);
+      const current =
+        byDate.get(date) ??
+        ({
+          date,
+          d: shortDateLabel(date),
+          m3: 0,
+          looseM3: 0,
+          diesel: 0,
+          cost: 0,
+          hours: 0,
+          trips: 0,
+          lPorM3: 0,
+          m3PorH: 0,
+        } satisfies ItemSummary["daily"][number]);
+      byDate.set(date, current);
+      return current;
+    };
+    const ensureEquipment = (
+      equipment: string,
+      item: OperationalItem,
+      label = equipment,
+    ): ItemEquipmentMetric => {
+      const key = `${item}:${equipment || label || "SEM_EQUIPAMENTO"}`;
+      const current =
+        equipmentByKey.get(key) ??
+        ({
+          equipment: equipment || label || "SEM_EQUIPAMENTO",
+          label: label || equipment || "SEM_EQUIPAMENTO",
+          item,
+          hours: 0,
+          liters: 0,
+          cost: 0,
+          m3: 0,
+          trips: 0,
+          fuelPerHour: 0,
+          fuelPerM3: 0,
+          fuelPerTrip: 0,
+          productionPerHour: 0,
+        } satisfies ItemEquipmentMetric);
+      equipmentByKey.set(key, current);
+      return current;
+    };
+
+    const productionByDateObra = new Map<
+      string,
+      { compactedM3: number; looseM3: number; trips: number; revenue: number }
+    >();
+    productiveTrips.forEach((trip) => {
+      const date = extractDateKey(trip.datetime);
+      const key = `${date}|${normalizeObraKey(trip.obra)}`;
+      const current = productionByDateObra.get(key) ?? {
+        compactedM3: 0,
+        looseM3: 0,
+        trips: 0,
+        revenue: 0,
+      };
+      current.compactedM3 += calculateCompactedVolume(
+        trip.cubicMLoose || 0,
+        trip.swellFactorApplied,
+      );
+      current.looseM3 += trip.cubicMLoose || 0;
+      current.trips += 1;
+      current.revenue += trip.total || 0;
+      productionByDateObra.set(key, current);
+    });
+
+    const hoursByDateObra = new Map<string, number>();
+    filteredDailyParts.forEach((part) => {
+      if (!part.usedInAnalysis || part.hours <= 0) return;
+      const key = `${part.date}|${normalizeObraKey(part.obra)}`;
+      hoursByDateObra.set(key, (hoursByDateObra.get(key) ?? 0) + part.hours);
+    });
+
+    productiveTrips.forEach((trip) => {
+      const item = "transporte";
+      const summary = ensureSummary(item);
+      const date = extractDateKey(trip.datetime);
+      const compactedM3 = calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
+      const looseM3 = trip.cubicMLoose || 0;
+      const cost = AGGREGATE_TRIP_PRICE;
+      const key = equipmentKey(trip);
+      const equipment = ensureEquipment(key, item, key);
+      const day = ensureDaily(item, date);
+
+      summary.compactedM3 += compactedM3;
+      summary.looseM3 += looseM3;
+      summary.trips += 1;
+      summary.revenue += trip.total || 0;
+      summary.cost += cost;
+      equipment.m3 += compactedM3;
+      equipment.trips += 1;
+      day.m3 += compactedM3;
+      day.looseM3 += looseM3;
+      day.trips += 1;
+    });
+
+    filteredDailyParts.forEach((part) => {
+      const item = resolveOperationalItem({
+        fleet: part.fleet,
+        equipment: part.fleetLabel,
+        description: `${part.sourceSheet} ${part.status}`,
+      });
+      const summary = ensureSummary(item);
+      const equipment = ensureEquipment(part.fleet, item, part.fleetLabel || part.fleet);
+      const day = ensureDaily(item, part.date);
+
+      summary.hours += part.hours || 0;
+      equipment.hours += part.hours || 0;
+      day.hours += part.hours || 0;
+
+      if (!part.usedInAnalysis || part.hours <= 0) return;
+      const productionKey = `${part.date}|${normalizeObraKey(part.obra)}`;
+      const production = productionByDateObra.get(productionKey);
+      const totalHours = hoursByDateObra.get(productionKey) ?? 0;
+      if (!production || totalHours <= 0) return;
+
+      const share = part.hours / totalHours;
+      const compactedM3 = production.compactedM3 * share;
+      const looseM3 = production.looseM3 * share;
+      const trips = production.trips * share;
+      const revenue = production.revenue * share;
+
+      summary.compactedM3 += compactedM3;
+      summary.looseM3 += looseM3;
+      summary.trips += trips;
+      summary.revenue += revenue;
+      equipment.m3 += compactedM3;
+      equipment.trips += trips;
+      day.m3 += compactedM3;
+      day.looseM3 += looseM3;
+      day.trips += trips;
+    });
+
+    attributedFueling.forEach((fuel) => {
+      const equipment = equipmentKey(fuel);
+      const item = aggregateKeys.has(equipment)
+        ? "transporte"
+        : resolveOperationalItem({
+            fleet: equipment,
+            equipment,
+            type: fuel.vehicleType,
+            description: `${fuel.owner} ${fuel.operator}`,
+          });
+      const summary = ensureSummary(item);
+      const row = ensureEquipment(equipment, item, equipment);
+      const date = extractDateKey(fuel.datetime);
+      const day = ensureDaily(item, date);
+      const liters = fuel.liters || 0;
+      const cost = fuel.total || 0;
+
+      summary.diesel += liters;
+      summary.cost += cost;
+      row.liters += liters;
+      row.cost += cost;
+      day.diesel += liters;
+      day.cost += cost;
+    });
+
+    equipmentByKey.forEach((row) => {
+      row.fuelPerHour = divide(row.liters, row.hours);
+      row.fuelPerM3 = divide(row.liters, row.m3);
+      row.fuelPerTrip = divide(row.liters, row.trips);
+      row.productionPerHour = divide(row.m3, row.hours);
+    });
+
+    summaries.forEach((summary) => {
+      summary.fuelPerM3 = divide(summary.diesel, summary.compactedM3);
+      summary.fuelPerHour = divide(summary.diesel, summary.hours);
+      summary.fuelPerTrip = divide(summary.diesel, summary.trips);
+      summary.costPerM3 = divide(summary.cost, summary.compactedM3);
+      summary.margin = summary.revenue - summary.cost;
+      summary.equipment = [...equipmentByKey.values()]
+        .filter((row) => row.item === summary.item)
+        .sort((a, b) => b.liters - a.liters || b.hours - a.hours || b.m3 - a.m3);
+
+      const dailyMap = dailyByItem.get(summary.item) ?? new Map();
+      summary.daily = [...dailyMap.values()]
+        .map((day) => ({
+          ...day,
+          lPorM3: divide(day.diesel, day.m3),
+          m3PorH: divide(day.m3, day.hours),
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    });
+
+    return OPERATIONAL_ITEM_ORDER.map((item) => ensureSummary(item));
+  }, [attributedFueling, filteredDailyParts, productiveTrips]);
+
+  const itemSummaryById = useMemo(
+    () => new Map(itemSummaries.map((summary) => [summary.item, summary])),
+    [itemSummaries],
+  );
+
+  const itemDonutData = useMemo(
+    () =>
+      itemSummaries
+        .filter((summary) => summary.diesel > 0)
+        .map((summary) => ({ name: summary.label, value: summary.diesel })),
+    [itemSummaries],
+  );
+
+  const itemRankingData = useMemo(
+    () =>
+      itemSummaries
+        .filter((summary) => summary.diesel > 0 || summary.compactedM3 > 0 || summary.trips > 0)
+        .map((summary) => ({
+          id: summary.label,
+          item: summary.item,
+          diesel: summary.diesel,
+          m3: summary.compactedM3,
+          lpm3: summary.fuelPerM3,
+          horas: summary.hours,
+          viagens: summary.trips,
+        }))
+        .sort((a, b) => operationalItemRank(a.item) - operationalItemRank(b.item)),
+    [itemSummaries],
+  );
+
+  const itemStackSeries = useMemo<StackedBarSeries[]>(
+    () =>
+      itemSummaries
+        .filter((summary) => summary.item !== "outros" && summary.diesel > 0)
+        .map((summary, index) => ({
+          dataKey: summary.item,
+          name: summary.label,
+          color: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
+        })),
+    [itemSummaries],
+  );
+
+  const itemStackedDaily = useMemo(() => {
+    const rows = new Map<string, Record<string, unknown>>();
+    itemSummaries.forEach((summary) => {
+      summary.daily.forEach((day) => {
+        const row = rows.get(day.date) ?? { date: day.date, d: day.d };
+        row[summary.item] = day.diesel;
+        rows.set(day.date, row);
+      });
+    });
+    return [...rows.values()].sort((a, b) =>
+      String(a.date ?? "").localeCompare(String(b.date ?? "")),
+    );
+  }, [itemSummaries]);
+
+  const itemEquipmentStacks = useMemo(() => {
+    const raw = new Map<
+      OperationalItem,
+      {
+        totals: Map<string, { equipment: string; label: string; liters: number }>;
+        daily: Map<string, Map<string, number>>;
+      }
+    >();
+    const aggregateKeys = new Set(productiveTrips.map((trip) => equipmentKey(trip)));
+
+    const ensureRaw = (item: OperationalItem) => {
+      const current =
+        raw.get(item) ??
+        ({
+          totals: new Map<string, { equipment: string; label: string; liters: number }>(),
+          daily: new Map<string, Map<string, number>>(),
+        } satisfies {
+          totals: Map<string, { equipment: string; label: string; liters: number }>;
+          daily: Map<string, Map<string, number>>;
+        });
+      raw.set(item, current);
+      return current;
+    };
+
+    attributedFueling.forEach((fuel) => {
+      const equipment = equipmentKey(fuel);
+      const item = aggregateKeys.has(equipment)
+        ? "transporte"
+        : resolveOperationalItem({
+            fleet: equipment,
+            equipment,
+            type: fuel.vehicleType,
+            description: `${fuel.owner} ${fuel.operator}`,
+          });
+      const date = extractDateKey(fuel.datetime);
+      const liters = fuel.liters || 0;
+      if (liters <= 0) return;
+
+      const group = ensureRaw(item);
+      const total = group.totals.get(equipment) ?? {
+        equipment,
+        label: equipment,
+        liters: 0,
+      };
+      total.liters += liters;
+      group.totals.set(equipment, total);
+
+      const day = group.daily.get(date) ?? new Map<string, number>();
+      day.set(equipment, (day.get(equipment) ?? 0) + liters);
+      group.daily.set(date, day);
+    });
+
+    const result = new Map<OperationalItem, ItemStackView>();
+    OPERATIONAL_ITEM_ORDER.forEach((item) => {
+      const group = raw.get(item);
+      if (!group) {
+        result.set(item, EMPTY_ITEM_STACK);
+        return;
+      }
+
+      const topEquipment = [...group.totals.values()]
+        .sort((a, b) => b.liters - a.liters)
+        .slice(0, 6);
+      const series = topEquipment.map((row, index) => ({
+        dataKey: `eq${index}`,
+        name: row.label,
+        color: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
+      }));
+      const data = [...group.daily.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, litersByEquipment]) => {
+          const row: Record<string, unknown> = { date, d: shortDateLabel(date) };
+          topEquipment.forEach((equipment, index) => {
+            row[`eq${index}`] = fixedNumber(litersByEquipment.get(equipment.equipment) ?? 0, 2);
+          });
+          return row;
+        });
+
+      result.set(item, { data, series });
+    });
+
+    return result;
+  }, [attributedFueling, productiveTrips]);
+
+  const escavacaoSummary = itemSummaryById.get("escavacao") ?? emptyItemSummary("escavacao");
+  const transporteSummary = itemSummaryById.get("transporte") ?? emptyItemSummary("transporte");
+  const tratamentoSummary = itemSummaryById.get("tratamento") ?? emptyItemSummary("tratamento");
+  const compactacaoSummary = itemSummaryById.get("compactacao") ?? emptyItemSummary("compactacao");
+
   const obraComparison = useMemo(
     () =>
       comparisonSeries.map((series) => {
-        const trips = filteredTrips.filter(
+        const trips = productiveTrips.filter(
           (trip) => normalizeObraKey(trip.obra) === series.obraKey,
         );
         const fueling = attributedFueling.filter(
@@ -823,7 +1683,7 @@ function ProducaoConsumoRefactored() {
           equipmentMetrics: calculateEquipmentMetrics(fueling, dailyParts),
         };
       }),
-    [attributedFueling, comparisonSeries, filteredDailyParts, filteredTrips],
+    [attributedFueling, comparisonSeries, filteredDailyParts, productiveTrips],
   );
 
   const dailyObraComparisonData = useMemo(() => {
@@ -886,12 +1746,15 @@ function ProducaoConsumoRefactored() {
     [obraComparison],
   );
 
-  const obraDistribution = useMemo(() => calculateObraDistribution(filteredTrips), [filteredTrips]);
+  const obraDistribution = useMemo(
+    () => calculateObraDistribution(productiveTrips),
+    [productiveTrips],
+  );
 
   const operationalAlerts = useMemo(
     () =>
       detectOperationalAlerts(
-        filteredTrips,
+        productiveTrips,
         filteredFueling,
         equipmentMetrics.map((e) => ({
           equipment: e.equipment,
@@ -899,7 +1762,7 @@ function ProducaoConsumoRefactored() {
           liters: e.liters,
         })),
       ),
-    [equipmentMetrics, filteredFueling, filteredTrips],
+    [equipmentMetrics, filteredFueling, productiveTrips],
   );
 
   const prefetchDashboardForIds = useCallback(
@@ -968,7 +1831,7 @@ function ProducaoConsumoRefactored() {
 
   const obraEfficiency = useMemo(() => {
     const tripsByKey = new Map<string, { obra: string; compactedM3: number; trips: number }>();
-    filteredTrips.forEach((trip) => {
+    productiveTrips.forEach((trip) => {
       const key = normalizeObraKey(trip.obra);
       const cur = tripsByKey.get(key) ?? {
         obra: trip.obra || "Sem obra",
@@ -1009,7 +1872,7 @@ function ProducaoConsumoRefactored() {
       })
       .filter((o) => o.compactedM3 > 0)
       .sort((a, b) => a.lpm3 - b.lpm3);
-  }, [filteredTrips, attributedFueling]);
+  }, [productiveTrips, attributedFueling]);
 
   const obraBarsData = useMemo(
     () => obraDistribution.map((o) => ({ obra: o.name, m3: o.value })),
@@ -1437,6 +2300,182 @@ function ProducaoConsumoRefactored() {
           {/* ───────────────────────── TABS ────────────────────────── */}
 
           {activeTab === "overview" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+                <KpiCardCompact
+                  label="m3 compactado"
+                  value={formatM3(kpis.compactedM3)}
+                  icon="compress"
+                />
+                <KpiCardCompact
+                  label="m3 solto"
+                  value={formatM3(kpis.looseM3)}
+                  icon="compress"
+                />
+                <KpiCardCompact
+                  label="Diesel total"
+                  value={formatLiters(kpis.diesel)}
+                  icon="local_gas_station"
+                />
+                <KpiCardCompact label="L/m3" value={formatNumber(kpis.fuelPerM3, 3)} icon="speed" />
+                <KpiCardCompact
+                  label="Custo combustivel"
+                  value={formatBRL(kpis.fuelCost)}
+                  icon="payments"
+                />
+                <KpiCardCompact
+                  label="Custo por m3"
+                  value={formatBRL(divide(kpis.fuelCost, kpis.compactedM3))}
+                  icon="paid"
+                />
+                <KpiCardCompact
+                  label="Margem operacional"
+                  value={formatBRL(kpis.operationalMargin)}
+                  icon="monitoring"
+                  tone={kpis.operationalMargin >= 0 ? "success" : "warning"}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <div className="xl:col-span-2">
+                  <ChartCard
+                    title="Producao x Consumo diario"
+                    description="m3 compactado, m3 solto e diesel alocado na data da PDE"
+                    height={340}
+                    hasData={prodConsumoData.length > 0}
+                  >
+                    <ChartProdConsumo data={prodConsumoData} />
+                  </ChartCard>
+                </div>
+                <ChartCard
+                  title="Diesel por item"
+                  description="Distribuicao operacional do diesel alocado"
+                  height={340}
+                  hasData={itemDonutData.length > 0}
+                >
+                  <ChartDonut data={itemDonutData} total={kpis.diesel} unit="L" />
+                </ChartCard>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <ChartCard
+                  title="Diesel diario por item"
+                  description="Barras empilhadas por escavacao, transporte, tratamento e compactacao"
+                  height={320}
+                  hasData={itemStackedDaily.length > 0 && itemStackSeries.length > 0}
+                >
+                  <ChartStackedBars data={itemStackedDaily} series={itemStackSeries} />
+                </ChartCard>
+                <ChartCard
+                  title="Ranking de itens por consumo"
+                  description="Litros totais por item operacional"
+                  height={320}
+                  hasData={itemRankingData.length > 0}
+                >
+                  <ChartHBars
+                    data={itemRankingData}
+                    dataKey="diesel"
+                    nameKey="id"
+                    unit="L"
+                    topN={itemRankingData.length}
+                  />
+                </ChartCard>
+                <ChartCard
+                  title="Ranking de itens por eficiencia"
+                  description="Comparacao L/m3 por item com producao relacionada"
+                  height={320}
+                  hasData={itemRankingData.some((row) => row.lpm3 > 0)}
+                >
+                  <ChartCompareBars
+                    data={[...itemRankingData]
+                      .filter((row) => row.lpm3 > 0)
+                      .sort((a, b) => a.lpm3 - b.lpm3)}
+                    dataKey="lpm3"
+                    nameKey="id"
+                    unit="L/m3"
+                  />
+                </ChartCard>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                {itemSummaries
+                  .filter((summary) => summary.item !== "outros")
+                  .map((summary) => (
+                    <button
+                      key={summary.item}
+                      type="button"
+                      onClick={() => setActiveTab(summary.item)}
+                      className="rounded border border-border-low bg-surface-container p-4 text-left transition-colors hover:border-primary/60"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <h3 className="text-xs font-black uppercase tracking-widest">
+                          {summary.label}
+                        </h3>
+                        <span className="rounded bg-surface-highest px-2 py-1 text-[10px] font-bold text-on-surface-variant">
+                          Abrir
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <p className="text-on-surface-variant">Diesel</p>
+                          <p className="tnum font-black">{formatLiters(summary.diesel)}</p>
+                        </div>
+                        <div>
+                          <p className="text-on-surface-variant">L/m3</p>
+                          <p className="tnum font-black">{formatNumber(summary.fuelPerM3, 3)}</p>
+                        </div>
+                        <div>
+                          <p className="text-on-surface-variant">Horas</p>
+                          <p className="tnum font-black">{formatHours(summary.hours)}</p>
+                        </div>
+                        <div>
+                          <p className="text-on-surface-variant">m3</p>
+                          <p className="tnum font-black">{formatM3(summary.compactedM3)}</p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+              </div>
+
+              <div className="rounded border border-border-low bg-surface-container p-4">
+                <AnalysisHistoryPanel
+                  analyses={analyses}
+                  selectedIds={analysisSelection.selectedIds}
+                  onSelect={handleSelectAnalysisIds}
+                />
+              </div>
+            </div>
+          )}
+
+          {activeTab === "escavacao" && (
+            <OperationalItemPanel
+              summary={escavacaoSummary}
+              stack={itemEquipmentStacks.get("escavacao") ?? EMPTY_ITEM_STACK}
+            />
+          )}
+
+          {activeTab === "transporte" && (
+            <OperationalItemPanel
+              summary={transporteSummary}
+              stack={itemEquipmentStacks.get("transporte") ?? EMPTY_ITEM_STACK}
+            />
+          )}
+
+          {activeTab === "tratamento" && (
+            <OperationalItemPanel
+              summary={tratamentoSummary}
+              stack={itemEquipmentStacks.get("tratamento") ?? EMPTY_ITEM_STACK}
+            />
+          )}
+
+          {activeTab === "compactacao" && (
+            <OperationalItemPanel
+              summary={compactacaoSummary}
+              stack={itemEquipmentStacks.get("compactacao") ?? EMPTY_ITEM_STACK}
+            />
+          )}
+
+          {false && activeTab === "overview" && (
             <>
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <div className="xl:col-span-2">
