@@ -19,10 +19,12 @@ import {
   listFueling,
   listTrips,
 } from "@/lib/api/production-consumption";
+import { listFuelAttributionFn, recalculateFuelFn } from "@/lib/api/fuel-attribution";
 import {
-  listFuelAttributionFn,
-  recalculateFuelFn,
-} from "@/lib/api/fuel-attribution";
+  listFuelAllocationsSupportFn,
+  recalculateFuelAllocationsSupportFn,
+  type FuelAllocationSupportRow,
+} from "@/lib/api/fuel-allocation-support";
 
 import { ChartCard } from "@/components/charts/ChartCard";
 import {
@@ -120,7 +122,11 @@ type ComparisonSeries = {
   fuelPerM3Key: string;
 };
 
-function equipmentKey(row: { prefix?: string | null; vehicleId?: string | null; plate?: string | null }) {
+function equipmentKey(row: {
+  prefix?: string | null;
+  vehicleId?: string | null;
+  plate?: string | null;
+}) {
   return row.prefix || row.vehicleId || row.plate || "SEM_EQUIPAMENTO";
 }
 
@@ -190,14 +196,18 @@ function ShiftProductionCard({ shift }: { shift: ShiftProductionSummary }) {
             <span className="text-on-surface-variant">Última viagem</span>
             <span className="text-right tnum font-semibold">{shift.lastTrip}</span>
             <span className="text-on-surface-variant">Horas produtivas</span>
-            <span className="text-right tnum font-semibold">{formatHours(shift.productiveHours)}</span>
+            <span className="text-right tnum font-semibold">
+              {formatHours(shift.productiveHours)}
+            </span>
             <span className="text-on-surface-variant">Viagens</span>
             <span className="text-right tnum font-semibold">{shift.trips}</span>
             <span className="text-on-surface-variant">Produção</span>
             <span className="text-right tnum font-semibold">{formatHourlyM3(shift.m3)}</span>
             <span className="text-on-surface-variant">Produção/hora</span>
             <span className="text-right tnum font-semibold">
-              {shift.productiveHours > 0 ? `${formatNumber(shift.productionPerHour, 2)} m³/h` : "Dados insuficientes"}
+              {shift.productiveHours > 0
+                ? `${formatNumber(shift.productionPerHour, 2)} m³/h`
+                : "Dados insuficientes"}
             </span>
           </div>
           {shift.hasSingleTrip && (
@@ -225,6 +235,7 @@ type DashboardRows = {
   trips: DbTrip[];
   fueling: DbFueling[];
   dailyParts: DbEquipmentDailyPart[];
+  fuelAllocations: FuelAllocationSupportRow[];
   fuelAttributions: DbFuelAttribution[];
 };
 
@@ -242,6 +253,7 @@ const DASHBOARD_LOADING_IDLE: DashboardLoadingState = {
 const EMPTY_TRIP_ROWS: DbTrip[] = [];
 const EMPTY_FUEL_ROWS: DbFueling[] = [];
 const EMPTY_DAILY_PART_ROWS: DbEquipmentDailyPart[] = [];
+const EMPTY_FUEL_ALLOCATION_ROWS: FuelAllocationSupportRow[] = [];
 const EMPTY_FUEL_ATTR_ROWS: DbFuelAttribution[] = [];
 
 function normalizeAnalysisIds(ids: string[]) {
@@ -285,19 +297,24 @@ async function fetchDashboardRows(ids: string[], signal?: AbortSignal): Promise<
       trips: [],
       fueling: [],
       dailyParts: [],
+      fuelAllocations: [],
       fuelAttributions: [],
     };
   }
 
   throwIfAborted(signal);
-  const [tripsResult, fuelResult, dailyPartResult, attrResult] = await Promise.all([
-    listTrips({ data: { analysisIds: normalizedIds } }),
-    listFueling({ data: { analysisIds: normalizedIds } }),
-    listDailyParts({ data: { analysisIds: normalizedIds } }),
-    listFuelAttributionFn({ data: { analysisIds: normalizedIds } }).catch(
-      () => [] as DbFuelAttribution[],
-    ),
-  ]);
+  const [tripsResult, fuelResult, dailyPartResult, allocationResult, attrResult] =
+    await Promise.all([
+      listTrips({ data: { analysisIds: normalizedIds } }),
+      listFueling({ data: { analysisIds: normalizedIds } }),
+      listDailyParts({ data: { analysisIds: normalizedIds } }),
+      listFuelAllocationsSupportFn({ data: { analysisIds: normalizedIds } }).catch(
+        () => [] as FuelAllocationSupportRow[],
+      ),
+      listFuelAttributionFn({ data: { analysisIds: normalizedIds } }).catch(
+        () => [] as DbFuelAttribution[],
+      ),
+    ]);
   throwIfAborted(signal);
 
   return {
@@ -307,6 +324,9 @@ async function fetchDashboardRows(ids: string[], signal?: AbortSignal): Promise<
     fueling: (fuelResult as DbFueling[]).filter((row) => allowedIds.has(row.analysisId)),
     dailyParts: (dailyPartResult as DbEquipmentDailyPart[]).filter((row) =>
       allowedIds.has(row.analysisId),
+    ),
+    fuelAllocations: (allocationResult as FuelAllocationSupportRow[]).filter((row) =>
+      sourceBelongsToAnalyses(row.sourceFuelingId, allowedIds),
     ),
     fuelAttributions: (attrResult as DbFuelAttribution[]).filter((row) =>
       sourceBelongsToAnalyses(row.sourceFuelingId, allowedIds),
@@ -375,6 +395,7 @@ function ProducaoConsumoRefactored() {
   const tripRows = dashboardRows?.trips ?? EMPTY_TRIP_ROWS;
   const fuelRows = dashboardRows?.fueling ?? EMPTY_FUEL_ROWS;
   const dailyPartRows = dashboardRows?.dailyParts ?? EMPTY_DAILY_PART_ROWS;
+  const fuelAllocationRows = dashboardRows?.fuelAllocations ?? EMPTY_FUEL_ALLOCATION_ROWS;
   const fuelAttrRows = dashboardRows?.fuelAttributions ?? EMPTY_FUEL_ATTR_ROWS;
   const isDashboardHydrating =
     dashboardLoading.isHydratingAnalysis ||
@@ -388,7 +409,8 @@ function ProducaoConsumoRefactored() {
     dashboardLoading.isReloadingDashboard;
 
   const selectedObras = useMemo(
-    () => uniqueNormalizedObras(analysisSelection.selectedAnalyses.map((analysis) => analysis.obra)),
+    () =>
+      uniqueNormalizedObras(analysisSelection.selectedAnalyses.map((analysis) => analysis.obra)),
     [analysisSelection.selectedAnalyses],
   );
   const selectedObraLabels = useMemo(
@@ -406,6 +428,10 @@ function ProducaoConsumoRefactored() {
   const obraScopedDailyPartRows = useMemo(
     () => scopeRowsToSelectedObras(dailyPartRows, selectedObraLabels),
     [dailyPartRows, selectedObraLabels],
+  );
+  const obraScopedFuelAllocationRows = useMemo(
+    () => scopeRowsToSelectedObras(fuelAllocationRows, selectedObraLabels),
+    [fuelAllocationRows, selectedObraLabels],
   );
   const obraScopedFuelAttrRows = useMemo(
     () => scopeRowsToSelectedObras(fuelAttrRows, selectedObraLabels),
@@ -471,17 +497,94 @@ function ProducaoConsumoRefactored() {
     [filteredTrips],
   );
 
+  const filteredFuelAllocations = useMemo(() => {
+    return obraScopedFuelAllocationRows.filter((row) => {
+      if (filters.dateFrom && row.pdeDate < filters.dateFrom) return false;
+      if (filters.dateTo && row.pdeDate > filters.dateTo) return false;
+      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
+      if (
+        filters.equipment !== "all" &&
+        row.fleet !== filters.equipment &&
+        row.equipmentId !== filters.equipment
+      ) {
+        return false;
+      }
+      if (filters.analysisType === "consumption-only" && row.litersAllocated <= 0) return false;
+      return true;
+    });
+  }, [
+    filters.analysisType,
+    filters.dateFrom,
+    filters.dateTo,
+    filters.equipment,
+    filters.obra,
+    obraScopedFuelAllocationRows,
+  ]);
+
   const filteredAttributions = useMemo(() => {
     return obraScopedFuelAttrRows.filter((row) => {
       if (filters.dateFrom && row.date < filters.dateFrom) return false;
       if (filters.dateTo && row.date > filters.dateTo) return false;
       if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
+      if (
+        filters.equipment !== "all" &&
+        row.fleet !== filters.equipment &&
+        row.fleetLabel !== filters.equipment
+      ) {
+        return false;
+      }
+      if (filters.analysisType === "consumption-only" && row.litersAttributed <= 0) return false;
       return true;
     });
-  }, [obraScopedFuelAttrRows, filters.dateFrom, filters.dateTo, filters.obra]);
+  }, [
+    filters.analysisType,
+    filters.dateFrom,
+    filters.dateTo,
+    filters.equipment,
+    filters.obra,
+    obraScopedFuelAttrRows,
+  ]);
+
+  const hasOfficialFuelAllocations = obraScopedFuelAllocationRows.length > 0;
+  const hasLegacyFuelAttributions = obraScopedFuelAttrRows.length > 0;
+  const dieselSource = hasOfficialFuelAllocations
+    ? "fuel_allocations"
+    : hasLegacyFuelAttributions
+      ? "fuel_attribution"
+      : "fueling";
+  const dieselSourceNotice =
+    dieselSource === "fuel_attribution"
+      ? "Rateio oficial por horimetro indisponivel nesta selecao; usando fuel_attribution como fallback."
+      : dieselSource === "fueling"
+        ? "Sem rateio em cache nesta selecao; indicadores de diesel usam CMB bruto."
+        : "";
 
   const attributedFueling = useMemo<DbFueling[]>(() => {
-    if (filteredAttributions.length === 0) return filteredFueling;
+    if (hasOfficialFuelAllocations) {
+      return filteredFuelAllocations.map((a) => ({
+        id: a.id,
+        analysisId: "allocated",
+        datetime: `${a.pdeDate}T12:00:00.000Z`,
+        owner: "",
+        plate: "",
+        vehicleId: "",
+        prefix: a.fleet,
+        vehicleType: "",
+        kmPrevious: a.hourmeterStart,
+        kmCurrent: a.hourmeterEnd,
+        liters: a.litersAllocated || 0,
+        unitPrice: 0,
+        total: a.costAllocated || 0,
+        consumption: 0,
+        standardConsumption: 0,
+        operator: "",
+        obra: a.obra || "",
+        status: null,
+        importBatchId: a.sourceFuelingId,
+        importedAt: a.createdAt ?? "",
+      }));
+    }
+    if (!hasLegacyFuelAttributions) return filteredFueling;
     return filteredAttributions.map((a) => ({
       id: a.id,
       analysisId: "attributed",
@@ -504,7 +607,13 @@ function ProducaoConsumoRefactored() {
       importBatchId: a.sourceFuelingId ?? "",
       importedAt: a.calculatedAt,
     }));
-  }, [filteredAttributions, filteredFueling]);
+  }, [
+    filteredAttributions,
+    filteredFuelAllocations,
+    filteredFueling,
+    hasLegacyFuelAttributions,
+    hasOfficialFuelAllocations,
+  ]);
 
   const dailyMetricsMap = useMemo(
     () => calculateDailyMetrics(filteredTrips, attributedFueling),
@@ -536,17 +645,15 @@ function ProducaoConsumoRefactored() {
         if (filters.aggregate !== "all" && equipmentKey(trip) !== filters.aggregate) return false;
         return true;
       }),
-    [
-      filters.aggregate,
-      filters.dateFrom,
-      filters.dateTo,
-      filters.material,
-      hourlyAnalysisTrips,
-    ],
+    [filters.aggregate, filters.dateFrom, filters.dateTo, filters.material, hourlyAnalysisTrips],
   );
 
   useEffect(() => {
-    if (!import.meta.env.DEV || activeTab !== "hours" || hourlyTripsWithActiveFilters.length === 0) {
+    if (
+      !import.meta.env.DEV ||
+      activeTab !== "hours" ||
+      hourlyTripsWithActiveFilters.length === 0
+    ) {
       return;
     }
     console.table(
@@ -581,9 +688,7 @@ function ProducaoConsumoRefactored() {
     if (!productionDate) return [];
     const obras = new Map<string, string>();
     hourlyTripsWithActiveFilters
-      .filter(
-        (trip) => parseRcoOperationalDateTime(trip.datetime)?.date === productionDate,
-      )
+      .filter((trip) => parseRcoOperationalDateTime(trip.datetime)?.date === productionDate)
       .forEach((trip) => {
         const label = displayObraName(trip.obra);
         const key = normalizeObraName(label);
@@ -674,8 +779,7 @@ function ProducaoConsumoRefactored() {
         trips: hour.trips,
       };
       timeSummaries.forEach((summary, index) => {
-        row[`obra${index}M3`] =
-          summary.hourly.find((item) => item.hour === hour.hour)?.m3 ?? 0;
+        row[`obra${index}M3`] = summary.hourly.find((item) => item.hour === hour.hour)?.m3 ?? 0;
       });
       return row;
     });
@@ -866,7 +970,11 @@ function ProducaoConsumoRefactored() {
     const tripsByKey = new Map<string, { obra: string; compactedM3: number; trips: number }>();
     filteredTrips.forEach((trip) => {
       const key = normalizeObraKey(trip.obra);
-      const cur = tripsByKey.get(key) ?? { obra: trip.obra || "Sem obra", compactedM3: 0, trips: 0 };
+      const cur = tripsByKey.get(key) ?? {
+        obra: trip.obra || "Sem obra",
+        compactedM3: 0,
+        trips: 0,
+      };
       cur.compactedM3 += calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
       cur.trips += 1;
       tripsByKey.set(key, cur);
@@ -889,7 +997,15 @@ function ProducaoConsumoRefactored() {
         const delta = avgLpm3 > 0 ? ((lpm3 - avgLpm3) / avgLpm3) * 100 : 0;
         const score: "ótima" | "média" | "ruim" =
           delta < -10 ? "ótima" : delta < 10 ? "média" : "ruim";
-        return { obra: data.obra, compactedM3: data.compactedM3, liters, lpm3, avgLpm3, delta, score };
+        return {
+          obra: data.obra,
+          compactedM3: data.compactedM3,
+          liters,
+          lpm3,
+          avgLpm3,
+          delta,
+          score,
+        };
       })
       .filter((o) => o.compactedM3 > 0)
       .sort((a, b) => a.lpm3 - b.lpm3);
@@ -900,126 +1016,111 @@ function ProducaoConsumoRefactored() {
     [obraDistribution],
   );
 
-  const aggregatesTop = useMemo(
-    () => {
-      if (!compareByObra) {
-        return aggregateMetrics.map((a) => ({
-          id: a.aggregate,
+  const aggregatesTop = useMemo(() => {
+    if (!compareByObra) {
+      return aggregateMetrics.map((a) => ({
+        id: a.aggregate,
+        obra: "",
+        m3: a.compactedM3,
+        viagens: a.trips,
+      }));
+    }
+
+    const rows = obraComparison.flatMap((obra) =>
+      obra.aggregateMetrics.map((a) => ({
+        id: withObraLabel(a.aggregate, obra.obra),
+        obra: obra.obra,
+        m3: a.compactedM3,
+        viagens: a.trips,
+      })),
+    );
+    return topPerObra(rows, (row) => row.m3);
+  }, [aggregateMetrics, compareByObra, obraComparison]);
+
+  const equipmentHoursData = useMemo(() => {
+    if (!compareByObra) {
+      return equipmentMetrics.map((e) => ({ id: e.equipment, obra: "", horas: e.hours }));
+    }
+
+    const rows = obraComparison.flatMap((obra) =>
+      obra.equipmentMetrics.map((e) => ({
+        id: withObraLabel(e.equipment, obra.obra),
+        obra: obra.obra,
+        horas: e.hours,
+      })),
+    );
+    return topPerObra(rows, (row) => row.horas);
+  }, [compareByObra, equipmentMetrics, obraComparison]);
+
+  const equipmentLitersData = useMemo(() => {
+    if (!compareByObra) {
+      return equipmentMetrics.map((e) => ({ id: e.equipment, obra: "", litros: e.liters }));
+    }
+
+    const rows = obraComparison.flatMap((obra) =>
+      obra.equipmentMetrics.map((e) => ({
+        id: withObraLabel(e.equipment, obra.obra),
+        obra: obra.obra,
+        litros: e.liters,
+      })),
+    );
+    return topPerObra(rows, (row) => row.litros);
+  }, [compareByObra, equipmentMetrics, obraComparison]);
+
+  const equipmentLPerHourData = useMemo(() => {
+    if (!compareByObra) {
+      return equipmentMetrics
+        .filter((e) => e.hours > 0)
+        .map((e) => ({
+          equipamento: e.equipment,
           obra: "",
-          m3: a.compactedM3,
-          viagens: a.trips,
+          lph: Number(e.fuelPerHour.toFixed(2)),
         }));
-      }
+    }
 
-      const rows = obraComparison.flatMap((obra) =>
-        obra.aggregateMetrics.map((a) => ({
-          id: withObraLabel(a.aggregate, obra.obra),
+    const rows = obraComparison.flatMap((obra) =>
+      obra.equipmentMetrics
+        .filter((e) => e.hours > 0)
+        .map((e) => ({
+          equipamento: withObraLabel(e.equipment, obra.obra),
           obra: obra.obra,
+          lph: Number(e.fuelPerHour.toFixed(2)),
+        })),
+    );
+    return topPerObra(rows, (row) => row.lph);
+  }, [compareByObra, equipmentMetrics, obraComparison]);
+
+  const aggregateRankingData: AggregateRankingPoint[] = useMemo(() => {
+    if (compareByObra) {
+      return obraComparison.flatMap((obra) =>
+        obra.aggregateMetrics
+          .filter((a) => a.compactedM3 > 0)
+          .map((a) => {
+            const proxyDiesel = (obra.kpis.diesel * a.participation) / 100;
+            return {
+              name: withObraLabel(a.aggregate, obra.obra),
+              obra: obra.obra,
+              liters: proxyDiesel,
+              m3: a.compactedM3,
+              trips: a.trips,
+            };
+          }),
+      );
+    }
+
+    return aggregateMetrics
+      .filter((a) => a.compactedM3 > 0)
+      .map((a) => {
+        const proxyDiesel = (kpis.diesel * a.participation) / 100;
+        return {
+          name: a.aggregate,
+          obra: visibleObras[0],
+          liters: proxyDiesel,
           m3: a.compactedM3,
-          viagens: a.trips,
-        })),
-      );
-      return topPerObra(rows, (row) => row.m3);
-    },
-    [aggregateMetrics, compareByObra, obraComparison],
-  );
-
-  const equipmentHoursData = useMemo(
-    () => {
-      if (!compareByObra) {
-        return equipmentMetrics.map((e) => ({ id: e.equipment, obra: "", horas: e.hours }));
-      }
-
-      const rows = obraComparison.flatMap((obra) =>
-        obra.equipmentMetrics.map((e) => ({
-          id: withObraLabel(e.equipment, obra.obra),
-          obra: obra.obra,
-          horas: e.hours,
-        })),
-      );
-      return topPerObra(rows, (row) => row.horas);
-    },
-    [compareByObra, equipmentMetrics, obraComparison],
-  );
-
-  const equipmentLitersData = useMemo(
-    () => {
-      if (!compareByObra) {
-        return equipmentMetrics.map((e) => ({ id: e.equipment, obra: "", litros: e.liters }));
-      }
-
-      const rows = obraComparison.flatMap((obra) =>
-        obra.equipmentMetrics.map((e) => ({
-          id: withObraLabel(e.equipment, obra.obra),
-          obra: obra.obra,
-          litros: e.liters,
-        })),
-      );
-      return topPerObra(rows, (row) => row.litros);
-    },
-    [compareByObra, equipmentMetrics, obraComparison],
-  );
-
-  const equipmentLPerHourData = useMemo(
-    () => {
-      if (!compareByObra) {
-        return equipmentMetrics
-          .filter((e) => e.hours > 0)
-          .map((e) => ({
-            equipamento: e.equipment,
-            obra: "",
-            lph: Number(e.fuelPerHour.toFixed(2)),
-          }));
-      }
-
-      const rows = obraComparison.flatMap((obra) =>
-        obra.equipmentMetrics
-          .filter((e) => e.hours > 0)
-          .map((e) => ({
-            equipamento: withObraLabel(e.equipment, obra.obra),
-            obra: obra.obra,
-            lph: Number(e.fuelPerHour.toFixed(2)),
-          })),
-      );
-      return topPerObra(rows, (row) => row.lph);
-    },
-    [compareByObra, equipmentMetrics, obraComparison],
-  );
-
-  const aggregateRankingData: AggregateRankingPoint[] = useMemo(
-    () => {
-      if (compareByObra) {
-        return obraComparison.flatMap((obra) =>
-          obra.aggregateMetrics
-            .filter((a) => a.compactedM3 > 0)
-            .map((a) => {
-              const proxyDiesel = (obra.kpis.diesel * a.participation) / 100;
-              return {
-                name: withObraLabel(a.aggregate, obra.obra),
-                obra: obra.obra,
-                liters: proxyDiesel,
-                m3: a.compactedM3,
-                trips: a.trips,
-              };
-            }),
-        );
-      }
-
-      return aggregateMetrics
-        .filter((a) => a.compactedM3 > 0)
-        .map((a) => {
-          const proxyDiesel = (kpis.diesel * a.participation) / 100;
-          return {
-            name: a.aggregate,
-            obra: visibleObras[0],
-            liters: proxyDiesel,
-            m3: a.compactedM3,
-            trips: a.trips,
-          };
-        });
-    },
-    [aggregateMetrics, compareByObra, kpis.diesel, obraComparison, visibleObras],
-  );
+          trips: a.trips,
+        };
+      });
+  }, [aggregateMetrics, compareByObra, kpis.diesel, obraComparison, visibleObras]);
 
   // Status dos equipamentos para o donut de auditoria
   const auditDonutData = useMemo(() => {
@@ -1068,6 +1169,11 @@ function ProducaoConsumoRefactored() {
       if (!nextAnalyses.some((analysis) => analysis.id === analysisId)) {
         throw new Error("A analise foi criada, mas ainda nao ficou disponivel para leitura.");
       }
+      await recalculateFuelAllocationsSupportFn({ data: { analysisIds: [analysisId] } }).catch(
+        (err) => {
+          console.error("[fuel-allocation] recalc on createAnalysis failed", err);
+        },
+      );
       const nextIds = nextAnalyses.map((analysis) => analysis.id);
       const nextKey = analysisIdsKey(nextIds);
 
@@ -1143,10 +1249,19 @@ function ProducaoConsumoRefactored() {
       isReloadingDashboard: true,
     });
     try {
-      const r = await recalculateFuelFn({ data: {} });
-      toast.success(
-        `Rateio recalculado: ${r.totalAttributions} atribuicoes, ${r.fleetsProcessed} frotas`,
-      );
+      const official = await recalculateFuelAllocationsSupportFn({
+        data: { analysisIds: selectedAnalysisIds },
+      });
+      if ("skipped" in official) {
+        const legacy = await recalculateFuelFn({ data: {} });
+        toast.success(
+          `Rateio legado recalculado: ${legacy.totalAttributions} atribuicoes, ${legacy.fleetsProcessed} frotas`,
+        );
+      } else {
+        toast.success(
+          `Rateio oficial recalculado: ${official.totalAllocations} alocacoes, ${official.totalAudits} auditorias`,
+        );
+      }
       await queryClient.cancelQueries({
         queryKey: productionQueryKeys.dashboardRoot(),
         exact: false,
@@ -1271,6 +1386,11 @@ function ProducaoConsumoRefactored() {
           />
 
           <DashboardTabs tabs={visibleTabs} activeTab={activeTab} onChange={setActiveTab} />
+          {dieselSourceNotice && (
+            <div className="mb-3 rounded border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-on-surface-variant">
+              {dieselSourceNotice}
+            </div>
+          )}
           <div className="mb-4 flex justify-end">
             <Button
               variant="outline"
@@ -1295,16 +1415,16 @@ function ProducaoConsumoRefactored() {
               value={formatLiters(kpis.diesel)}
               icon="local_gas_station"
             />
-            <KpiCardCompact
-              label="Custo Diesel"
-              value={formatBRL(kpis.fuelCost)}
-              icon="payments"
-            />
+            <KpiCardCompact label="Custo Diesel" value={formatBRL(kpis.fuelCost)} icon="payments" />
             <KpiCardCompact label="Viagens" value={String(kpis.trips)} icon="local_shipping" />
             {activeTab === "efficiency" ? (
               <KpiCardCompact label="L/m³" value={formatNumber(kpis.fuelPerM3, 2)} icon="speed" />
             ) : (
-              <KpiCardCompact label="Produção m³ solto" value={formatM3(kpis.looseM3)} icon="compress" />
+              <KpiCardCompact
+                label="Produção m³ solto"
+                value={formatM3(kpis.looseM3)}
+                icon="compress"
+              />
             )}
             <KpiCardCompact
               label="Eficiência"
@@ -1335,11 +1455,7 @@ function ProducaoConsumoRefactored() {
                   height={340}
                   hasData={obraDistribution.length > 0}
                 >
-                  <ChartDonut
-                    data={obraDistribution}
-                    total={kpis.compactedM3}
-                    unit="m³"
-                  />
+                  <ChartDonut data={obraDistribution} total={kpis.compactedM3} unit="m³" />
                 </ChartCard>
               </div>
 
@@ -1565,114 +1681,118 @@ function ProducaoConsumoRefactored() {
 
           {activeTab === "efficiency" && (
             <div className="space-y-4">
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              <ChartCard
-                title="Eficiência diária · L/m³"
-                description="Consumo específico — menor é melhor"
-                height={320}
-                hasData={
-                  compareByObra ? dailyObraComparisonData.length > 0 : fuelPerM3LineData.length > 0
-                }
-              >
-                {compareByObra ? (
-                  <ChartMultiLine
-                    data={dailyObraComparisonData}
-                    series={obraFuelPerM3Series}
-                    unit="L/m³"
-                    yLabel="L/m³"
-                    precision={2}
-                  />
-                ) : (
-                  <ChartLine
-                    data={fuelPerM3LineData}
-                    dataKey="lpm3"
-                    name="L/m³"
-                    unit="L/m³"
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <ChartCard
+                  title="Eficiência diária · L/m³"
+                  description="Consumo específico — menor é melhor"
+                  height={320}
+                  hasData={
+                    compareByObra
+                      ? dailyObraComparisonData.length > 0
+                      : fuelPerM3LineData.length > 0
+                  }
+                >
+                  {compareByObra ? (
+                    <ChartMultiLine
+                      data={dailyObraComparisonData}
+                      series={obraFuelPerM3Series}
+                      unit="L/m³"
+                      yLabel="L/m³"
+                      precision={2}
+                    />
+                  ) : (
+                    <ChartLine
+                      data={fuelPerM3LineData}
+                      dataKey="lpm3"
+                      name="L/m³"
+                      unit="L/m³"
+                      color="oklch(0.72 0.13 150)"
+                      fillArea
+                    />
+                  )}
+                </ChartCard>
+                <ChartCard
+                  title="Consumo por hora · L/h por equipamento"
+                  description="Top 10 da frota própria"
+                  height={320}
+                  hasData={equipmentLPerHourData.length > 0}
+                >
+                  <ChartHBars
+                    data={
+                      compareByObra ? equipmentLPerHourData : equipmentLPerHourData.slice(0, 10)
+                    }
+                    dataKey="lph"
+                    nameKey="equipamento"
+                    unit="L/h"
                     color="oklch(0.72 0.13 150)"
-                    fillArea
+                    topN={compareByObra ? equipmentLPerHourData.length : 10}
                   />
-                )}
-              </ChartCard>
-              <ChartCard
-                title="Consumo por hora · L/h por equipamento"
-                description="Top 10 da frota própria"
-                height={320}
-                hasData={equipmentLPerHourData.length > 0}
-              >
-                <ChartHBars
-                  data={compareByObra ? equipmentLPerHourData : equipmentLPerHourData.slice(0, 10)}
-                  dataKey="lph"
-                  nameKey="equipamento"
-                  unit="L/h"
-                  color="oklch(0.72 0.13 150)"
-                  topN={compareByObra ? equipmentLPerHourData.length : 10}
-                />
-              </ChartCard>
-            </div>
-
-            {obraEfficiency.length > 1 && (
-              <div>
-                <h3 className="text-xs font-black uppercase tracking-widest mb-3">
-                  Eficiência por Obra
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {obraEfficiency.map((o) => (
-                    <div
-                      key={o.obra}
-                      className="rounded-lg border border-border-low bg-surface-container p-4"
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <span className="text-xs font-black uppercase tracking-widest truncate">
-                          {o.obra}
-                        </span>
-                        <span
-                          className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                            o.score === "ótima"
-                              ? "bg-status-success/15 text-status-success"
-                              : o.score === "ruim"
-                                ? "bg-status-error/15 text-status-error"
-                                : "bg-status-warning/15 text-status-warning"
-                          }`}
-                        >
-                          {o.score}
-                        </span>
-                      </div>
-                      <div className="text-xs text-on-surface-variant space-y-0.5">
-                        <div className="flex justify-between">
-                          <span>m³ compactado</span>
-                          <span className="tnum font-medium">{formatM3(o.compactedM3)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Diesel</span>
-                          <span className="tnum font-medium">{formatLiters(o.liters)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>L/m³</span>
-                          <span className="tnum font-medium">{formatNumber(o.lpm3, 3)} L/m³</span>
-                        </div>
-                        {o.avgLpm3 > 0 && (
-                          <div className="flex justify-between pt-1 border-t border-border-low/60">
-                            <span>vs média</span>
-                            <span
-                              className={`tnum font-bold ${
-                                o.delta < 0
-                                  ? "text-status-success"
-                                  : o.delta > 0
-                                    ? "text-status-error"
-                                    : "text-on-surface-variant"
-                              }`}
-                            >
-                              {o.delta > 0 ? "+" : ""}
-                              {formatNumber(o.delta, 1)}%
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                </ChartCard>
               </div>
-            )}
+
+              {obraEfficiency.length > 1 && (
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-widest mb-3">
+                    Eficiência por Obra
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {obraEfficiency.map((o) => (
+                      <div
+                        key={o.obra}
+                        className="rounded-lg border border-border-low bg-surface-container p-4"
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <span className="text-xs font-black uppercase tracking-widest truncate">
+                            {o.obra}
+                          </span>
+                          <span
+                            className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                              o.score === "ótima"
+                                ? "bg-status-success/15 text-status-success"
+                                : o.score === "ruim"
+                                  ? "bg-status-error/15 text-status-error"
+                                  : "bg-status-warning/15 text-status-warning"
+                            }`}
+                          >
+                            {o.score}
+                          </span>
+                        </div>
+                        <div className="text-xs text-on-surface-variant space-y-0.5">
+                          <div className="flex justify-between">
+                            <span>m³ compactado</span>
+                            <span className="tnum font-medium">{formatM3(o.compactedM3)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Diesel</span>
+                            <span className="tnum font-medium">{formatLiters(o.liters)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>L/m³</span>
+                            <span className="tnum font-medium">{formatNumber(o.lpm3, 3)} L/m³</span>
+                          </div>
+                          {o.avgLpm3 > 0 && (
+                            <div className="flex justify-between pt-1 border-t border-border-low/60">
+                              <span>vs média</span>
+                              <span
+                                className={`tnum font-bold ${
+                                  o.delta < 0
+                                    ? "text-status-success"
+                                    : o.delta > 0
+                                      ? "text-status-error"
+                                      : "text-on-surface-variant"
+                                }`}
+                              >
+                                {o.delta > 0 ? "+" : ""}
+                                {formatNumber(o.delta, 1)}%
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1820,7 +1940,10 @@ function ProducaoConsumoRefactored() {
                             <tr className="border-b border-border-low text-on-surface-variant">
                               <th className="py-2 pr-4 text-left font-black uppercase">Hora</th>
                               {timeSummaries.map((summary) => (
-                                <th key={summary.obra} className="py-2 pr-4 text-right font-black uppercase">
+                                <th
+                                  key={summary.obra}
+                                  className="py-2 pr-4 text-right font-black uppercase"
+                                >
                                   {summary.obra}
                                 </th>
                               ))}
@@ -1893,7 +2016,14 @@ function ProducaoConsumoRefactored() {
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b border-border-low text-on-surface-variant">
-                            {["Hora", "Obra", "Material", "Viagens", "m³ solto", "m³/h estimado"].map((label) => (
+                            {[
+                              "Hora",
+                              "Obra",
+                              "Material",
+                              "Viagens",
+                              "m³ solto",
+                              "m³/h estimado",
+                            ].map((label) => (
                               <th key={label} className="py-2 pr-4 text-left font-black uppercase">
                                 {label}
                               </th>
@@ -1909,14 +2039,10 @@ function ProducaoConsumoRefactored() {
                               >
                                 <td className="py-2 pr-4 tnum">{hour.label}</td>
                                 <td className="py-2 pr-4">{summary.obra}</td>
-                                <td className="py-2 pr-4">
-                                  {hour.materials.join(", ") || "—"}
-                                </td>
+                                <td className="py-2 pr-4">{hour.materials.join(", ") || "—"}</td>
                                 <td className="py-2 pr-4 tnum">{hour.trips}</td>
                                 <td className="py-2 pr-4 tnum">{formatHourlyM3(hour.m3)}</td>
-                                <td className="py-2 pr-4 tnum">
-                                  {formatNumber(hour.m3, 2)} m³/h
-                                </td>
+                                <td className="py-2 pr-4 tnum">{formatNumber(hour.m3, 2)} m³/h</td>
                               </tr>
                             )),
                           )}
@@ -1966,11 +2092,7 @@ function ProducaoConsumoRefactored() {
                     height={360}
                     hasData={auditDonutData.length > 0}
                   >
-                    <ChartDonut
-                      data={auditDonutData}
-                      total={auditDonutTotal}
-                      unit="equipamentos"
-                    />
+                    <ChartDonut data={auditDonutData} total={auditDonutTotal} unit="equipamentos" />
                   </ChartCard>
                 </div>
               )}
@@ -1989,7 +2111,9 @@ function ProducaoConsumoRefactored() {
                           <th className="px-3 py-2 text-left font-black uppercase">Data</th>
                           <th className="px-3 py-2 text-left font-black uppercase">Agregado</th>
                           <th className="px-3 py-2 text-left font-black uppercase">Obra</th>
-                          <th className="px-3 py-2 text-right font-black uppercase">m³ compactado</th>
+                          <th className="px-3 py-2 text-right font-black uppercase">
+                            m³ compactado
+                          </th>
                           <th className="px-3 py-2 text-right font-black uppercase">R$</th>
                         </tr>
                       </thead>
@@ -2005,7 +2129,10 @@ function ProducaoConsumoRefactored() {
                               <td className="px-3 py-2">{trip.obra}</td>
                               <td className="px-3 py-2 text-right tnum">
                                 {formatNumber(
-                                  calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied),
+                                  calculateCompactedVolume(
+                                    trip.cubicMLoose || 0,
+                                    trip.swellFactorApplied,
+                                  ),
                                   1,
                                 )}
                               </td>
@@ -2031,9 +2158,7 @@ function ProducaoConsumoRefactored() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={
-                          tripPage >= Math.ceil(obraScopedTripRows.length / PAGE_SIZE) - 1
-                        }
+                        disabled={tripPage >= Math.ceil(obraScopedTripRows.length / PAGE_SIZE) - 1}
                         onClick={tripNextPage}
                       >
                         Próxima

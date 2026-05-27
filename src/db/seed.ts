@@ -1,6 +1,7 @@
 import { getDb } from "./client";
 import { equipment } from "./schema";
 import type { DbEquipmentInsert } from "./schema";
+import { FLEET_EQUIPMENT_CATALOG } from "@/lib/fleet-equipment-catalog";
 
 export const SEED_EQUIPMENT_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updatedAt">[] = [
   {
@@ -68,6 +69,19 @@ export const SEED_EQUIPMENT_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updated
     acquisitionDate: "14/02/2021",
     manufacturer: "Hyster",
   },
+  ...FLEET_EQUIPMENT_CATALOG.map(({ id, model }) => ({
+    id,
+    model,
+    icon: "construction",
+    hours: 0,
+    status: "Operação" as const,
+    tone: "success" as const,
+    location: "",
+    lastMaintenance: "",
+    seriesNumber: "",
+    acquisitionDate: "",
+    manufacturer: "",
+  })),
 ];
 
 export async function seedEquipmentIfEmpty(d1: D1Database): Promise<void> {

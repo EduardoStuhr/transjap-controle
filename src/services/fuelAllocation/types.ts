@@ -37,7 +37,11 @@ export interface FuelAllocationResult {
 export type FuelAllocationAuditType =
   | "UNALLOCATED_HOURS"
   | "NO_PREVIOUS_HOURMETER"
+  | "NO_MATCHING_PDE"
   | "PDE_WITHOUT_HOURMETER"
+  | "PDE_USING_WORKED_HOURS_FALLBACK"
+  | "PDE_PARTIALLY_COVERED"
+  | "MULTIPLE_PDE_MATCHES"
   | "INVALID_HOURMETER_INTERVAL";
 
 export interface FuelAllocationAuditResult {

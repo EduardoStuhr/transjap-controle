@@ -8,6 +8,7 @@ import { ReminderDialog } from "@/components/calendar/ReminderDialog";
 import { updateCachedReminders } from "@/components/calendar/reminder-query-cache";
 import {
   CALENDAR_TYPE_META,
+  calendarItemAccent,
   priorityMeta,
   type CalendarItem,
 } from "@/components/calendar/calendar-types";
@@ -37,6 +38,12 @@ function fullTime(item: CalendarItem) {
   return `${item.time}${item.endTime ? ` - ${item.endTime}` : ""}`;
 }
 
+function personalReminderPeriod(item: CalendarItem) {
+  const startDate = item.startDate ?? item.date;
+  if (!item.endDate) return formatDate(startDate);
+  return `${formatDate(startDate)} - ${formatDate(item.endDate)}`;
+}
+
 function ItemRow({
   item,
   active,
@@ -47,25 +54,33 @@ function ItemRow({
   onClick: () => void;
 }) {
   const meta = CALENDAR_TYPE_META[item.type];
+  const accent = calendarItemAccent(item);
+  const usesReminderColor = item.originalType === "reminder" && Boolean(item.color);
+  const displayMeta = item.completed && item.originalType === "reminder" ? CALENDAR_TYPE_META["completed_task"] : meta;
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`w-full rounded-xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-industrial ${meta.bg} ${meta.border} ${
-        active ? "ring-1 ring-primary/70" : ""
-      }`}
+      style={
+        usesReminderColor
+          ? { backgroundColor: `${accent.color}18`, borderColor: `${accent.color}55` }
+          : undefined
+      }
+      className={`w-full rounded-xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-industrial ${
+        usesReminderColor ? "" : `${displayMeta.bg} ${displayMeta.border}`
+      } ${active ? "ring-1 ring-primary/70" : ""}`}
     >
       <div className="flex items-start gap-3">
         <span
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: `${meta.color}26`, color: meta.color }}
+          style={{ background: `${accent.color}26`, color: accent.color }}
         >
           <Icon name={meta.icon} className="text-lg" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded bg-black/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-widest">
-              {meta.label}
+              {item.completed && item.originalType === "reminder" ? "Concluído" : meta.label}
             </span>
             <span
               className={`rounded px-2 py-0.5 text-[10px] font-bold ${priorityMeta(item.priority).className}`}
@@ -76,6 +91,8 @@ function ItemRow({
           <p className="mt-1 truncate font-bold text-on-surface">{item.title}</p>
           {item.completed && item.completionLabel ? (
             <p className="mt-1 text-xs font-bold text-status-success">{item.completionLabel}</p>
+          ) : item.originalType === "reminder" ? (
+            <p className="mt-1 text-xs text-on-surface-variant">{item.status}</p>
           ) : (
             <p className="mt-1 text-xs text-on-surface-variant">
               {fullTime(item)} · {item.status}
@@ -142,6 +159,7 @@ export function DayDetailsPanel({
           patch: {
             completed: !item.completed,
             status: item.completed ? "pendente" : "concluído",
+            completedAt: !item.completed ? date : null,
           },
         },
       }),
@@ -153,6 +171,7 @@ export function DayDetailsPanel({
                 ...row,
                 completed: !item.completed,
                 status: item.completed ? "pendente" : "concluído",
+                completedAt: !item.completed ? date : null,
                 updatedAt: new Date().toISOString(),
               }
             : row,
@@ -284,7 +303,9 @@ export function DayDetailsPanel({
               </div>
 
               <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                <DetailBlock label="Horário" value={fullTime(activeItem)} />
+                {activeItem.originalType !== "reminder" && (
+                  <DetailBlock label="Horário" value={fullTime(activeItem)} />
+                )}
                 <DetailBlock
                   label="Status"
                   value={activeItem.completed ? "Concluído" : activeItem.status}
@@ -300,7 +321,14 @@ export function DayDetailsPanel({
                 <DetailBlock label="Criado por" value={activeItem.createdBy || "Você"} />
                 <DetailBlock label="Responsável" value={activeItem.assignedTo.join(", ")} />
                 <DetailBlock label="Local" value={activeItem.location ?? ""} />
-                <DetailBlock label="Data" value={formatDate(activeItem.date)} />
+                <DetailBlock
+                  label={activeItem.originalType === "reminder" ? "Período" : "Data"}
+                  value={
+                    activeItem.originalType === "reminder"
+                      ? personalReminderPeriod(activeItem)
+                      : formatDate(activeItem.date)
+                  }
+                />
               </div>
 
               <div className="mt-6 flex flex-wrap gap-2">

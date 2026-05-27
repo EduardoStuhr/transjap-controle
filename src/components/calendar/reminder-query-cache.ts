@@ -15,8 +15,9 @@ function reminderBelongsToQuery(reminder: DbReminder, queryKey: QueryKey) {
   if (!queryRange || typeof queryRange !== "object") return true;
 
   const range = queryRange as ReminderRange;
+  const endDate = reminder.endDate || reminder.date;
   return (
-    (typeof range.from !== "string" || reminder.date >= range.from) &&
+    (typeof range.from !== "string" || endDate >= range.from) &&
     (typeof range.to !== "string" || reminder.date <= range.to)
   );
 }

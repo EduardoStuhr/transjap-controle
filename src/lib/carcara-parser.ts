@@ -48,6 +48,8 @@ export type ParsedDailyPart = {
   date: string;
   obra: string;
   hours: number;
+  horimInicial?: number;
+  horimFinal?: number;
   sourceSheet: string;
 };
 
@@ -200,6 +202,21 @@ function parsePdeHours(value: unknown): number | null {
   const decimal = Number.parseFloat(text.replace(",", ".").replace(/[^\d.-]/g, ""));
   if (!Number.isFinite(decimal) || decimal <= 0) return null;
   return decimal > 0 && decimal < 1 ? decimal * 24 : decimal;
+}
+
+/**
+ * Parses PDE meter cells such as numbers, "1234" and "1.234,56".
+ * Returns null for empty or non-numeric status cells.
+ */
+function parsePdeNumeric(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/[a-zA-ZçÇãÃõÕáÁéÉíÍóÓúÚ]/.test(text)) return null;
+  const normalized = text.replace(/\./g, "").replace(",", ".");
+  const number = Number.parseFloat(normalized);
+  return Number.isFinite(number) ? number : null;
 }
 
 function normalizeHeader(s: unknown): string {
@@ -384,6 +401,8 @@ type CarcaraPdeLayout = {
   headerRow: number;
   dateCol: number;
   hoursCol: number;
+  horimInicialCol: number;
+  horimFinalCol: number;
   obraCol: number;
   fleet: string;
   fleetLabel: string;
@@ -430,6 +449,16 @@ function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPde
   }
   if (hoursCol < 0) hoursCol = 4;
 
+  let horimInicialCol = -1;
+  let horimFinalCol = -1;
+  for (let c = 0; c < header.length; c++) {
+    const h = header[c];
+    if (h === "h. inicial" || h === "h inicial") horimInicialCol = c;
+    if (h === "h. final" || h === "h final") horimFinalCol = c;
+  }
+  if (horimInicialCol < 0) horimInicialCol = 2;
+  if (horimFinalCol < 0) horimFinalCol = 3;
+
   let obraCol = -1;
   for (let c = 0; c < Math.max(header.length, groupingRow.length); c++) {
     if (header[c] === "obra" || groupingRow[c] === "obra") {
@@ -463,7 +492,16 @@ function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPde
   }
   if (!fleet) return null;
 
-  return { headerRow, dateCol: 1, hoursCol, obraCol, fleet, fleetLabel };
+  return {
+    headerRow,
+    dateCol: 1,
+    hoursCol,
+    horimInicialCol,
+    horimFinalCol,
+    obraCol,
+    fleet,
+    fleetLabel,
+  };
 }
 
 function parseCarcaraPdeSheet(
@@ -501,12 +539,17 @@ function parseCarcaraPdeSheet(
     const horas = parsePdeHours(row[layout.hoursCol]);
     if (horas == null || horas <= 0) continue;
 
+    const horimInicial = parsePdeNumeric(row[layout.horimInicialCol]) ?? 0;
+    const horimFinal = parsePdeNumeric(row[layout.horimFinalCol]) ?? 0;
+
     rows.push({
       fleet: layout.fleet,
       fleetLabel: layout.fleetLabel,
       date: dataConvertida,
       obra: layout.obraCol >= 0 ? trim(row[layout.obraCol]) : "",
       hours: horas,
+      horimInicial,
+      horimFinal,
       sourceSheet: `${sheetName}#${rowNumber}`,
     });
   }

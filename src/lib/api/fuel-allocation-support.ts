@@ -20,6 +20,9 @@ import type {
 type AllocationSupportScope = {
   analysisIds?: string[];
   fleet?: string;
+  sourceFuelingId?: string;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 type AllocationSupportFilters = {
@@ -28,6 +31,7 @@ type AllocationSupportFilters = {
   obra?: string;
   fleet?: string;
   sourceFuelingId?: string;
+  analysisIds?: string[];
 };
 
 export type FuelAllocationSupportRow = {
@@ -94,12 +98,34 @@ function auditId(row: FuelAllocationAuditResult, sequence: number) {
   return `FAA:${row.sourceFuelingId ?? "UNKNOWN"}:${row.type}:${sequence}`;
 }
 
-async function replaceCachedResults(
+function analysisSourceWhere(analysisIds: string[]) {
+  const clauses = analysisIds.map(() => "(source_fueling_id = ? OR source_fueling_id LIKE ?)");
+  const params = analysisIds.flatMap((analysisId) => [analysisId, `${analysisId}:%`]);
+  return { sql: clauses.length ? `(${clauses.join(" OR ")})` : "", params };
+}
+
+async function deleteCachedResults(
   d1: D1Database,
   fuelingIds: string[],
-  allocations: FuelAllocationResult[],
-  audits: FuelAllocationAuditResult[],
+  scope: AllocationSupportScope,
 ) {
+  const analysisIds = scope.analysisIds?.filter(Boolean) ?? [];
+  if (analysisIds.length > 0 && !scope.sourceFuelingId && !scope.dateFrom && !scope.dateTo) {
+    const analysisFilter = analysisSourceWhere(analysisIds);
+    const fleet = scope.fleet ? normalizeFleet(scope.fleet) : "";
+    const fleetSql = fleet ? " AND fleet = ?" : "";
+    const params = fleet ? [...analysisFilter.params, fleet] : analysisFilter.params;
+    await runBatch(d1, [
+      d1
+        .prepare(`DELETE FROM fuel_allocations WHERE ${analysisFilter.sql}${fleetSql}`)
+        .bind(...params),
+      d1
+        .prepare(`DELETE FROM fuel_allocation_audit WHERE ${analysisFilter.sql}${fleetSql}`)
+        .bind(...params),
+    ]);
+    return;
+  }
+
   const sources = [...new Set(fuelingIds)];
   const deletes: D1PreparedStatement[] = [];
   for (let start = 0; start < sources.length; start += WRITE_BATCH_SIZE) {
@@ -115,7 +141,16 @@ async function replaceCachedResults(
     );
   }
   if (deletes.length > 0) await runBatch(d1, deletes);
+}
 
+async function replaceCachedResults(
+  d1: D1Database,
+  fuelingIds: string[],
+  allocations: FuelAllocationResult[],
+  audits: FuelAllocationAuditResult[],
+  scope: AllocationSupportScope,
+) {
+  await deleteCachedResults(d1, fuelingIds, scope);
   const writes: D1PreparedStatement[] = allocations.map((row, index) =>
     d1
       .prepare(
@@ -177,8 +212,20 @@ async function loadSourceData(d1: D1Database, scope: AllocationSupportScope) {
     : await db.select().from(equipmentDailyParts).all();
   const historicalFuelRows = analysisIds.length ? await db.select().from(fueling).all() : fuelRows;
   const selectedFleet = scope.fleet ? normalizeFleet(scope.fleet) : "";
+  const selectedSourceFuelingId = scope.sourceFuelingId?.trim() ?? "";
+  const inFuelingDateRange = (row: DbFueling) => {
+    const date = row.datetime.slice(0, 10);
+    if (scope.dateFrom && date < scope.dateFrom) return false;
+    if (scope.dateTo && date > scope.dateTo) return false;
+    return true;
+  };
   return {
-    fuelRows: fuelRows.filter((row) => !selectedFleet || sourceFleet(row) === selectedFleet),
+    fuelRows: fuelRows.filter(
+      (row) =>
+        (!selectedFleet || sourceFleet(row) === selectedFleet) &&
+        (!selectedSourceFuelingId || row.id === selectedSourceFuelingId) &&
+        inFuelingDateRange(row),
+    ),
     pdeRows: pdeRows.filter((row) => !selectedFleet || pdeFleet(row) === selectedFleet),
     historicalFuelRows: historicalFuelRows.filter(
       (row) => !selectedFleet || sourceFleet(row) === selectedFleet,
@@ -201,11 +248,7 @@ function fuelEntryFromRow(row: DbFueling): FuelEntry | null {
   };
 }
 
-function findPriorFuel(
-  fuel: FuelEntry,
-  historicalFuels: FuelEntry[],
-  selectedIds: Set<string>,
-) {
+function findPriorFuel(fuel: FuelEntry, historicalFuels: FuelEntry[], selectedIds: Set<string>) {
   return historicalFuels
     .filter(
       (row) =>
@@ -214,10 +257,7 @@ function findPriorFuel(
         (row.date < fuel.date ||
           (row.date === fuel.date && row.currentHourmeter < fuel.currentHourmeter)),
     )
-    .sort(
-      (a, b) =>
-        a.date.localeCompare(b.date) || a.currentHourmeter - b.currentHourmeter,
-    )
+    .sort((a, b) => a.date.localeCompare(b.date) || a.currentHourmeter - b.currentHourmeter)
     .at(-1);
 }
 
@@ -226,10 +266,7 @@ function calculateFromExistingData(
   pdeRows: DbEquipmentDailyPart[],
   historicalFuelRows: DbFueling[],
 ) {
-  const groups = new Map<
-    string,
-    { fuels: FuelEntry[]; pdes: PDEEntry[]; sourceIds: string[] }
-  >();
+  const groups = new Map<string, { fuels: FuelEntry[]; pdes: PDEEntry[]; sourceIds: string[] }>();
 
   for (const row of fuelRows) {
     const fuel = fuelEntryFromRow(row);
@@ -253,6 +290,8 @@ function calculateFromExistingData(
       fleet,
       date: row.date,
       obra: row.obra,
+      startHourmeter: row.horimInicial > 0 ? row.horimInicial : undefined,
+      endHourmeter: row.horimFinal > 0 ? row.horimFinal : undefined,
       workedHours: row.hours,
     });
   }
@@ -265,19 +304,17 @@ function calculateFromExistingData(
     .filter((row): row is FuelEntry => row !== null);
   for (const group of groups.values()) {
     const selectedIds = new Set(group.sourceIds);
-    const fallbackHoursUsed = new Map<string, number>();
+    const allocationState = {
+      fallbackHoursUsed: new Map<string, number>(),
+      usedPdeHourmeterSlices: new Map<string, Array<{ start: number; end: number }>>(),
+    };
     const orderedFuel = [...group.fuels].sort(
       (a, b) => a.date.localeCompare(b.date) || a.currentHourmeter - b.currentHourmeter,
     );
     let previousFuel: FuelEntry | undefined;
     for (const fuel of orderedFuel) {
       previousFuel ??= findPriorFuel(fuel, historicalFuels, selectedIds);
-      const calculated = calculateFuelAllocation(
-        fuel,
-        group.pdes,
-        previousFuel,
-        fallbackHoursUsed,
-      );
+      const calculated = calculateFuelAllocation(fuel, group.pdes, previousFuel, allocationState);
       allocations.push(...calculated.allocations);
       audits.push(...calculated.audits);
       previousFuel = fuel;
@@ -310,6 +347,12 @@ function buildFilterQuery(
     where.push("source_fueling_id = ?");
     params.push(filters.sourceFuelingId);
   }
+  const analysisIds = filters.analysisIds?.filter(Boolean) ?? [];
+  if (analysisIds.length > 0) {
+    const sourceFilter = analysisSourceWhere(analysisIds);
+    where.push(sourceFilter.sql);
+    params.push(...sourceFilter.params);
+  }
   if (filters.obra && table === "fuel_allocations") {
     where.push("obra = ?");
     params.push(filters.obra);
@@ -337,7 +380,7 @@ export const recalculateFuelAllocationsSupportFn = createServerFn({ method: "POS
       sourceData.pdeRows,
       sourceData.historicalFuelRows,
     );
-    await replaceCachedResults(d1, results.sourceIds, results.allocations, results.audits);
+    await replaceCachedResults(d1, results.sourceIds, results.allocations, results.audits, data);
     return {
       totalAllocations: results.allocations.length,
       totalAudits: results.audits.length,

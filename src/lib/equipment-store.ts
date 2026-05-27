@@ -5,6 +5,7 @@ import {
   updateEquipment,
   deleteEquipment,
 } from "@/lib/api/equipment";
+import { FLEET_EQUIPMENT_CATALOG } from "@/lib/fleet-equipment-catalog";
 
 // ─── Public types (unchanged) ────────────────────────────────────────────────
 
@@ -95,6 +96,19 @@ export const SEED_EQUIPMENTS: Equipment[] = [
     acquisitionDate: "14/02/2021",
     manufacturer: "Hyster",
   },
+  ...FLEET_EQUIPMENT_CATALOG.map(({ id, model }) => ({
+    id,
+    model,
+    icon: "construction",
+    hours: 0,
+    status: "Operação" as EquipmentStatus,
+    tone: "success" as EquipmentTone,
+    location: "",
+    lastMaintenance: "",
+    seriesNumber: "",
+    acquisitionDate: "",
+    manufacturer: "",
+  })),
 ];
 
 // ─── React Query internals ────────────────────────────────────────────────────

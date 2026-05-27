@@ -12,6 +12,16 @@ export type CalendarFilter = "all" | "received" | "created" | "reminders" | "eve
 
 export type CalendarItemSource = "task" | "reminder";
 
+export type CalendarItemColor =
+  | "green"
+  | "blue"
+  | "purple"
+  | "yellow"
+  | "orange"
+  | "pink"
+  | "cyan"
+  | "red";
+
 export type CalendarItem = {
   id: string;
   sourceId: string;
@@ -19,6 +29,9 @@ export type CalendarItem = {
   title: string;
   type: CalendarItemType;
   date: string;
+  startDate?: string;
+  endDate?: string;
+  color?: CalendarItemColor;
   time: string;
   endTime?: string;
   status: string;
@@ -28,9 +41,28 @@ export type CalendarItem = {
   description: string;
   location?: string;
   completed?: boolean;
+  completedDate?: string;
   completionLabel?: string;
   originalType?: "received_task" | "created_task" | "reminder" | "event";
 };
+
+export const CALENDAR_REMINDER_COLOR_META: Record<CalendarItemColor, { color: string }> = {
+  green: { color: "#10b981" },
+  blue: { color: "#3b82f6" },
+  purple: { color: "#a855f7" },
+  yellow: { color: "#fbbf24" },
+  orange: { color: "#f97316" },
+  pink: { color: "#ec4899" },
+  cyan: { color: "#06b6d4" },
+  red: { color: "#ef4444" },
+};
+
+export function calendarItemAccent(item: CalendarItem) {
+  if (item.originalType === "reminder" && item.color) {
+    return CALENDAR_REMINDER_COLOR_META[item.color];
+  }
+  return CALENDAR_TYPE_META[item.type];
+}
 
 export const CALENDAR_TYPE_META: Record<
   CalendarItemType,

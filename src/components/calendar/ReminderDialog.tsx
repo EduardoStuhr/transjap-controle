@@ -47,6 +47,7 @@ function emptyForm(initialDate: string, kind: CalendarPersonalKind) {
     title: "",
     description: "",
     date: initialDate,
+    endDate: "",
     time: "",
     endTime: "",
     location: "",
@@ -83,6 +84,7 @@ export function ReminderDialog({
             title: reminder.title,
             description: reminder.description,
             date: reminder.date,
+            endDate: reminder.endDate ?? "",
             time: reminder.time ?? "",
             endTime: reminder.endTime ?? "",
             location: reminder.location ?? "",
@@ -102,10 +104,11 @@ export function ReminderDialog({
           title: form.title,
           description: form.description,
           date: form.date,
-          time: form.time,
-          endTime: form.endTime,
+          endDate: isEvent ? "" : form.endDate,
+          time: isEvent ? form.time : "",
+          endTime: isEvent ? form.endTime : "",
           location: form.location,
-          color: isEvent ? "purple" : "green",
+          color: isEvent ? "purple" : undefined,
           priority: form.priority,
           status: form.status,
         },
@@ -137,10 +140,11 @@ export function ReminderDialog({
             title: form.title,
             description: form.description,
             date: form.date,
-            time: form.time || null,
-            endTime: form.endTime || null,
+            endDate: isEvent ? null : form.endDate || null,
+            time: isEvent ? form.time || null : null,
+            endTime: isEvent ? form.endTime || null : null,
             location: form.location,
-            color: isEvent ? "purple" : "green",
+            color: isEvent ? "purple" : undefined,
             priority: form.priority,
             status: form.status,
             completed: form.status === "concluído",
@@ -155,10 +159,11 @@ export function ReminderDialog({
           title: form.title.trim(),
           description: form.description.trim(),
           date: form.date,
-          time: form.time || null,
-          endTime: form.endTime || null,
+          endDate: isEvent ? null : form.endDate || null,
+          time: isEvent ? form.time || null : null,
+          endTime: isEvent ? form.endTime || null : null,
           location: form.location.trim(),
-          color: isEvent ? "purple" : "green",
+          color: isEvent ? "purple" : reminder.color,
           priority: form.priority,
           status: form.status,
           completed: form.status === "concluído",
@@ -186,7 +191,11 @@ export function ReminderDialog({
       return;
     }
     if (!form.date) {
-      toast.error("Informe uma data");
+      toast.error(isEvent ? "Informe uma data" : "Informe a data inicial");
+      return;
+    }
+    if (!isEvent && form.endDate && form.endDate < form.date) {
+      toast.error("A data final não pode ser anterior à data inicial.");
       return;
     }
     if (isEditing) {
@@ -243,44 +252,77 @@ export function ReminderDialog({
             />
           </label>
 
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Data
-              <input
-                type="date"
-                value={form.date}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, date: event.target.value }))
-                }
-                className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
-              />
-            </label>
+          {isEvent ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Data
+                <input
+                  type="date"
+                  required
+                  value={form.date}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, date: event.target.value }))
+                  }
+                  className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
 
-            <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Início
-              <input
-                type="time"
-                value={form.time}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, time: event.target.value }))
-                }
-                className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
-              />
-            </label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Início
+                <input
+                  type="time"
+                  value={form.time}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, time: event.target.value }))
+                  }
+                  className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
 
-            <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
-              Fim
-              <input
-                type="time"
-                value={form.endTime}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, endTime: event.target.value }))
-                }
-                disabled={!isEvent}
-                className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary disabled:opacity-45"
-              />
-            </label>
-          </div>
+              <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Fim
+                <input
+                  type="time"
+                  value={form.endTime}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, endTime: event.target.value }))
+                  }
+                  className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Data inicial
+                <input
+                  type="date"
+                  required
+                  value={form.date}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, date: event.target.value }))
+                  }
+                  className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
+
+              <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+                Data final{" "}
+                <span className="font-medium normal-case tracking-normal text-on-surface-variant/70">
+                  (Opcional)
+                </span>
+                <input
+                  type="date"
+                  value={form.endDate}
+                  min={form.date || undefined}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, endDate: event.target.value }))
+                  }
+                  className="mt-2 w-full rounded-lg border border-border-low bg-surface-highest px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                />
+              </label>
+            </div>
+          )}
 
           {isEvent && (
             <label className="block text-xs font-bold uppercase tracking-widest text-on-surface-variant">

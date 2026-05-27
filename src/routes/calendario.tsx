@@ -147,16 +147,28 @@ function taskToCalendarItem(task: TaskRecord, currentUserName: string): Calendar
 function reminderToCalendarItem(reminder: DbReminder): CalendarItem {
   const completed = isReminderComplete(reminder);
   const kind = reminderKind(reminder);
+  const endDate = kind === "reminder" ? reminder.endDate || reminder.date : reminder.date;
+  const type = isOverdue(endDate, completed) ? "overdue" : kind;
+  // determine a single date to display when the reminder is completed
+  const maybeCompletedAt = (reminder as any).completedAt ?? (reminder as any).completed_at ?? undefined;
+  const completedDate = completed
+    ? maybeCompletedAt ?? reminder.endDate ?? reminder.date
+    : undefined;
+
   return {
     id: `reminder-${reminder.id}`,
     sourceId: reminder.id,
     source: "reminder",
     title: reminder.title,
-    type: isOverdue(reminder.date, completed) ? "overdue" : kind,
+    type,
     originalType: kind,
     date: reminder.date,
-    time: reminder.time ?? "",
-    endTime: reminder.endTime ?? "",
+    startDate: reminder.date,
+    endDate: kind === "reminder" ? (reminder.endDate ?? undefined) : undefined,
+    completedDate,
+    color: reminder.color,
+    time: kind === "event" ? (reminder.time ?? "") : "",
+    endTime: kind === "event" ? (reminder.endTime ?? "") : "",
     status: completed ? "concluído" : reminder.status || "pendente",
     priority: reminder.priority || (kind === "event" ? "alta" : "média"),
     createdBy: "Você",
@@ -164,7 +176,24 @@ function reminderToCalendarItem(reminder: DbReminder): CalendarItem {
     description: reminder.description,
     location: reminder.location,
     completed,
+    completionLabel: completedDate ? `Concluído em ${completedDate.split("-").reverse().join("/")}` : undefined,
   };
+}
+
+function itemOccursOnDate(item: CalendarItem, date: string | null) {
+  if (!date) return false;
+  // If the item is a completed reminder and has a resolved completedDate,
+  // show it only on that single date (preference: completedAt > endDate > startDate).
+  if (item.originalType === "reminder" && item.completed && item.completedDate) {
+    return item.completedDate === date;
+  }
+
+  // For active period reminders, show across the range
+  if (item.originalType === "reminder" && item.endDate) {
+    return item.date <= date && date <= item.endDate;
+  }
+
+  return item.date === date;
 }
 
 function matchesFilter(item: CalendarItem, filter: CalendarFilter) {
@@ -259,7 +288,7 @@ function CalendarPage() {
   );
 
   const selectedItems = useMemo(
-    () => filteredItems.filter((item) => item.date === selectedDay),
+    () => filteredItems.filter((item) => itemOccursOnDate(item, selectedDay)),
     [filteredItems, selectedDay],
   );
 
@@ -340,8 +369,8 @@ function CalendarPage() {
     }
   };
 
-  const selectItem = (item: CalendarItem) => {
-    setSelectedDay(item.date);
+  const selectItem = (item: CalendarItem, date = item.date) => {
+    setSelectedDay(date);
     setFocusedItemId(item.id);
   };
 

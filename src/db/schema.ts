@@ -14,6 +14,7 @@ export const equipment = sqliteTable("equipment", {
   icon: text("icon").notNull(),
   hours: integer("hours").notNull().default(0),
   status: text("status", { enum: ["Operação", "Manutenção", "Parado"] }).notNull(),
+  subtype: text("subtype").notNull().default(""),
   tone: text("tone", { enum: ["success", "warning", "error"] }).notNull(),
   location: text("location").notNull(),
   lastMaintenance: text("last_maintenance").notNull(),
@@ -359,6 +360,8 @@ export const equipmentDailyParts = sqliteTable(
     date: text("date").notNull(),
     obra: text("obra").notNull().default(""),
     hours: real("hours").notNull().default(0),
+    horimInicial: real("horim_inicial").notNull().default(0),
+    horimFinal: real("horim_final").notNull().default(0),
     sourceSheet: text("source_sheet").notNull().default(""),
     status: text("status").notNull().default("OK"),
     usedInAnalysis: integer("used_in_analysis", { mode: "boolean" }).notNull().default(true),
@@ -404,10 +407,13 @@ export const reminders = sqliteTable("reminders", {
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
   date: text("date").notNull(),
+  endDate: text("end_date"),
   time: text("time"),
   endTime: text("end_time"),
   location: text("location").notNull().default(""),
-  color: text("color", { enum: ["blue", "purple", "green"] })
+  color: text("color", {
+    enum: ["blue", "purple", "green", "yellow", "orange", "pink", "cyan", "red"],
+  })
     .notNull()
     .default("blue"),
   priority: text("priority", { enum: ["baixa", "média", "alta", "urgente"] })
@@ -417,6 +423,7 @@ export const reminders = sqliteTable("reminders", {
     .notNull()
     .default("pendente"),
   completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  completedAt: text("completed_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -436,13 +443,14 @@ export const fuelAttribution = sqliteTable(
     litersAttributed: real("liters_attributed").notNull(),
     costAttributed: real("cost_attributed").notNull(),
     sourceFuelingId: text("source_fueling_id"),
+    analysisId: text("analysis_id").notNull().default("legacy"),
     calculatedAt: text("calculated_at").notNull(),
   },
   (table) => ({
     idxFleetDate: index("idx_fuelattr_fleet_date").on(table.fleet, table.date),
     idxDate: index("idx_fuelattr_date").on(table.date),
     idxObra: index("idx_fuelattr_obra").on(table.obra),
-    idxSourceFueling: index("idx_fuelattr_source_fueling").on(table.sourceFuelingId),
+    idxAnalysis: index("idx_fuelattr_analysis").on(table.analysisId),
   }),
 );
 

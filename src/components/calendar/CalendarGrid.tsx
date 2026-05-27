@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Icon } from "@/components/AppLayout";
 import {
   CALENDAR_TYPE_META,
+  calendarItemAccent,
   type CalendarItem,
   type CalendarViewMode,
 } from "@/components/calendar/calendar-types";
@@ -12,7 +13,7 @@ type Props = {
   items: CalendarItem[];
   selectedDate: string | null;
   onSelectDay: (date: string) => void;
-  onSelectItem: (item: CalendarItem) => void;
+  onSelectItem: (item: CalendarItem, date: string) => void;
 };
 
 function isoDate(date: Date) {
@@ -33,6 +34,13 @@ function dateTitle(date: Date) {
     day: "2-digit",
     month: "long",
   });
+}
+
+function fmtDateIso(iso?: string) {
+  if (!iso) return "";
+  const parts = iso.split("-");
+  if (parts.length < 3) return iso;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
 }
 
 function daysForView(anchorDate: Date, viewMode: CalendarViewMode) {
@@ -63,6 +71,9 @@ function daysForView(anchorDate: Date, viewMode: CalendarViewMode) {
 
 function ItemCard({ item, onClick }: { item: CalendarItem; onClick: () => void }) {
   const meta = CALENDAR_TYPE_META[item.type];
+  const displayMeta = item.completed && item.originalType === "reminder" ? CALENDAR_TYPE_META["completed_task"] : meta;
+  const accent = calendarItemAccent(item);
+  const usesReminderColor = item.originalType === "reminder" && Boolean(item.color);
   const time = item.time ? `${item.time}${item.endTime ? `-${item.endTime}` : ""}` : "";
   const tooltip = [
     meta.label,
@@ -84,13 +95,75 @@ function ItemCard({ item, onClick }: { item: CalendarItem; onClick: () => void }
         event.stopPropagation();
         onClick();
       }}
-      className={`group flex w-full items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[10px] font-bold transition-all hover:-translate-y-0.5 hover:shadow-md ${meta.bg} ${meta.border} ${meta.text}`}
+      style={
+        usesReminderColor
+          ? {
+              backgroundColor: `${accent.color}24`,
+              borderColor: `${accent.color}55`,
+              color: accent.color,
+            }
+          : undefined
+      }
+      className={`group flex w-full items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[10px] font-bold transition-all hover:-translate-y-0.5 hover:shadow-md ${
+        usesReminderColor ? "" : `${displayMeta.bg} ${displayMeta.border} ${displayMeta.text}`
+      }`}
     >
-      <Icon name={meta.icon} className="text-[13px]" />
+      <Icon name={item.completed && item.originalType === "reminder" ? "check_circle" : meta.icon} className="text-[13px]" />
       <span className="shrink-0 rounded bg-black/15 px-1 py-0.5 text-[8px] uppercase tracking-wider">
-        {meta.label}
+        {item.completed && item.originalType === "reminder" ? "Concluído" : meta.label}
       </span>
       <span className="min-w-0 flex-1 truncate">{item.title}</span>
+    </button>
+  );
+}
+
+function isPeriodReminder(item: CalendarItem) {
+  // Only consider as a period when it's a reminder, has an endDate and is not completed
+  return (
+    item.originalType === "reminder" && !item.completed && Boolean(item.endDate && item.endDate > item.date)
+  );
+}
+
+function PeriodBand({
+  item,
+  date,
+  onClick,
+}: {
+  item: CalendarItem;
+  date: string;
+  onClick: () => void;
+}) {
+  const accent = calendarItemAccent(item);
+  const atStart = date === item.date;
+  const atEnd = date === item.endDate;
+  const showTitle = atStart || atEnd;
+  const label = atStart ? `INÍCIO · ${item.title}` : atEnd ? `FIM · ${item.title}` : `Continuação: ${item.title}`;
+  const tooltip = `${item.title}\n${fmtDateIso(item.date)} até ${fmtDateIso(item.endDate)}\nStatus: ${item.status}`;
+
+  return (
+    <button
+      type="button"
+      title={tooltip}
+      aria-label={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      style={{
+        backgroundColor: `${accent.color}30`,
+        borderColor: `${accent.color}70`,
+        color: accent.color,
+      }}
+      className={`flex h-6 w-full items-center border-y text-left text-[10px] font-bold transition-opacity hover:opacity-80 ${
+        atStart ? "rounded-l-md border-l pl-2" : "pl-1"
+      } ${atEnd ? "rounded-r-md border-r pr-2" : "pr-1"}`}
+    >
+      {atStart && <Icon name="notifications" className="mr-1 text-[12px]" />}
+      {showTitle ? (
+        <span className="truncate">{label}</span>
+      ) : (
+        <span className="sr-only">{label}</span>
+      )}
     </button>
   );
 }
@@ -107,8 +180,20 @@ export function CalendarGrid({
   const days = useMemo(() => daysForView(anchorDate, viewMode), [anchorDate, viewMode]);
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CalendarItem[]>();
+    const displayedDays = days.flatMap((date) => (date ? [isoDate(date)] : []));
     for (const item of items) {
-      map.set(item.date, [...(map.get(item.date) ?? []), item]);
+      // If the item is a completed reminder and has a completedDate, show only on that date
+      let itemDays: string[];
+      if (item.originalType === "reminder" && item.completed && item.completedDate) {
+        itemDays = [item.completedDate];
+      } else if (isPeriodReminder(item)) {
+        itemDays = displayedDays.filter((date) => item.date <= date && date <= (item.endDate as string));
+      } else {
+        itemDays = [item.date];
+      }
+      for (const itemDate of itemDays) {
+        map.set(itemDate, [...(map.get(itemDate) ?? []), item]);
+      }
     }
     for (const dayItems of map.values()) {
       dayItems.sort(
@@ -118,7 +203,7 @@ export function CalendarGrid({
       );
     }
     return map;
-  }, [items]);
+  }, [days, items]);
 
   const columns = viewMode === "day" ? "grid-cols-1" : "grid-cols-7";
 
@@ -197,9 +282,22 @@ export function CalendarGrid({
               </div>
 
               <div className="space-y-1.5">
-                {visibleItems.map((item) => (
-                  <ItemCard key={item.id} item={item} onClick={() => onSelectItem(item)} />
-                ))}
+                {visibleItems.map((item) =>
+                  isPeriodReminder(item) ? (
+                    <PeriodBand
+                      key={item.id}
+                      item={item}
+                      date={dateStr}
+                      onClick={() => onSelectItem(item, dateStr)}
+                    />
+                  ) : (
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      onClick={() => onSelectItem(item, dateStr)}
+                    />
+                  ),
+                )}
                 {hiddenCount > 0 && (
                   <span className="block rounded-md border border-dashed border-border-low px-2 py-1 text-[10px] font-bold text-on-surface-variant">
                     + {hiddenCount} itens

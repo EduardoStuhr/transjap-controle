@@ -206,9 +206,9 @@ function dailyPartInsertStatement(d1: D1Database, row: DbEquipmentDailyPart) {
   return d1
     .prepare(
       `INSERT INTO equipment_daily_parts (
-        id, analysis_id, fleet, fleet_label, date, obra, hours, source_sheet, status,
-        used_in_analysis, imported_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, analysis_id, fleet, fleet_label, date, obra, hours, horim_inicial, horim_final,
+        source_sheet, status, used_in_analysis, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -218,6 +218,8 @@ function dailyPartInsertStatement(d1: D1Database, row: DbEquipmentDailyPart) {
       row.date,
       row.obra,
       row.hours,
+      row.horimInicial,
+      row.horimFinal,
       row.sourceSheet,
       row.status,
       row.usedInAnalysis ? 1 : 0,
@@ -269,7 +271,12 @@ async function cleanupCreatedAnalysis(db: Db, analysisId: string) {
   await db.delete(productionAnalyses).where(eq(productionAnalyses.id, analysisId));
 }
 
-function normalizeLinkedFleet(row: { prefix?: string; vehicleId?: string; plate?: string; fleet?: string }) {
+function normalizeLinkedFleet(row: {
+  prefix?: string;
+  vehicleId?: string;
+  plate?: string;
+  fleet?: string;
+}) {
   return normalizeFleet(row.fleet || row.prefix || row.vehicleId || row.plate || "");
 }
 
@@ -358,6 +365,8 @@ function makeDailyPartRow(
     date: row.date,
     obra: row.obra,
     hours: row.hours,
+    horimInicial: row.horimInicial ?? 0,
+    horimFinal: row.horimFinal ?? 0,
     sourceSheet: row.sourceSheet,
     status,
     usedInAnalysis,
@@ -455,6 +464,8 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
       date,
       obra: row.obra,
       hours: 0,
+      horimInicial: 0,
+      horimFinal: 0,
       sourceSheet: "",
       status: "Sem horas na PDE",
       usedInAnalysis: false,
@@ -900,9 +911,7 @@ export const deleteAnalysis = createServerFn({ method: "POST" })
     ]);
 
     const affectedFleets = Array.from(
-      new Set(
-        [...linkedFuelRows, ...linkedDailyRows].map(normalizeLinkedFleet).filter(Boolean),
-      ),
+      new Set([...linkedFuelRows, ...linkedDailyRows].map(normalizeLinkedFleet).filter(Boolean)),
     );
 
     try {
@@ -1088,9 +1097,7 @@ export const importFueling = createServerFn({ method: "POST" })
 
     const affectedFleets = Array.from(
       new Set(
-        fuelRows
-          .map((r) => normalizeFleet(r.prefix || r.vehicleId || r.plate))
-          .filter(Boolean),
+        fuelRows.map((r) => normalizeFleet(r.prefix || r.vehicleId || r.plate)).filter(Boolean),
       ),
     );
     if (affectedFleets.length > 0) {
