@@ -116,7 +116,18 @@ export function ChartProdConsumo({ data }: { data: ProdConsumoPoint[] }) {
             style: { fontSize: 10, fill: C.fg3 },
           }}
         />
-        <Tooltip content={<RichTooltip units={{ compactada: "m³", solta: "m³", diesel: "L" }} />} />
+        <Tooltip
+          content={
+            <RichTooltip
+              units={{ compactada: "m³", solta: "m³", diesel: "L" }}
+              format={{
+                compactada: (value: number) => fmt.dec(value, 1),
+                solta: (value: number) => fmt.dec(value, 1),
+                diesel: (value: number) => fmt.dec(value, 2),
+              }}
+            />
+          }
+        />
         <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
         <Bar
           yAxisId="m"
@@ -564,7 +575,7 @@ export function ChartM3Diesel({
           content={
             <RichTooltip
               units={{ m3: "m³", diesel: "L" }}
-              format={{ m3: (value: number) => fmt.dec(value, 1), diesel: fmt.int }}
+              format={{ m3: (value: number) => fmt.dec(value, 1), diesel: (value: number) => fmt.dec(value, 2) }}
             />
           }
         />
@@ -734,7 +745,7 @@ export function ChartStackedBars({
                 <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
                   {label}{" "}
                   <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>
-                    - Total: {fmt.dec(total, 1)} L
+                    - Total: {fmt.dec(total, 2)} L
                   </span>
                 </div>
                 {payload
@@ -771,7 +782,7 @@ export function ChartStackedBars({
                           {item.name}
                         </span>
                         <span style={{ fontFamily: MONO, color: "var(--fg)" }}>
-                          {fmt.dec(value, 1)} L{" "}
+                          {fmt.dec(value, 2)} L{" "}
                           <span style={{ color: "var(--fg-3)" }}>({pct.toFixed(0)}%)</span>
                         </span>
                       </div>
@@ -1013,6 +1024,8 @@ export type EquipmentEfficiencyRankingPoint = {
   lph?: number;
   lpm3?: number;
   m3?: number;
+  share?: number;
+  dias?: number;
 };
 
 function lphTag(lph: number) {
@@ -1190,13 +1203,21 @@ export function ChartM3PerLiterRanking({
                 <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
                   {row.id}
                 </div>
-                <AggregateRankingRow k="m3 produzido" v={`${fmt.dec(Number(row.m3 ?? 0), 1)} m3`} />
+                <AggregateRankingRow
+                  k="m3 relacionado"
+                  v={`${fmt.dec(Number(row.m3 ?? 0), 1)} m3`}
+                />
                 <AggregateRankingRow k="Diesel" v={`${fmt.dec(Number(row.litros ?? 0), 1)} L`} />
                 <AggregateRankingRow k="Horas" v={`${fmt.dec(Number(row.horas ?? 0), 1)} h`} />
+                <AggregateRankingRow
+                  k="Share medio"
+                  v={`${fmt.dec(Number(row.share ?? 0) * 100, 2)}%`}
+                />
+                <AggregateRankingRow k="Dias com share" v={fmt.int(Number(row.dias ?? 0))} />
                 <AggregateRankingRow k="L/h" v={`${fmt.dec(Number(row.lph ?? 0), 2)} L/h`} />
                 <AggregateRankingRow k="m3/L" v={`${fmt.dec(m3PerLiter, 3)} m3/L`} />
                 <div style={{ marginTop: 6, color: C.fg3 }}>
-                  produz {fmt.dec(m3PerLiter, 2)} m3 com 1 litro
+                  m3 relacionado de {fmt.dec(m3PerLiter, 2)} por litro
                 </div>
               </div>
             );

@@ -5,11 +5,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DbProductionAnalysis, DbTrip, DbFueling, DbEquipmentDailyPart } from "@/db/schema";
+import { normalizeFleet } from "@/lib/carcara-parser";
 import type { DashboardFilterState } from "@/lib/production-consumption-types";
 import { obraMatches } from "@/lib/production-consumption-utils";
 import {
   equipmentMatches,
-  isAggregateEquipment,
   normalizeEquipmentKey,
   type EquipmentContext,
 } from "@/lib/equipment-normalization";
@@ -45,6 +45,66 @@ function readStoredFilters(storageKey: string): DashboardFilterState {
 
 function normalizeIds(ids: string[]) {
   return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function normalizedFleetNumber(value: string | null | undefined) {
+  const fleet = normalizeFleet(value);
+  return /^[0-9]+$/.test(fleet) ? fleet : "";
+}
+
+function hasRealPdeEvidence(
+  part: Pick<
+    DbEquipmentDailyPart,
+    "fleet" | "fleetLabel" | "hours" | "horimInicial" | "horimFinal" | "sourceSheet"
+  >,
+) {
+  const text = `${part.fleet} ${part.fleetLabel}`.toUpperCase();
+  if (/\bC\s*B\b|\bCB\b/.test(text)) return false;
+  return Boolean(
+    part.sourceSheet?.trim() ||
+      (part.hours || 0) > 0 ||
+      (part.horimInicial || 0) > 0 ||
+      (part.horimFinal || 0) > 0,
+  );
+}
+
+function buildPdeFleetKeys(dailyParts: DbEquipmentDailyPart[]) {
+  return new Set(
+    dailyParts
+      .filter(hasRealPdeEvidence)
+      .map((part) => normalizedFleetNumber(part.fleet || part.fleetLabel))
+      .filter(Boolean)
+      .map((fleet) => `FROTA:${fleet}`),
+  );
+}
+
+function equipmentKeyByPdeRule(
+  value: string | null | undefined,
+  pdeFleetKeys: ReadonlySet<string>,
+  fallbackContext?: EquipmentContext,
+) {
+  const text = String(value ?? "").toUpperCase();
+  const fleet = normalizedFleetNumber(value);
+  if (fleet) {
+    if (/\bC\s*B\b|\bCB\b/.test(text)) return `CB:${fleet}`;
+    const ownKey = `FROTA:${fleet}`;
+    return pdeFleetKeys.has(ownKey) ? ownKey : `CB:${fleet}`;
+  }
+  return normalizeEquipmentKey(value, fallbackContext) || "";
+}
+
+function equipmentLabelFromKey(key: string) {
+  if (key.startsWith("CB:")) return `CB ${key.slice(3)}`;
+  if (key.startsWith("FROTA:")) return `FROTA ${key.slice(6)}`;
+  return key;
+}
+
+function pdeRuleEquipmentMatches(key: string, selected: string) {
+  const context: EquipmentContext = key.startsWith("CB:") ? "aggregate" : "ownFleet";
+  return (
+    equipmentMatches(key, selected, context) ||
+    equipmentMatches(equipmentLabelFromKey(key), selected, context)
+  );
 }
 
 /**
@@ -158,11 +218,7 @@ export function useFilteredData(
   const dateKey = (value: string) => (value ? value.slice(0, 10) : "");
   const equipmentKey = (row: { prefix?: string; vehicleId?: string; plate?: string }) =>
     row.prefix || row.vehicleId || row.plate || "";
-  const tripAggregateKeys = new Set(
-    trips
-      .map((row) => normalizeEquipmentKey(equipmentKey(row), "trip"))
-      .filter((key) => isAggregateEquipment(key)),
-  );
+  const pdeFleetKeys = buildPdeFleetKeys(dailyParts);
   const fuelingContext = (
     row: Pick<
       DbFueling,
@@ -171,9 +227,11 @@ export function useFilteredData(
   ): EquipmentContext => {
     if (row.analysisId === "allocated") return "fuelAllocation";
     if (row.analysisId === "attributed") return "fuelAttribution";
-    if (tripAggregateKeys.has(normalizeEquipmentKey(equipmentKey(row), "aggregate"))) {
-      return "aggregate";
-    }
+    const key = equipmentKeyByPdeRule(equipmentKey(row), pdeFleetKeys, {
+      source: "fueling",
+      description: [row.vehicleType, row.owner, row.operator].filter(Boolean).join(" "),
+    });
+    if (key.startsWith("CB:")) return "aggregate";
     return {
       source: "fueling",
       description: [row.vehicleType, row.owner, row.operator].filter(Boolean).join(" "),
@@ -202,16 +260,23 @@ export function useFilteredData(
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
       if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
+      const key = equipmentKeyByPdeRule(equipmentKey(row), pdeFleetKeys, fuelingContext(row));
       if (
         filters.equipment !== "all" &&
-        !equipmentMatches(equipmentKey(row), filters.equipment, fuelingContext(row))
+        !pdeRuleEquipmentMatches(key, filters.equipment)
+      ) {
+        return false;
+      }
+      if (
+        filters.aggregate !== "all" &&
+        !pdeRuleEquipmentMatches(key, filters.aggregate)
       ) {
         return false;
       }
       if (filters.analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
     });
-  }, [fueling, filters, trips]);
+  }, [fueling, filters, pdeFleetKeys]);
 
   const filteredDailyParts = useMemo(() => {
     return dailyParts.filter((row) => {
