@@ -11,6 +11,7 @@ import { getUnreadActivity, type UnreadKind } from "@/lib/task-unread";
 import {
   filterVisibleTasks,
   getTaskStatusForUser,
+  getTaskVisibleReason,
   getTaskViewedAtForRecipient,
   getTaskVisibilityLabel,
   isTaskUnreadForUser,
@@ -50,6 +51,17 @@ const FILTERS: TaskFilter[] = [
   "Concluído",
   "Atrasado",
 ];
+
+function getDebugStringList(task: TaskRecord, fields: readonly string[]): string[] {
+  const source = task as unknown as Record<string, unknown>;
+  return fields.flatMap((field) => {
+    const value = source[field];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === "string" && Boolean(item));
+    }
+    return typeof value === "string" && value ? [value] : [];
+  });
+}
 
 function Agenda() {
   const user = useAuthStore((snapshot) => snapshot.user);
@@ -113,6 +125,26 @@ function Agenda() {
     () => visibleTasks.find((task) => task.id === selectedTaskId) || null,
     [selectedTaskId, visibleTasks],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem("debugTasksVisibility") !== "1") return;
+
+    console.table(
+      filteredTasks.map((task) => ({
+        taskId: task.id,
+        title: task.title,
+        createdBy: task.createdBy,
+        createdById: task.createdById,
+        assignedTo: task.assignedTo.join(", "),
+        recipientId: task.responsibleIds.join(", "),
+        sharedWith: getDebugStringList(task, ["sharedWith", "shared_with", "viewers"]).join(", "),
+        currentUserId: user?.id ?? "",
+        currentUserRole: user?.role ?? "",
+        visibleReason: getTaskVisibleReason(task, user) ?? "hidden",
+      })),
+    );
+  }, [filteredTasks, user]);
 
   const editingTask = useMemo(
     () => visibleTasks.find((task) => task.id === editingTaskId) || null,

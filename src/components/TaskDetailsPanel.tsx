@@ -24,12 +24,13 @@ import {
 } from "@/lib/task-types";
 import type { TaskStatus } from "@/lib/task-types";
 import { useAuthStore } from "@/lib/auth-store";
-import { isAdminUser } from "@/lib/auth-users";
 import { formatEquipmentReference, resolveRecipients } from "@/lib/operational-options";
 import {
+  canAdminViewAllTasks,
   getTaskStatusForUser,
   getTaskViewedAtForRecipient,
   getTaskVisibilityLabel,
+  isUserTaskRecipient,
 } from "@/lib/task-visibility";
 import { useEquipmentStore } from "@/lib/equipment-store";
 import { downloadAttachment, exportTaskAsCsv, exportTaskAsPdf } from "@/lib/task-export";
@@ -98,11 +99,11 @@ export function TaskDetailsPanel({
         : [],
     [task],
   );
-  const isRecipient = Boolean(user && recipients.includes(user.name));
+  const isRecipient = Boolean(task && isUserTaskRecipient(task, user));
   const isCreator = Boolean(
     user && task && (task.createdBy === user.name || task.createdById === user.id),
   );
-  const canManageTask = Boolean(user && (isAdminUser(user) || isCreator));
+  const canManageTask = Boolean(user && task && (canAdminViewAllTasks(user) || isCreator));
 
   if (!task) {
     return (

@@ -27,7 +27,6 @@ import {
 import { getCurrentUser } from "@/lib/auth-store";
 import { isAdminUser } from "@/lib/auth-users";
 import {
-  resolveRecipients,
   resolveResponsibleIds,
   resolveResponsibleUsers,
 } from "@/lib/operational-options";
@@ -720,8 +719,7 @@ export function useTaskActions() {
       const existing = current.tasks.find((task) => task.id === taskId);
       if (!user || !text || !existing) return null;
 
-      const recipients = resolveRecipients(existing.assignedTo);
-      if (!recipients.includes(user.name)) return null;
+      if (!userIsRecipient(existing, user)) return null;
 
       const created: TaskResponse = {
         id: newId("RS"),
@@ -776,8 +774,7 @@ export function useTaskActions() {
       const existing = current.tasks.find((task) => task.id === taskId);
       if (!user || !text || !existing) return null;
 
-      const recipients = resolveRecipients(existing.assignedTo);
-      if (!recipients.includes(user.name)) return null;
+      if (!userIsRecipient(existing, user)) return null;
 
       const created: TaskResponse = {
         id: newId("RS"),

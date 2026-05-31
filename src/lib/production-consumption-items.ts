@@ -31,11 +31,28 @@ export const OPERATIONAL_ITEM_ORDER: OperationalItem[] = [
 ];
 
 export type OperationalItemInput = {
+  prefix?: string | null;
   fleet?: string | null;
+  plate?: string | null;
   equipment?: string | null;
+  equipmentLabel?: string | null;
+  vehicleType?: string | null;
   type?: string | null;
   model?: string | null;
   description?: string | null;
+  raw?: unknown;
+};
+
+export type PipaLikeInput = {
+  prefix?: string | null;
+  fleet?: string | null;
+  plate?: string | null;
+  vehicleType?: string | null;
+  type?: string | null;
+  model?: string | null;
+  description?: string | null;
+  equipmentLabel?: string | null;
+  raw?: unknown;
 };
 
 export type EquipmentOperationalClass = {
@@ -58,6 +75,62 @@ function normalizeText(value: string | null | undefined) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function rawStringValues(value: unknown, depth = 0): string[] {
+  if (value == null || depth > 2) return [];
+  if (typeof value === "string" || typeof value === "number") return [String(value)];
+  if (typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap((item) => rawStringValues(item, depth + 1));
+  return Object.values(value as Record<string, unknown>).flatMap((item) =>
+    rawStringValues(item, depth + 1),
+  );
+}
+
+function catalogModelsForValues(values: readonly string[]) {
+  return values
+    .map((value) => catalogByFleet.get(normalizeFleet(value)))
+    .filter((model): model is string => Boolean(model));
+}
+
+function rawFleetLikeValues(value: unknown): string[] {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return [];
+  const record = value as Record<string, unknown>;
+  return [
+    record.prefix,
+    record.fleet,
+    record.fleetLabel,
+    record.fleet_label,
+    record.vehicleId,
+    record.vehicle_id,
+    record.equipment,
+    record.equipmentId,
+    record.equipment_id,
+    record.equipmentLabel,
+    record.equipment_label,
+  ].flatMap((item) => rawStringValues(item));
+}
+
+export function isPipaLike(input: PipaLikeInput): boolean {
+  const directValues = [
+    input.prefix,
+    input.fleet,
+    input.plate,
+    input.vehicleType,
+    input.type,
+    input.model,
+    input.description,
+    input.equipmentLabel,
+    ...rawStringValues(input.raw),
+  ].filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+  const catalogValues = [
+    input.prefix,
+    input.fleet,
+    input.equipmentLabel,
+    ...rawFleetLikeValues(input.raw),
+  ].filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+  const text = normalizeText([...directValues, ...catalogModelsForValues(catalogValues)].join(" "));
+  return /\b(pipa|caminhao\s+pipa|tanque|irrigacao|water\s+truck)\b/.test(text);
 }
 
 function joinedSearchText(input: OperationalItemInput) {
@@ -93,7 +166,7 @@ function itemFromText(text: string): { item: OperationalItem; reason: string } |
   }
 
   if (/\b(caminhao|caminhao|carreta|truck|truk|basculante|cacamba|rodotrem)\b/.test(text)) {
-    if (/\b(pipa|comboio|prancha|tanque)\b/.test(text)) {
+    if (/\b(pipa|comboio|prancha|tanque|irrigacao|water\s+truck)\b/.test(text)) {
       return { item: "tratamento", reason: "texto/modelo indica caminhao pipa/comboio/prancha" };
     }
     return { item: "transporte", reason: "texto/modelo indica caminhao/agregado de transporte" };
@@ -104,7 +177,7 @@ function itemFromText(text: string): { item: OperationalItem; reason: string } |
   }
 
   if (
-    /\b(pipa|moto niveladora|motoniveladora|niveladora|patrol|trator|esteira|d6|d5|grade|bomba)\b/.test(
+    /\b(pipa|tanque|irrigacao|water\s+truck|moto niveladora|motoniveladora|niveladora|patrol|trator|esteira|d6|d5|grade|bomba)\b/.test(
       text,
     )
   ) {
@@ -129,6 +202,29 @@ export function resolveEquipmentOperationalClass(
   const key = normalizeEquipmentKey(value, context);
   const aggregate = isAggregateEquipment(value, context);
   const label = displayEquipmentLabel(value, context);
+
+  if (
+    isPipaLike({
+      prefix: input.prefix,
+      fleet: input.fleet || input.equipment,
+      plate: input.plate,
+      vehicleType: input.vehicleType,
+      type: input.type,
+      model: input.model,
+      description: input.description,
+      equipmentLabel: input.equipmentLabel || label,
+      raw: input.raw,
+    })
+  ) {
+    return {
+      key,
+      label,
+      item: "tratamento",
+      isAggregate: false,
+      reason: "Pipa redirecionado para Tratamento",
+      classificationSource: "text",
+    };
+  }
 
   if (aggregate) {
     return {

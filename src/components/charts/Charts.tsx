@@ -35,6 +35,7 @@ import {
 import { RichTooltip } from "./RichTooltip";
 
 const MONO = "JetBrains Mono, ui-monospace, monospace";
+const LABEL_LIST_LIMIT = 10;
 
 // ─── Formatters (porte do `fmt` global do template) ───────────────
 const fmt = {
@@ -58,6 +59,10 @@ const fmt = {
     return String(Math.round(v));
   },
 };
+
+function shouldRenderLabels(length: number) {
+  return length > 0 && length <= LABEL_LIST_LIMIT;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 1. PRODUÇÃO × CONSUMO — composed (stacked bars + diesel line)
@@ -364,14 +369,16 @@ export function ChartAggregateRanking({
               fill={index === 0 ? C.yellow : index < 3 ? C.yellowD : "oklch(0.55 0.06 90)"}
             />
           ))}
-          <LabelList
+          {shouldRenderLabels(ranked.length) && (
+            <LabelList
             dataKey="m3"
             position="right"
             formatter={(value) =>
               typeof value === "number" ? `${fmt.k(value)} m³` : String(value ?? "")
             }
             style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
-          />
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -617,7 +624,79 @@ export function ChartLineRef({
         <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
         <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
         <YAxis tick={TICK} axisLine={false} tickLine={false} width={48} />
-        <Tooltip content={<RichTooltip units={{ [dataKey]: unit }} />} />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const point = payload[0].payload as Record<string, unknown>;
+            const value = Number(payload[0].value ?? 0);
+            const status = String(point.status ?? "OK");
+            const isSuspect = status === "SUSPEITO";
+            const row = (name: string, raw: unknown, suffix = "") => {
+              const numeric = typeof raw === "number" ? raw : Number(raw);
+              const valueText = Number.isFinite(numeric)
+                ? fmt.dec(numeric, suffix ? 2 : 3)
+                : String(raw ?? "-");
+              return (
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "2px 0" }}>
+                  <span style={{ color: C.fg3 }}>{name}</span>
+                  <span style={{ color: C.fg, fontFamily: MONO, fontWeight: 600 }}>
+                    {valueText}
+                    {suffix && <span style={{ color: C.fg3, marginLeft: 4 }}>{suffix}</span>}
+                  </span>
+                </div>
+              );
+            };
+
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: `1px solid ${isSuspect ? C.warn : "var(--line)"}`,
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 11,
+                  boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+                  minWidth: 260,
+                }}
+              >
+                <div
+                  style={{
+                    color: "var(--fg-3)",
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    marginBottom: 6,
+                  }}
+                >
+                  {String(label ?? "")}
+                </div>
+                {row(unit ? `${dataKey} (${unit})` : dataKey, value, unit)}
+                {row("m3 usado", point.m3Usado ?? point.relatedM3 ?? point.m3, "m3")}
+                {row("diesel usado", point.diesel, "L")}
+                {row("horas", point.horas, "h")}
+                {Boolean(point.formulaUsed) && (
+                  <div style={{ marginTop: 6, color: C.fg3, lineHeight: 1.35 }}>
+                    Formula: {String(point.formulaUsed)}
+                  </div>
+                )}
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: isSuspect ? C.warn : C.ok,
+                    fontWeight: 700,
+                  }}
+                >
+                  Status: {status}
+                </div>
+                {isSuspect && (
+                  <div style={{ marginTop: 4, color: C.warn, lineHeight: 1.35 }}>
+                    Valor suspeito: producao alta com diesel baixo/ausente. Verificar rateio/PDE/CMB.
+                  </div>
+                )}
+              </div>
+            );
+          }}
+        />
         {typeof refValue === "number" && Number.isFinite(refValue) && (
           <ReferenceLine
             y={refValue}
@@ -632,7 +711,20 @@ export function ChartLineRef({
           name={unit ? `${dataKey} (${unit})` : dataKey}
           stroke={color}
           strokeWidth={2.4}
-          dot={false}
+          dot={(props: { cx?: number; cy?: number; payload?: Record<string, unknown> }) =>
+            props.payload?.status === "SUSPEITO" ? (
+              <circle
+                cx={Number(props.cx ?? 0)}
+                cy={Number(props.cy ?? 0)}
+                r={4}
+                fill={C.warn}
+                stroke="var(--bg-0)"
+                strokeWidth={1.5}
+              />
+            ) : (
+              <g />
+            )
+          }
           activeDot={{ r: 4, strokeWidth: 0 }}
         />
       </ComposedChart>
@@ -698,6 +790,7 @@ export function ChartStackedBars({
   });
   const avgTotal =
     enhanced.reduce((sum, row) => sum + Number(row._total ?? 0), 0) / Math.max(1, enhanced.length);
+  const showTotalLabels = showTotalOnTop && shouldRenderLabels(enhanced.length);
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -803,7 +896,7 @@ export function ChartStackedBars({
             radius={[2, 2, 0, 0]}
             barSize={22}
           >
-            {showTotalOnTop && item === series[series.length - 1] && (
+            {showTotalLabels && item === series[series.length - 1] && (
               <LabelList
                 dataKey="_total"
                 position="top"
@@ -969,12 +1062,14 @@ export function ChartBubble({ data, avgLpm3 }: { data: BubblePoint[]; avgLpm3?: 
               strokeWidth={1.5}
             />
           ))}
-          <LabelList
-            dataKey="name"
-            position="top"
-            offset={8}
-            style={{ fontSize: 10, fill: "var(--fg)", fontWeight: 600 }}
-          />
+          {shouldRenderLabels(colored.length) && (
+            <LabelList
+              dataKey="name"
+              position="top"
+              offset={8}
+              style={{ fontSize: 10, fill: "var(--fg)", fontWeight: 600 }}
+            />
+          )}
         </Scatter>
       </ScatterChart>
     </ResponsiveContainer>
@@ -1129,12 +1224,14 @@ export function ChartLphRanking({
           {rows.map((row) => (
             <Cell key={row.id} fill={lphTag(Number(row.lph ?? 0)).color} />
           ))}
-          <LabelList
-            dataKey="lph"
-            position="right"
-            formatter={(value) => `${fmt.dec(Number(value ?? 0), 2)} L/h`}
-            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO, fontWeight: 700 }}
-          />
+          {shouldRenderLabels(rows.length) && (
+            <LabelList
+              dataKey="lph"
+              position="right"
+              formatter={(value) => `${fmt.dec(Number(value ?? 0), 2)} L/h`}
+              style={{ fontSize: 10, fill: C.fg, fontFamily: MONO, fontWeight: 700 }}
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -1227,12 +1324,14 @@ export function ChartM3PerLiterRanking({
           {rows.map((row, index) => (
             <Cell key={row.id} fill={productivityColor(index, rows.length)} />
           ))}
-          <LabelList
-            dataKey="lpm3"
-            position="right"
-            formatter={(value) => `${fmt.dec(Number(value ?? 0), 3)} m3/L`}
-            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO, fontWeight: 700 }}
-          />
+          {shouldRenderLabels(rows.length) && (
+            <LabelList
+              dataKey="lpm3"
+              position="right"
+              formatter={(value) => `${fmt.dec(Number(value ?? 0), 3)} m3/L`}
+              style={{ fontSize: 10, fill: C.fg, fontFamily: MONO, fontWeight: 700 }}
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -1272,14 +1371,16 @@ export function ChartCompareBars({
               fill={index === 0 ? color : index === 1 ? C.yellowD : "oklch(0.5 0.05 90)"}
             />
           ))}
-          <LabelList
-            dataKey={dataKey}
-            position="top"
-            formatter={(value) =>
-              typeof value === "number" ? `${fmt.dec(value, 2)}${unit ? ` ${unit}` : ""}` : ""
-            }
-            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
-          />
+          {shouldRenderLabels(data.length) && (
+            <LabelList
+              dataKey={dataKey}
+              position="top"
+              formatter={(value) =>
+                typeof value === "number" ? `${fmt.dec(value, 2)}${unit ? ` ${unit}` : ""}` : ""
+              }
+              style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -1613,12 +1714,14 @@ export function ChartHBars({
               fill={i === 0 ? color : i < 3 ? accent2 : "oklch(0.55 0.06 90)"}
             />
           ))}
-          <LabelList
-            dataKey={dataKey}
-            position="right"
-            formatter={(v) => (typeof v === "number" ? fmt.k(v) : String(v ?? ""))}
-            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
-          />
+          {shouldRenderLabels(sorted.length) && (
+            <LabelList
+              dataKey={dataKey}
+              position="right"
+              formatter={(v) => (typeof v === "number" ? fmt.k(v) : String(v ?? ""))}
+              style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -1661,12 +1764,14 @@ export function ChartBars({
               fill={i === 0 ? color : i === 1 ? C.yellowD : "oklch(0.5 0.05 90)"}
             />
           ))}
-          <LabelList
-            dataKey={dataKey}
-            position="top"
-            formatter={(v) => (typeof v === "number" ? fmt.k(v) : String(v ?? ""))}
-            style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
-          />
+          {shouldRenderLabels(data.length) && (
+            <LabelList
+              dataKey={dataKey}
+              position="top"
+              formatter={(v) => (typeof v === "number" ? fmt.k(v) : String(v ?? ""))}
+              style={{ fontSize: 10, fill: C.fg, fontFamily: MONO }}
+            />
+          )}
         </Bar>
       </BarChart>
     </ResponsiveContainer>

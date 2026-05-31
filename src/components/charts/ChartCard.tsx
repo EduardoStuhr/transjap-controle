@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 
 type SizeType = "sm" | "md" | "lg" | "full";
@@ -21,6 +22,13 @@ const SIZE_TO_HEIGHT: Record<SizeType, number> = {
   full: 380,
 };
 
+let chartMeasureId = 0;
+
+function debugPerformanceEnabled() {
+  if (typeof window === "undefined") return false;
+  return import.meta.env.DEV || window.localStorage.getItem("debugPerformance") === "1";
+}
+
 export function ChartCard({
   title,
   description,
@@ -32,6 +40,19 @@ export function ChartCard({
   footer,
   children,
 }: Props) {
+  const performanceLabelRef = useRef("");
+  if (hasData && debugPerformanceEnabled()) {
+    const label = `recharts: ${title} #${++chartMeasureId}`;
+    console.time(label);
+    performanceLabelRef.current = label;
+  }
+
+  useEffect(() => {
+    if (!performanceLabelRef.current) return;
+    console.timeEnd(performanceLabelRef.current);
+    performanceLabelRef.current = "";
+  });
+
   const badgeClass =
     badge?.tone === "warning"
       ? "bg-status-warning/15 text-status-warning"

@@ -54,7 +54,7 @@ const EMPTY_FORM: TaskModalData = {
   description: "",
   sector: "Operacional",
   priority: "Média",
-  assignedTo: ["Todos"],
+  assignedTo: [],
   deadline: "",
   equipment: "",
   status: "Não visualizado",
@@ -83,7 +83,7 @@ function normalizeAssignedToList(value: unknown): string[] {
       : [];
 
   const filtered = raw.filter((name) => ASSIGNMENT_OPTIONS.includes(name as never));
-  return filtered.length > 0 ? Array.from(new Set(filtered)) : ["Todos"];
+  return Array.from(new Set(filtered));
 }
 
 function normalizeAssignmentData(

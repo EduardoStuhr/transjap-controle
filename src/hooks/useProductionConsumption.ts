@@ -218,25 +218,29 @@ export function useFilteredData(
   const dateKey = (value: string) => (value ? value.slice(0, 10) : "");
   const equipmentKey = (row: { prefix?: string; vehicleId?: string; plate?: string }) =>
     row.prefix || row.vehicleId || row.plate || "";
-  const pdeFleetKeys = buildPdeFleetKeys(dailyParts);
-  const fuelingContext = (
-    row: Pick<
-      DbFueling,
-      "analysisId" | "vehicleType" | "owner" | "operator" | "prefix" | "vehicleId" | "plate"
-    >,
-  ): EquipmentContext => {
-    if (row.analysisId === "allocated") return "fuelAllocation";
-    if (row.analysisId === "attributed") return "fuelAttribution";
-    const key = equipmentKeyByPdeRule(equipmentKey(row), pdeFleetKeys, {
-      source: "fueling",
-      description: [row.vehicleType, row.owner, row.operator].filter(Boolean).join(" "),
-    });
-    if (key.startsWith("CB:")) return "aggregate";
-    return {
-      source: "fueling",
-      description: [row.vehicleType, row.owner, row.operator].filter(Boolean).join(" "),
-    };
-  };
+  const pdeFleetKeys = useMemo(() => buildPdeFleetKeys(dailyParts), [dailyParts]);
+  const fuelingContext = useCallback(
+    (
+      row: Pick<
+        DbFueling,
+        "analysisId" | "vehicleType" | "owner" | "operator" | "prefix" | "vehicleId" | "plate"
+      >,
+    ): EquipmentContext => {
+      if (row.analysisId === "allocated") return "fuelAllocation";
+      if (row.analysisId === "attributed") return "fuelAttribution";
+      const description = [row.vehicleType, row.owner, row.operator].filter(Boolean).join(" ");
+      const key = equipmentKeyByPdeRule(equipmentKey(row), pdeFleetKeys, {
+        source: "fueling",
+        description,
+      });
+      if (key.startsWith("CB:")) return "aggregate";
+      return {
+        source: "fueling",
+        description,
+      };
+    },
+    [pdeFleetKeys],
+  );
 
   const filteredTrips = useMemo(() => {
     return trips.filter((row) => {
@@ -276,7 +280,7 @@ export function useFilteredData(
       if (filters.analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
     });
-  }, [fueling, filters, pdeFleetKeys]);
+  }, [fueling, filters, fuelingContext, pdeFleetKeys]);
 
   const filteredDailyParts = useMemo(() => {
     return dailyParts.filter((row) => {
@@ -312,6 +316,7 @@ export function useDashboardTabs(storageKey = "dashboard_activeTab") {
     { id: "tratamento", label: "Tratamento" },
     { id: "compactacao", label: "Compactação" },
     { id: "overview", label: "Visão Geral" },
+    { id: "dieselM3", label: "Diesel × m³" },
     { id: "production", label: "Produção" },
     { id: "consumption", label: "Consumo Diesel" },
     { id: "trucks", label: "Agregados" },

@@ -28,6 +28,8 @@ import {
 } from "@/lib/task-types";
 
 const TASKS_MODULE = "tasks";
+// Tarefas ficam restritas a participantes; admin global pode ser ligado aqui se a regra mudar.
+const ADMIN_CAN_VIEW_ALL_TASKS = false;
 
 export type StoredTaskKind = "task" | "request";
 
@@ -449,7 +451,7 @@ function applyStatusChange(task: TaskRecord, status: string, user: AuthUser): Ta
 }
 
 function canSeeTask(task: TaskRecord, user: AuthUser): boolean {
-  if (isAdminUser(user)) return true;
+  if (ADMIN_CAN_VIEW_ALL_TASKS && isAdminUser(user)) return true;
   return (
     task.createdById === user.id ||
     task.createdById === user.name ||
@@ -458,13 +460,15 @@ function canSeeTask(task: TaskRecord, user: AuthUser): boolean {
     task.responsibleIds.includes(user.id) ||
     task.assignedTo.includes(user.name) ||
     task.assignedTo.includes(user.id) ||
-    task.assignedTo.includes("Todos")
+    resolveTaskRecipientUsers(task).some(
+      (recipient) => recipient.id === user.id || recipient.name === user.name,
+    )
   );
 }
 
 function canMutateWholeTask(task: TaskRecord, user: AuthUser): boolean {
   return (
-    isAdminUser(user) ||
+    (ADMIN_CAN_VIEW_ALL_TASKS && isAdminUser(user)) ||
     task.createdById === user.id ||
     task.createdBy === user.name ||
     task.createdBy === user.id
@@ -519,32 +523,6 @@ function preserveProtectedFields(
     responsibleIds: existing.responsibleIds,
     sector: existing.sector,
     createdAt: existing.createdAt,
-  };
-}
-
-function originalCreatorFromTimeline(task: TaskRecord): AuthUser | null {
-  for (const event of [...task.timeline].reverse()) {
-    const match = event.action.match(/^Tarefa enviada por (.+)$/i);
-    if (!match) continue;
-    return findUserByName(match[1].trim()) ?? findUserByName(event.actor);
-  }
-
-  return null;
-}
-
-function repairTaskCreator(task: TaskRecord): TaskRecord {
-  const originalCreator = originalCreatorFromTimeline(task);
-  if (
-    !originalCreator ||
-    (task.createdBy === originalCreator.name && task.createdById === originalCreator.id)
-  ) {
-    return task;
-  }
-
-  return {
-    ...task,
-    createdBy: originalCreator.name,
-    createdById: originalCreator.id,
   };
 }
 
@@ -944,22 +922,6 @@ async function getTaskDocument(d1: D1Database, id: string): Promise<StoredTaskDo
   return row ? documentFromRow(d1, row) : null;
 }
 
-async function repairStoredTaskCreators(d1: D1Database) {
-  const rows = await d1.prepare("SELECT * FROM tasks").all<TaskRow>();
-
-  for (const row of rows.results ?? []) {
-    const existing = await documentFromRow(d1, row);
-    const repaired = repairTaskCreator(existing.task);
-    if (repaired === existing.task) continue;
-
-    await d1
-      .prepare("UPDATE tasks SET created_by = ?, created_by_user_id = ? WHERE id = ?")
-      .bind(repaired.createdBy, repaired.createdById, repaired.id)
-      .run();
-  }
-
-}
-
 async function backfillTaskAccessTables(d1: D1Database) {
   const rows = await d1
     .prepare(
@@ -1005,23 +967,24 @@ async function listTaskDocumentsFromD1(
   user: AuthUser,
 ): Promise<StoredTaskDocument[]> {
   await migrateStoreDocumentsToTasks(d1);
-  await repairStoredTaskCreators(d1);
 
-  const query = isAdminUser(user)
+  const adminCanViewAllTasks = ADMIN_CAN_VIEW_ALL_TASKS && isAdminUser(user);
+  const query = adminCanViewAllTasks
     ? `SELECT * FROM tasks ORDER BY updated_at DESC`
     : `SELECT * FROM tasks
        WHERE created_by_user_id = ?
           OR created_by = ?
           OR created_by = ?
           OR EXISTS (SELECT 1 FROM task_recipients WHERE task_id = tasks.id AND user_id = ?)
+          OR EXISTS (SELECT 1 FROM task_recipients WHERE task_id = tasks.id AND user_name = ?)
           OR EXISTS (SELECT 1 FROM json_each(tasks.responsible_ids) WHERE value = ?)
-          OR EXISTS (SELECT 1 FROM json_each(tasks.assigned_to) WHERE value = ? OR value = ? OR value = 'Todos')
+          OR EXISTS (SELECT 1 FROM json_each(tasks.assigned_to) WHERE value = ? OR value = ?)
        ORDER BY updated_at DESC`;
   const prepared = d1.prepare(query);
-  const result = isAdminUser(user)
+  const result = adminCanViewAllTasks
     ? await prepared.all<TaskRow>()
     : await prepared
-        .bind(user.id, user.name, user.id, user.id, user.id, user.name, user.id)
+        .bind(user.id, user.name, user.id, user.id, user.name, user.id, user.name, user.id)
         .all<TaskRow>();
 
   const documents: StoredTaskDocument[] = [];
@@ -1037,12 +1000,7 @@ async function listTaskDocumentsLocal(user: AuthUser): Promise<StoredTaskDocumen
 
   for (const document of documents) {
     const normalized = normalizeStoredTask(document.task);
-    const task = repairTaskCreator(normalized);
-    const next = { ...document, task };
-    if (task !== normalized) {
-      await upsertStoreDocument(TASKS_MODULE, task.id, next);
-    }
-    repaired.push(next);
+    repaired.push({ ...document, task: normalized });
   }
 
   return repaired.filter((document) => canSeeTask(document.task, user));
@@ -1320,7 +1278,6 @@ async function addResponseDocument(input: TaskResponseInput, user: AuthUser) {
   }
 
   await migrateStoreDocumentsToTasks(d1);
-  await repairStoredTaskCreators(d1);
   const existing = await getTaskDocument(d1, input.taskId);
   if (!existing || !canRespondToTask(existing.task, user)) {
     throw new Response("Tarefa nao encontrada ou sem permissao para responder.", { status: 404 });
@@ -1432,7 +1389,6 @@ async function addCommentDocument(input: TaskCommentInput, user: AuthUser) {
   }
 
   await migrateStoreDocumentsToTasks(d1);
-  await repairStoredTaskCreators(d1);
   const existing = await getTaskDocument(d1, input.taskId);
   if (!existing || !canSeeTask(existing.task, user)) {
     throw new Response("Tarefa nao encontrada ou sem permissao.", { status: 404 });

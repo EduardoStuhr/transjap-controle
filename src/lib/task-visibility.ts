@@ -3,6 +3,8 @@ import type { AuthUser } from "@/lib/auth-store";
 import { resolveRecipients, resolveResponsibleIds } from "@/lib/operational-options";
 import type { TaskRecord, TaskStatus } from "@/lib/task-types";
 
+const ADMIN_CAN_VIEW_ALL_TASKS = false;
+
 const CREATOR_ID_FIELDS = [
   "createdById",
   "createdByUserId",
@@ -31,6 +33,7 @@ const RECIPIENT_FIELDS = [
 ] as const;
 
 const RESPONSIBLE_ID_FIELDS = ["responsibleIds", "responsible_ids"] as const;
+const SHARED_USER_FIELDS = ["sharedWith", "shared_with", "viewers"] as const;
 
 function asTaskRecord(task: TaskRecord): Record<string, unknown> {
   return task as unknown as Record<string, unknown>;
@@ -69,6 +72,44 @@ export function getTaskRecipientNames(task: TaskRecord): string[] {
   return aliases.length > 0 ? Array.from(new Set(aliases)) : task.assignedTo;
 }
 
+export function getTaskSharedUsers(task: TaskRecord): string[] {
+  return Array.from(new Set(getStringValues(task, SHARED_USER_FIELDS)));
+}
+
+export function canAdminViewAllTasks(user: AuthUser | null): boolean {
+  return ADMIN_CAN_VIEW_ALL_TASKS && isAdminUser(user);
+}
+
+export function getTaskVisibleReason(task: TaskRecord, user: AuthUser | null): string | null {
+  if (!user) return null;
+
+  const creatorIds = getTaskCreatorIds(task);
+  if (creatorIds.includes(user.id)) return "createdById";
+  if (creatorIds.includes(user.name)) return "createdById:nameFallback";
+
+  const creatorNames = getTaskCreatorNames(task);
+  if (creatorNames.includes(user.name)) return "createdBy";
+  if (creatorNames.includes(user.id)) return "createdBy:idFallback";
+
+  const responsibleIds = getTaskResponsibleIds(task);
+  if (responsibleIds.includes(user.id)) return "responsibleIds";
+
+  const recipientNames = getTaskRecipientNames(task);
+  if (recipientNames.includes(user.name)) return "assignedTo";
+  if (recipientNames.includes(user.id)) return "assignedTo:idFallback";
+  if (resolveRecipients(recipientNames).includes(user.name)) {
+    return recipientNames.includes("Todos") ? "assignedTo:Todos" : "recipientResolved";
+  }
+
+  const sharedUsers = getTaskSharedUsers(task);
+  if (sharedUsers.includes(user.id)) return "sharedWith";
+  if (sharedUsers.includes(user.name)) return "sharedWith";
+
+  if (canAdminViewAllTasks(user)) return "adminAuthorized";
+
+  return null;
+}
+
 export function getTaskViewedAt(task: TaskRecord, user: AuthUser | null): string {
   if (!user) return "";
   return task.viewedBy[user.id] || task.viewedBy[user.name] || "";
@@ -93,6 +134,23 @@ export function hasUserViewedTask(task: TaskRecord, user: AuthUser | null): bool
   return Boolean(getTaskViewedAt(task, user));
 }
 
+export function isUserTaskRecipient(task: TaskRecord, user: AuthUser | null): boolean {
+  if (!user) return false;
+  if (getTaskCreatorIds(task).includes(user.id) || getTaskCreatorNames(task).includes(user.name)) {
+    return false;
+  }
+
+  const recipientNames = getTaskRecipientNames(task);
+  return (
+    getTaskResponsibleIds(task).includes(user.id) ||
+    recipientNames.includes(user.name) ||
+    recipientNames.includes(user.id) ||
+    resolveRecipients(recipientNames).includes(user.name) ||
+    getTaskSharedUsers(task).includes(user.id) ||
+    getTaskSharedUsers(task).includes(user.name)
+  );
+}
+
 export function isTaskUnreadForUser(task: TaskRecord, user: AuthUser | null): boolean {
   if (!user) return false;
   return canUserSeeTask(task, user) && !hasUserViewedTask(task, user);
@@ -106,24 +164,10 @@ export function getTaskStatusForUser(task: TaskRecord, user: AuthUser | null): T
 /**
  * Tarefas são privadas por envolvimento.
  * Um usuário vê uma tarefa se for o criador OU estiver nos destinatários.
- * Administradores também podem consultar a tarefa.
+ * Admin não tem acesso global neste módulo enquanto ADMIN_CAN_VIEW_ALL_TASKS estiver false.
  */
 export function canUserSeeTask(task: TaskRecord, user: AuthUser | null): boolean {
-  if (!user) return false;
-  if (isAdminUser(user)) return true;
-
-  const creatorIds = getTaskCreatorIds(task);
-  const creatorNames = getTaskCreatorNames(task);
-  const recipientNames = getTaskRecipientNames(task);
-
-  return (
-    creatorIds.includes(user.id) ||
-    creatorIds.includes(user.name) ||
-    creatorNames.includes(user.name) ||
-    creatorNames.includes(user.id) ||
-    getTaskResponsibleIds(task).includes(user.id) ||
-    resolveRecipients(recipientNames).includes(user.name)
-  );
+  return Boolean(getTaskVisibleReason(task, user));
 }
 
 export function filterVisibleTasks(tasks: TaskRecord[], user: AuthUser | null): TaskRecord[] {
@@ -147,6 +191,7 @@ export function getTaskVisibilityLabel(task: TaskRecord): "Privada" | "Compartil
   getTaskCreatorIds(task).forEach((id) => participants.add(id));
   getTaskCreatorNames(task).forEach((name) => participants.add(`name:${name}`));
   getTaskResponsibleIds(task).forEach((id) => participants.add(id));
+  getTaskSharedUsers(task).forEach((value) => participants.add(value));
   resolveRecipients(getTaskRecipientNames(task)).forEach((name) =>
     participants.add(`name:${name}`),
   );
