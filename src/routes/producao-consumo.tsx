@@ -720,6 +720,66 @@ function divide(numerator: number, denominator: number) {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
+/**
+ * Horas de PDE de um ÚNICO registro de equipamento.
+ * Usa o horímetro (final - inicial) quando válido; senão cai para as horas
+ * trabalhadas (workedHours) do PDE. Nunca usa allocatedHours nem horas de
+ * abastecimento. O guarda de validade evita horímetro acumulado/incoerente.
+ */
+function pdeRowHours(
+  part: Pick<DbEquipmentDailyPart, "hours" | "horimInicial" | "horimFinal">,
+) {
+  const start = part.horimInicial || 0;
+  const end = part.horimFinal || 0;
+  const delta = end - start;
+  if (start > 0 && end > 0 && delta > 0 && delta <= 24) return delta;
+  return part.hours || 0;
+}
+
+/**
+ * Fonte ÚNICA das horas operacionais vindas do PDE.
+ * Para cada dia e item operacional soma APENAS o PDE real do dia, contando
+ * cada frota uma única vez (evita duplicar o PDE por causa de múltiplos
+ * abastecimentos/alocações). Nunca usa fuel_allocations.allocatedHours, horas
+ * de abastecimento, horas acumuladas do período nem horas de outro dia.
+ */
+function buildPdeOperationalHours(dailyParts: DbEquipmentDailyPart[]) {
+  const totalByDate = new Map<string, number>();
+  const itemByDate = new Map<string, number>();
+  const seen = new Set<string>();
+  dailyParts.forEach((part) => {
+    if (!part.usedInAnalysis || (part.hours || 0) <= 0) return;
+    const item = resolveEquipmentOperationalClass({
+      fleet: part.fleet,
+      equipment: part.fleetLabel || part.fleet,
+      description: `${part.sourceSheet} ${part.status}`,
+    }).item;
+    if (item === "outros") return;
+    const equipmentKey =
+      normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart") ||
+      part.fleet ||
+      part.fleetLabel ||
+      "SEM_EQUIPAMENTO";
+    const dedupKey = `${part.date}|${item}|${equipmentKey}`;
+    if (seen.has(dedupKey)) return;
+    seen.add(dedupKey);
+    const hours = pdeRowHours(part);
+    if (hours <= 0) return;
+    totalByDate.set(part.date, (totalByDate.get(part.date) ?? 0) + hours);
+    const itemKey = `${part.date}|${item}`;
+    itemByDate.set(itemKey, (itemByDate.get(itemKey) ?? 0) + hours);
+  });
+  return { totalByDate, itemByDate };
+}
+
+function getDailyItemPdeHours(
+  itemByDate: ReadonlyMap<string, number>,
+  date: string,
+  item: OperationalItem,
+) {
+  return itemByDate.get(`${date}|${item}`) ?? 0;
+}
+
 function compactacaoM3LStatus({
   compactedM3Day,
   relatedM3,
@@ -783,56 +843,63 @@ function buildEquipmentOperationalShare({
   dailyParts: DbEquipmentDailyPart[];
   compactedM3ByDate: ReadonlyMap<string, number>;
 }): EquipmentOperationalShare[] {
+  const dailyPartEquipmentKey = (part: DbEquipmentDailyPart) =>
+    normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart") ||
+    part.fleet ||
+    part.fleetLabel ||
+    "SEM_EQUIPAMENTO";
+
+  // Horas totais do item no dia: cada frota conta uma única vez (sem duplicar
+  // o PDE por múltiplos abastecimentos) usando a fonte única pdeRowHours.
   const itemTotalHoursByDate = new Map<string, number>();
+  const countedItemTotalKeys = new Set<string>();
   dailyParts.forEach((part) => {
     if (!part.usedInAnalysis || part.hours <= 0) return;
-    const operationalClass = resolveEquipmentOperationalClass({
+    const item = resolveEquipmentOperationalClass({
       fleet: part.fleet,
       equipment: part.fleetLabel || part.fleet,
       description: `${part.sourceSheet} ${part.status}`,
-    });
-    const key = `${part.date}|${operationalClass.item}`;
-    itemTotalHoursByDate.set(key, (itemTotalHoursByDate.get(key) ?? 0) + part.hours);
+    }).item;
+    const dedupKey = `${part.date}|${item}|${dailyPartEquipmentKey(part)}`;
+    if (countedItemTotalKeys.has(dedupKey)) return;
+    countedItemTotalKeys.add(dedupKey);
+    const key = `${part.date}|${item}`;
+    itemTotalHoursByDate.set(key, (itemTotalHoursByDate.get(key) ?? 0) + pdeRowHours(part));
   });
 
   const sharesByEquipmentDay = new Map<string, EquipmentOperationalShare>();
   dailyParts.forEach((part) => {
     if (!part.usedInAnalysis || part.hours <= 0) return;
-    const operationalClass = resolveEquipmentOperationalClass({
+    const item = resolveEquipmentOperationalClass({
       fleet: part.fleet,
       equipment: part.fleetLabel || part.fleet,
       description: `${part.sourceSheet} ${part.status}`,
-    });
-    const item = operationalClass.item;
+    }).item;
     const itemTotalHours = itemTotalHoursByDate.get(`${part.date}|${item}`) ?? 0;
     const compactedM3Day = compactedM3ByDate.get(part.date) ?? 0;
     if (itemTotalHours <= 0 || compactedM3Day <= 0) return;
 
-    const equipmentKey = normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart");
-    const share = part.hours / itemTotalHours;
+    const equipmentKey = dailyPartEquipmentKey(part);
+    const key = `${part.date}|${item}|${equipmentKey}`;
+    // mesma frota/dia conta uma única vez
+    if (sharesByEquipmentDay.has(key)) return;
+    const hours = pdeRowHours(part);
+    const share = hours / itemTotalHours;
     const relatedM3 = compactedM3Day * share;
-    const key = `${part.date}|${item}|${equipmentKey || part.fleet || part.fleetLabel || "SEM_EQUIPAMENTO"}`;
-    const current =
-      sharesByEquipmentDay.get(key) ??
-      ({
-        date: part.date,
-        item,
-        equipmentKey: equipmentKey || part.fleet || part.fleetLabel || "SEM_EQUIPAMENTO",
-        equipmentLabel: displayEquipmentLabel(part.fleet || part.fleetLabel, "dailyPart"),
-        equipmentHours: 0,
-        itemTotalHours,
-        share: 0,
-        compactedM3Day,
-        relatedM3: 0,
-        diesel: 0,
-        m3PerLiter: 0,
-        m3PerHour: 0,
-      } satisfies EquipmentOperationalShare);
-    current.equipmentHours += part.hours;
-    current.share += share;
-    current.relatedM3 += relatedM3;
-    current.m3PerHour = divide(current.relatedM3, current.equipmentHours);
-    sharesByEquipmentDay.set(key, current);
+    sharesByEquipmentDay.set(key, {
+      date: part.date,
+      item,
+      equipmentKey,
+      equipmentLabel: displayEquipmentLabel(part.fleet || part.fleetLabel, "dailyPart"),
+      equipmentHours: hours,
+      itemTotalHours,
+      share,
+      compactedM3Day,
+      relatedM3,
+      diesel: 0,
+      m3PerLiter: 0,
+      m3PerHour: divide(relatedM3, hours),
+    });
   });
   return [...sharesByEquipmentDay.values()];
 }
@@ -1534,6 +1601,7 @@ function ProducaoConsumoRefactored() {
   const debugDieselM3 = storageFlagEnabled("debugDieselM3");
   const debugTransportDiesel = storageFlagEnabled("debugTransportDiesel");
   const debugM3LCompactacao = storageFlagEnabled("debugM3LCompactacao");
+  const debugPdeHours = storageFlagEnabled("debugPdeHours");
   const activeOperationalItem = isOperationalTab(activeTab) ? activeTab : null;
   const needsTechnicalAudit = showTechnicalAudit || debugProductionAudit || debugM3LCompactacao;
   const needsDieselFlowAudit = showTechnicalAudit || debugProductionAudit;
@@ -2342,8 +2410,11 @@ function ProducaoConsumoRefactored() {
       ]),
     );
     const appliedOperationalShareKeys = new Set<string>();
-    const totalOperationalHoursByDate = new Map<string, number>();
-    const itemOperationalHoursByDate = new Map<string, number>();
+    const countedDailyHoursKeys = new Set<string>();
+    // Fonte única das horas PDE por dia/item (deduplicada por frota; horímetro
+    // ou workedHours). Substitui qualquer soma direta de part.hours.
+    const { totalByDate: totalOperationalHoursByDate, itemByDate: itemOperationalHoursByDate } =
+      buildPdeOperationalHours(filteredDailyParts);
 
     productiveTrips.forEach((trip) => {
       if (isTripPipaLike(trip)) return;
@@ -2409,23 +2480,19 @@ function ProducaoConsumoRefactored() {
       );
       const day = ensureDaily(item, part.date);
 
-      summary.hours += part.hours || 0;
-      equipment.hours += part.hours || 0;
-      equipment.m3EquipmentHours += part.usedInAnalysis && part.hours > 0 ? part.hours : 0;
-      day.hours += part.hours || 0;
+      // Horas do equipamento/dia: cada frota uma única vez, via fonte única
+      // pdeRowHours (não duplica o PDE por múltiplos abastecimentos).
+      const dailyHoursKey = `${part.date}|${item}|${key || part.fleet || part.fleetLabel || "SEM_EQUIPAMENTO"}`;
+      if (!countedDailyHoursKeys.has(dailyHoursKey)) {
+        countedDailyHoursKeys.add(dailyHoursKey);
+        const partHours = pdeRowHours(part);
+        summary.hours += partHours;
+        equipment.hours += partHours;
+        equipment.m3EquipmentHours += part.usedInAnalysis && (part.hours || 0) > 0 ? partHours : 0;
+        day.hours += partHours;
+      }
 
       if (!part.usedInAnalysis || part.hours <= 0) return;
-      if (item !== "outros") {
-        totalOperationalHoursByDate.set(
-          part.date,
-          (totalOperationalHoursByDate.get(part.date) ?? 0) + part.hours,
-        );
-        const itemHoursKey = `${part.date}|${item}`;
-        itemOperationalHoursByDate.set(
-          itemHoursKey,
-          (itemOperationalHoursByDate.get(itemHoursKey) ?? 0) + part.hours,
-        );
-      }
       const shareKey = `${part.date}|${item}|${key || part.fleet || part.fleetLabel || "SEM_EQUIPAMENTO"}`;
       if (appliedOperationalShareKeys.has(shareKey)) return;
       appliedOperationalShareKeys.add(shareKey);
@@ -2521,8 +2588,11 @@ function ProducaoConsumoRefactored() {
         .map((day) => {
           const compactedM3Day = productionByDate.get(day.date)?.compactedM3 ?? 0;
           const totalOperationalHours = totalOperationalHoursByDate.get(day.date) ?? 0;
-          const itemOperationalHours =
-            itemOperationalHoursByDate.get(`${day.date}|${summary.item}`) ?? 0;
+          const itemOperationalHours = getDailyItemPdeHours(
+            itemOperationalHoursByDate,
+            day.date,
+            summary.item,
+          );
           const usesRelatedDailyM3 = summary.item === "compactacao";
           const relatedM3 =
             usesRelatedDailyM3 && totalOperationalHours > 0
@@ -3313,6 +3383,114 @@ function ProducaoConsumoRefactored() {
   const transporteSummary = itemSummaryById.get("transporte") ?? emptyItemSummary("transporte");
   const tratamentoSummary = itemSummaryById.get("tratamento") ?? emptyItemSummary("tratamento");
   const compactacaoSummary = itemSummaryById.get("compactacao") ?? emptyItemSummary("compactacao");
+
+  // Tarefas 1 e 5: debugPdeHours=1 imprime a origem das horas de compactação
+  // do dia 25/05 (uma linha por registro de PDE) e a produção do RCO do dia.
+  useEffect(() => {
+    if (typeof window === "undefined" || !debugPdeHours) return;
+    const targetDate = "2026-05-25";
+    const seen = new Set<string>();
+    let totalCompactacaoHoursFromPde = 0;
+
+    const compactacaoHours25Debug = filteredDailyParts
+      .filter((part) => part.date === targetDate)
+      .map((part) => {
+        const item = resolveEquipmentOperationalClass({
+          fleet: part.fleet,
+          equipment: part.fleetLabel || part.fleet,
+          description: `${part.sourceSheet} ${part.status}`,
+        }).item;
+        const equipmentKey =
+          normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart") ||
+          part.fleet ||
+          part.fleetLabel ||
+          "SEM_EQUIPAMENTO";
+        const workedHours = part.hours || 0;
+        const start = part.horimInicial || 0;
+        const end = part.horimFinal || 0;
+        const delta = end - start;
+        const horimeterValid = start > 0 && end > 0 && delta > 0 && delta <= 24;
+        const calculatedHours = horimeterValid ? delta : 0;
+        const source = horimeterValid ? "horimetro(final-inicial)" : "workedHours(PDE)";
+        const dedupKey = `${part.date}|${item}|${equipmentKey}`;
+        const isCompactacao = item === "compactacao";
+        let included = false;
+        let reason = "";
+        if (!isCompactacao) reason = `item resolvido = ${item}`;
+        else if (!part.usedInAnalysis) reason = "usedInAnalysis = false";
+        else if (workedHours <= 0) reason = "workedHours <= 0";
+        else if (seen.has(dedupKey)) reason = "duplicado (frota/dia ja contada)";
+        else {
+          included = true;
+          reason = "contado uma vez";
+          seen.add(dedupKey);
+          totalCompactacaoHoursFromPde += pdeRowHours(part);
+        }
+        const record = part as unknown as Record<string, unknown>;
+        return {
+          pdeId: String(record.pdeId ?? record.id ?? ""),
+          date: part.date,
+          equipmentKey,
+          equipmentLabel: displayEquipmentLabel(part.fleet || part.fleetLabel, "dailyPart"),
+          item,
+          startHourmeter: fixedNumber(start, 2),
+          endHourmeter: fixedNumber(end, 2),
+          workedHours: fixedNumber(workedHours, 2),
+          calculatedHours: fixedNumber(calculatedHours, 2),
+          hoursUsed: fixedNumber(included ? pdeRowHours(part) : 0, 2),
+          source,
+          included,
+          reason,
+        };
+      });
+
+    const chartDay = compactacaoSummary.daily.find((day) => day.date === targetDate);
+    const totalUsedByChart = fixedNumber(
+      chartDay?.itemOperationalHours || chartDay?.hours || 0,
+      2,
+    );
+    const totalFromPde = fixedNumber(totalCompactacaoHoursFromPde, 2);
+
+    const productionByObraMaterial = new Map<
+      string,
+      { date: string; obra: string; material: string; trips: number; looseM3: number; compactedM3: number }
+    >();
+    productiveTrips
+      .filter((trip) => extractDateKey(trip.datetime) === targetDate)
+      .forEach((trip) => {
+        const obra = trip.obra || "Sem obra";
+        const material = trip.material || "Sem material";
+        const key = `${obra}|${material}`;
+        const current =
+          productionByObraMaterial.get(key) ??
+          { date: targetDate, obra, material, trips: 0, looseM3: 0, compactedM3: 0 };
+        current.trips += 1;
+        current.looseM3 += trip.cubicMLoose || 0;
+        current.compactedM3 += calculateCompactedVolume(
+          trip.cubicMLoose || 0,
+          trip.swellFactorApplied,
+        );
+        productionByObraMaterial.set(key, current);
+      });
+    const rcoProduction25Debug = [...productionByObraMaterial.values()].map((row) => ({
+      date: row.date,
+      obra: row.obra,
+      trips: row.trips,
+      looseM3: fixedNumber(row.looseM3, 2),
+      compactedM3: fixedNumber(row.compactedM3, 2),
+      material: row.material,
+    }));
+
+    console.groupCollapsed("[debugPdeHours] Compactacao 25/05");
+    console.table(compactacaoHours25Debug);
+    console.log({
+      totalCompactacaoHoursFromPde: totalFromPde,
+      totalUsedByChart,
+      diff: fixedNumber(totalUsedByChart - totalFromPde, 2),
+    });
+    console.table(rcoProduction25Debug);
+    console.groupEnd();
+  }, [debugPdeHours, filteredDailyParts, productiveTrips, compactacaoSummary]);
 
   const compactacaoM3LDebug = useMemo(() => {
     if (!debugM3LCompactacao && activeTab !== "compactacao" && !showTechnicalAudit) return [];
