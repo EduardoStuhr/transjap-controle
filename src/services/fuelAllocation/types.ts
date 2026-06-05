@@ -42,7 +42,8 @@ export type FuelAllocationAuditType =
   | "PDE_USING_WORKED_HOURS_FALLBACK"
   | "PDE_PARTIALLY_COVERED"
   | "MULTIPLE_PDE_MATCHES"
-  | "INVALID_HOURMETER_INTERVAL";
+  | "INVALID_HOURMETER_INTERVAL"
+  | "PDE_OUTSIDE_RCO";
 
 export interface FuelAllocationAuditResult {
   sourceFuelingId?: string;

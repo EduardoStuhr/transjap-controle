@@ -8,6 +8,11 @@ import {
   unsubscribePushNotifications,
   type PushSubscriptionInput,
 } from "@/lib/api/push";
+import {
+  disableNativePushNotifications,
+  enableNativePushNotifications,
+  getNativePushStatus,
+} from "@/lib/native-push";
 
 type PushState = "checking" | "unsupported" | "unconfigured" | "blocked" | "inactive" | "active";
 type StoredPushState = Exclude<PushState, "checking">;
@@ -57,6 +62,10 @@ function supportsPush() {
     "serviceWorker" in navigator &&
     "PushManager" in window
   );
+}
+
+async function nativePushStatus() {
+  return getNativePushStatus().catch(() => "unsupported" as const);
 }
 
 function fromBase64Url(value: string) {
@@ -116,6 +125,14 @@ export function PushNotificationSettings({ userId }: { userId: string }) {
     setState(storedState ?? "checking");
 
     async function loadStatus() {
+      const nativeStatus = await nativePushStatus();
+      if (nativeStatus !== "unsupported") {
+        if (!cancelled) {
+          setPersistedState(nativeStatus === "active" ? "active" : nativeStatus);
+        }
+        return;
+      }
+
       if (!supportsPush()) {
         if (!cancelled) setPersistedState("unsupported");
         return;
@@ -165,6 +182,13 @@ export function PushNotificationSettings({ userId }: { userId: string }) {
   const enable = async () => {
     setBusy(true);
     try {
+      if ((await nativePushStatus()) !== "unsupported") {
+        await enableNativePushNotifications();
+        setPersistedState("active");
+        toast.success("Notificacoes do Android ativadas");
+        return;
+      }
+
       if (!supportsPush()) {
         setPersistedState("unsupported");
         toast.error("Navegador não suporta notificações");
@@ -223,6 +247,13 @@ export function PushNotificationSettings({ userId }: { userId: string }) {
   const disable = async () => {
     setBusy(true);
     try {
+      if ((await nativePushStatus()) !== "unsupported") {
+        await disableNativePushNotifications();
+        setPersistedState("inactive");
+        toast.success("Notificacoes desativadas neste Android.");
+        return;
+      }
+
       const registration = await navigator.serviceWorker.getRegistration("/");
       const subscription = registration ? await registration.pushManager.getSubscription() : null;
       if (subscription) {

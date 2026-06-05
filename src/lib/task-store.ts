@@ -412,13 +412,13 @@ function taskFromInput(input: TaskInput): TaskRecord {
     timeline: [
       {
         id: newId("EV"),
-        timestamp: displayDate(),
+        timestamp: now,
         action: `Tarefa enviada por ${createdBy || "Sistema"}`,
         actor: createdBy || "Sistema",
         status: input.status,
       },
     ],
-    createdAt: displayDate(),
+    createdAt: now,
     updatedAt: now,
     completedAt,
     completedBy: isTaskCompletedStatus(input.status) ? createdBy : "",

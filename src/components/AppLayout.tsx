@@ -69,6 +69,44 @@ function stockAlertKey(alert: { id: string; description: string }) {
   return `stock:${alert.id}:${alert.description}`;
 }
 
+function readRootCssVar(styles: CSSStyleDeclaration, name: string) {
+  return styles.getPropertyValue(name).trim() || "0px";
+}
+
+function logAgendaChromeMetrics() {
+  if (typeof window === "undefined") return;
+
+  window.requestAnimationFrame(() => {
+    const rootStyles = window.getComputedStyle(document.documentElement);
+    const header = document.querySelector<HTMLElement>(".app-header");
+    const bottomNav = document.querySelector<HTMLElement>(".app-bottom-nav");
+    const appMain = document.querySelector<HTMLElement>(".app-main");
+    const headerRect = header?.getBoundingClientRect();
+    const bottomNavRect = bottomNav?.getBoundingClientRect();
+
+    console.info("[AgendaLayoutDebug] chrome", {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      visualViewportWidth: window.visualViewport?.width ?? null,
+      visualViewportHeight: window.visualViewport?.height ?? null,
+      headerRealHeight: headerRect ? Math.round(headerRect.height) : null,
+      safeAreaTop: readRootCssVar(rootStyles, "--safe-area-inset-top"),
+      safeAreaBottom: readRootCssVar(rootStyles, "--safe-area-inset-bottom"),
+      androidSafeAreaTop: readRootCssVar(rootStyles, "--android-safe-area-top"),
+      androidSafeAreaBottom: readRootCssVar(rootStyles, "--android-safe-area-bottom"),
+      capacitorStatusBarHeight: readRootCssVar(rootStyles, "--capacitor-status-bar-height"),
+      capacitorNavigationBarHeight: readRootCssVar(
+        rootStyles,
+        "--capacitor-navigation-bar-height",
+      ),
+      bottomNavRealHeight: bottomNavRect ? Math.round(bottomNavRect.height) : null,
+      bottomNavCssMinHeight: bottomNav ? window.getComputedStyle(bottomNav).minHeight : null,
+      mainPaddingTop: appMain ? window.getComputedStyle(appMain).paddingTop : null,
+      mainPaddingBottom: appMain ? window.getComputedStyle(appMain).paddingBottom : null,
+    });
+  });
+}
+
 // Todas as rotas são acessíveis a qualquer usuário autenticado.
 
 export function Icon({
@@ -177,6 +215,18 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
     ];
   }, [maintenances, query, tasks, user]);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  useEffect(() => {
+    if (pathname !== "/agenda") return;
+    logAgendaChromeMetrics();
+    window.addEventListener("resize", logAgendaChromeMetrics);
+    window.visualViewport?.addEventListener("resize", logAgendaChromeMetrics);
+    return () => {
+      window.removeEventListener("resize", logAgendaChromeMetrics);
+      window.visualViewport?.removeEventListener("resize", logAgendaChromeMetrics);
+    };
+  }, [pathname]);
+
   const openTaskFromNotification = (taskId: string) => {
     setNotifOpen(false);
     if (typeof window !== "undefined") {
@@ -201,21 +251,21 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   const totalAlertCount = criticalCount + stockAlertCount;
 
   return (
-    <div className="min-h-screen bg-background text-on-surface flex flex-col md:flex-row">
+    <div className="app-layout-shell bg-background text-on-surface flex flex-col md:flex-row">
       {/* Side Alerts / Top Bar for important notices */}
-      <div className="fixed top-0 left-0 right-0 h-1 bg-primary z-[100]" />
+      <div className="app-status-strip fixed h-1 bg-primary z-[100]" />
 
-      <aside className="hidden md:flex flex-col fixed left-0 top-0 h-full border-r border-border-low bg-surface-low w-64 z-50 shadow-industrial">
+      <aside className="app-desktop-sidebar hidden md:flex flex-col fixed left-0 border-r border-border-low bg-surface-low w-64 z-50 shadow-industrial">
         <SidebarInner pathname={pathname} unreadTaskCount={unreadTaskCount} />
       </aside>
 
       {open && (
-        <div className="md:hidden fixed inset-0 z-[60] flex">
+        <div className="app-mobile-drawer md:hidden fixed inset-0 z-[60] flex">
           <div
             className="absolute inset-0 bg-black/80 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
-          <aside className="relative flex flex-col h-full border-r border-border-low bg-surface-low w-72 transition-industrial">
+          <aside className="app-mobile-drawer-panel relative flex flex-col h-full border-r border-border-low bg-surface-low transition-industrial">
             <SidebarInner
               pathname={pathname}
               unreadTaskCount={unreadTaskCount}
@@ -225,12 +275,12 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
         </div>
       )}
 
-      <div className="flex-1 flex flex-col md:pl-64">
-        <header className="flex justify-between items-center w-full h-16 px-6 fixed top-0 bg-surface-container/80 backdrop-blur-md border-b border-border-low shadow-sm z-40 md:w-[calc(100%-16rem)]">
-          <div className="flex items-center gap-6 flex-1">
+      <div className="app-content-shell flex-1 flex flex-col md:pl-64">
+        <header className="app-header flex justify-between items-center fixed bg-surface-container/80 backdrop-blur-md border-b border-border-low shadow-sm z-40 gap-2 sm:gap-4">
+          <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-6">
             <button
               type="button"
-              className="md:hidden w-10 h-10 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded transition-colors"
+              className="md:hidden w-9 h-9 shrink-0 flex items-center justify-center text-on-surface-variant hover:bg-surface-bright rounded transition-colors"
               onClick={() => setOpen(true)}
               aria-label="Abrir menu"
             >
@@ -296,10 +346,14 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 </div>
               )}
             </div>
-            <img src="/logo.png" alt="TransJap" className="md:hidden h-8 w-auto object-contain" />
+            <img
+              src="/logo.png"
+              alt="TransJap"
+              className="md:hidden h-7 w-auto max-w-[118px] shrink object-contain"
+            />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-3">
             <div
               className="relative"
               onBlur={(e) => {
@@ -310,7 +364,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
             >
               <button
                 type="button"
-                className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full relative transition-industrial"
+                className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full relative transition-industrial"
                 onClick={() => {
                   const opening = !notifOpen;
                   setNotifOpen(opening);
@@ -326,7 +380,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                 )}
               </button>
               {notifOpen && (
-                <div className="absolute right-0 top-12 w-80 max-h-96 overflow-y-auto bg-surface-container border border-border-low rounded-lg shadow-industrial-lg z-50 animate-fade-in">
+                <div className="absolute right-0 top-12 w-[calc(100vw-2rem)] max-w-80 max-h-[min(24rem,calc(100dvh-var(--safe-area-inset-top)-var(--safe-area-inset-bottom)-6rem))] overflow-y-auto bg-surface-container border border-border-low rounded-lg shadow-industrial-lg z-50 animate-fade-in">
                   <div className="p-3 border-b border-border-low flex items-center justify-between">
                     <span className="text-xs font-black uppercase tracking-widest">
                       Notificações
@@ -464,12 +518,12 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
             </div>
             <button
               type="button"
-              className="w-10 h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full transition-industrial"
+              className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-surface-bright rounded-full transition-industrial"
               onClick={() => setShowConfig(true)}
             >
               <Icon name="settings" />
             </button>
-            <div className="w-px h-6 bg-border-low mx-2" />
+            <div className="hidden sm:block w-px h-6 bg-border-low mx-2" />
             <div
               className="relative"
               onBlur={(e) => {
@@ -481,7 +535,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
               <button
                 type="button"
                 onClick={() => setAvatarOpen((v) => !v)}
-                className="flex items-center gap-3 pl-2 hover:bg-surface-bright/40 rounded transition-colors py-1 group"
+                className="flex items-center gap-2 sm:gap-3 sm:pl-2 hover:bg-surface-bright/40 rounded transition-colors py-1 group"
                 aria-label="Menu do usuário"
               >
                 <div className="text-right hidden sm:block">
@@ -492,7 +546,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                     {user?.role || "Sessão local"}
                   </p>
                 </div>
-                <div className="h-9 w-9 rounded bg-primary text-on-primary flex items-center justify-center font-black shadow-industrial group-hover:scale-105 transition-transform">
+                <div className="h-8 w-8 sm:h-9 sm:w-9 rounded bg-primary text-on-primary flex items-center justify-center font-black shadow-industrial group-hover:scale-105 transition-transform">
                   {user?.name?.[0] || "U"}
                 </div>
               </button>
@@ -528,13 +582,13 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           </div>
         </header>
 
-        <main className="pt-24 pb-28 md:pb-12 px-4 sm:px-6 min-h-screen">
+        <main className="app-main px-4 sm:px-6">
           {title && (
             <div className="mb-10">
               <span className="text-[10px] font-black text-primary uppercase tracking-[0.3em] mb-2 block">
                 Sistema Operacional
               </span>
-              <h1 className="text-4xl md:text-5xl font-black tracking-tighter text-on-surface uppercase leading-none">
+              <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tighter text-on-surface uppercase leading-none break-words">
                 {title}
               </h1>
             </div>
@@ -542,19 +596,20 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           {children}
         </main>
       </div>
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 flex overflow-x-auto scrollbar-hide border-t border-border-low bg-surface-low/95 backdrop-blur px-2 py-2 gap-1">
+      <nav className="app-bottom-nav md:hidden fixed z-50 flex items-start overflow-x-auto scrollbar-hide border-t border-border-low bg-surface-low/95 backdrop-blur pt-2 gap-1">
         {NAV.map((item) => {
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link
               key={item.to}
               to={item.to}
-              className={`flex flex-col items-center gap-1 rounded px-3 py-1 text-[10px] font-black uppercase min-w-fit ${
+              aria-label={item.label}
+              className={`app-bottom-nav-item flex flex-col items-center gap-1 rounded px-1 py-1 text-[9px] font-black uppercase leading-tight ${
                 active ? "text-primary" : "text-on-surface-variant"
               }`}
             >
               <Icon name={item.icon} className="text-xl" />
-              <span>{item.label.split(" ")[0]}</span>
+              <span className="app-bottom-nav-label">{item.label.split(" ")[0]}</span>
             </Link>
           );
         })}

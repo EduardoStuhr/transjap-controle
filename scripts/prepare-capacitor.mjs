@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir } from "node:fs/promises";
+import { copyFile, cp, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -34,6 +34,7 @@ for (const asset of assets) {
 
 const clientAssets = path.join(distDir, "client", "assets");
 if (existsSync(clientAssets)) {
+  await rm(path.join(distDir, "assets"), { recursive: true, force: true });
   await cp(clientAssets, path.join(distDir, "assets"), { recursive: true });
 }
 

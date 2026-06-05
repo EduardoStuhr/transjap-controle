@@ -50,12 +50,15 @@ const config: CapacitorConfig = {
     StatusBar: {
       style: "DARK",
       backgroundColor: "#05070c",
-      overlaysWebView: false,
+      overlaysWebView: true,
     },
     Keyboard: {
       resize: "body",
       style: "dark",
       resizeOnFullScreen: true,
+    },
+    PushNotifications: {
+      presentationOptions: ["badge", "sound", "alert", "banner", "list"],
     },
   },
 };

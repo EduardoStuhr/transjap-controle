@@ -7,7 +7,11 @@ import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import { buildAnalysisSnapshot } from "@/lib/production-analytics";
 import { recalculateFuelAttribution } from "@/lib/fuel-attribution";
-import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
+import {
+  calculateCompactedM3,
+  displayObraName,
+  normalizeObraKey,
+} from "@/lib/production-consumption-utils";
 import type { ParsedDailyPart, ParsedFueling, ParsedTrip } from "@/lib/carcara-parser";
 import type {
   DbEquipmentDailyPart,
@@ -280,6 +284,24 @@ function normalizeLinkedFleet(row: {
   return normalizeFleet(row.fleet || row.prefix || row.vehicleId || row.plate || "");
 }
 
+function collectRcoObras(data: CreateAnalysisInput) {
+  const names = new Map<string, string>();
+  const add = (obra: string | null | undefined) => {
+    const label = displayObraName(obra);
+    if (!label || label === "Sem obra") return;
+    const key = normalizeObraKey(label);
+    if (!names.has(key)) names.set(key, label);
+  };
+  data.tripsRows.forEach((row) => add(row.obra));
+  return Array.from(names.values()).sort((left, right) => left.localeCompare(right, "pt-BR"));
+}
+
+function analysisObraLabel(rcoObras: string[], fallback: string) {
+  if (rcoObras.length === 1) return rcoObras[0];
+  if (rcoObras.length > 1) return rcoObras.join(" | ");
+  return fallback.trim();
+}
+
 function makeTripRow(
   row: ParsedTrip,
   analysisId: string,
@@ -374,11 +396,6 @@ function makeDailyPartRow(
   };
 }
 
-function obraMatches(rowObra: string, analysisObra: string) {
-  if (!analysisObra || !rowObra) return true;
-  return rowObra.trim().toLowerCase() === analysisObra.trim().toLowerCase();
-}
-
 function importedDateRange(rows: Array<{ datetime?: string }>) {
   const dates = rows
     .map((row) => normalizeDateKey(row.datetime))
@@ -391,10 +408,13 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
   const batchId = `BATCH-${Date.now()}`;
   const factor = Number.isFinite(data.swellFactor) ? data.swellFactor : 0.3;
   const range = importedDateRange([...data.tripsRows, ...data.fuelingRows]);
+  const rcoObras = collectRcoObras(data);
+  const isMultiObra = rcoObras.length > 1;
+  const visibleObra = analysisObraLabel(rcoObras, data.obra);
   const analysis: DbProductionAnalysis = {
     id,
     name: data.name.trim(),
-    obra: data.obra.trim(),
+    obra: visibleObra,
     material: data.material.trim(),
     tipoAnalise: data.tipoAnalise?.trim() || "operacional",
     dateStart: data.dateStart || range?.start || now.slice(0, 10),
@@ -405,7 +425,14 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     machineMetrics: [],
     charts: {},
     audit: [],
-    context: data.context ?? {},
+    context: {
+      ...(data.context ?? {}),
+      isMultiObra,
+      obras: rcoObras,
+      obraMode: isMultiObra ? "multiobra" : "single",
+      obraLabel: data.obra.trim(),
+      obraSource: "rco",
+    },
     createdAt: now,
     createdBy: data.createdBy ?? "",
   };
@@ -432,9 +459,8 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     if (fueledFleets.size > 0 && !fueledFleets.has(row.fleet)) {
       status = "Sem abastecimento";
       used = false;
-    } else if (!obraMatches(row.obra, analysis.obra)) {
-      status = "Obra divergente";
-      used = true;
+    } else if (!row.obra.trim()) {
+      status = "Sem obra informada";
     } else if (fueledDates.size > 0 && !fueledDates.has(row.date)) {
       status = "OK";
     }
@@ -449,13 +475,15 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
   });
 
   const dailyKeys = new Set(
-    dailyRows.filter((row) => row.usedInAnalysis).map((row) => `${row.fleet}|${row.date}`),
+    dailyRows
+      .filter((row) => row.usedInAnalysis)
+      .map((row) => `${row.fleet}|${row.date}|${normalizeObraKey(row.obra)}`),
   );
   const missingRows: DbEquipmentDailyPart[] = [];
   fuelRows.forEach((row) => {
     const fleet = normalizeFleet(row.prefix || row.vehicleId || row.plate);
     const date = normalizeDateKey(row.datetime);
-    if (!fleet || !date || dailyKeys.has(`${fleet}|${date}`)) return;
+    if (!fleet || !date || dailyKeys.has(`${fleet}|${date}|${normalizeObraKey(row.obra)}`)) return;
     missingRows.push({
       id: analysisScopedId(id, `missing:${fleet}:${date}:${row.id}`),
       analysisId: id,
@@ -486,7 +514,15 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
     machineMetrics: snapshot.machineMetrics as unknown as JsonObject[],
     charts: snapshot.charts as unknown as JsonObject,
     audit: snapshot.audit as unknown as JsonObject[],
-    context: snapshot.context as unknown as JsonObject,
+    context: {
+      ...(snapshot.context as unknown as JsonObject),
+      ...(analysis.context as unknown as JsonObject),
+      obras: rcoObras,
+      isMultiObra,
+      obraMode: isMultiObra ? "multiobra" : "single",
+      obraLabel: data.obra.trim(),
+      obraSource: "rco",
+    },
   };
   const productionRows = tripRows;
   const consumptionRows = fuelRows;

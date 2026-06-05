@@ -223,8 +223,11 @@ function normalizeHeader(s: unknown): string {
   return String(s ?? "")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u00BA\u00B0]/g, "")
+    .replace(/\u00B2/g, "2")
+    .replace(/\u00B3/g, "3")
     .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[^a-zA-Z0-9]+/g, "")
     .trim()
     .toLowerCase();
 }
@@ -262,8 +265,13 @@ const CMB_INDICATORS = [
 
 function scoreHeaders(normRow: string[], indicators: string[]) {
   return indicators.reduce((score, indicator) => {
+    if (!indicator) return score;
     if (normRow.includes(indicator)) return score + 1;
-    if (normRow.some((header) => header.includes(indicator) || indicator.includes(header))) {
+    if (
+      normRow.some(
+        (header) => header && (header.includes(indicator) || indicator.includes(header)),
+      )
+    ) {
       return score + 1;
     }
     return score;
@@ -274,9 +282,26 @@ function findHeaderRow(aoa: unknown[][]): { rowIndex: number; type: CarcaraFileT
   const limit = Math.min(15, aoa.length);
   for (let i = 0; i < limit; i++) {
     const row = aoa[i] || [];
+    const rawHeaderText = row.map(trim).join(" ").toUpperCase();
+    if (rawHeaderText.includes("COLETA") && rawHeaderText.includes("DATA/HORA")) {
+      return { rowIndex: i, type: "trips" };
+    }
+    if (rawHeaderText.includes("ABASTECIMENTO") && rawHeaderText.includes("DATA/HORA")) {
+      return { rowIndex: i, type: "fueling" };
+    }
     const normRow = row.map(normalizeHeader);
-    const hasRco = normRow.includes(RCO_KEY) || RCO_FALLBACKS.some((k) => normRow.includes(k));
-    const hasCmb = normRow.includes(CMB_KEY) || CMB_FALLBACKS.some((k) => normRow.includes(k));
+    const hasRco =
+      normRow.includes("nocoleta") ||
+      normRow.includes("ncoleta") ||
+      normRow.includes("numerocoleta") ||
+      normRow.includes(RCO_KEY) ||
+      RCO_FALLBACKS.some((k) => normRow.includes(k));
+    const hasCmb =
+      normRow.includes("noabastecimento") ||
+      normRow.includes("nabastecimento") ||
+      normRow.includes("numeroabastecimento") ||
+      normRow.includes(CMB_KEY) ||
+      CMB_FALLBACKS.some((k) => normRow.includes(k));
     if (hasRco) return { rowIndex: i, type: "trips" };
     if (hasCmb) return { rowIndex: i, type: "fueling" };
     const rcoScore = scoreHeaders(normRow, RCO_INDICATORS);
@@ -422,8 +447,8 @@ function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPde
     const hasCarcaraHeader =
       colA === "dia" &&
       colB === "data" &&
-      normalized.some((h) => h === "h. inicial" || h === "h inicial") &&
-      normalized.some((h) => h === "h. final" || h === "h final") &&
+      normalized.some((h) => h === "hinicial") &&
+      normalized.some((h) => h === "hfinal") &&
       normalized.includes("total");
     if ((colA === "dia" && colB === "data") || hasCarcaraHeader) {
       headerRow = i;
@@ -437,7 +462,7 @@ function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPde
 
   let hoursCol = -1;
   for (let c = 0; c < groupingRow.length; c++) {
-    if (groupingRow[c] && groupingRow[c].includes("horas trabalhadas")) {
+    if (groupingRow[c] && groupingRow[c].includes("horastrabalhadas")) {
       for (let cc = c; cc < Math.min(c + 5, header.length); cc++) {
         if (header[cc] === "total") {
           hoursCol = cc;
@@ -453,8 +478,8 @@ function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPde
   let horimFinalCol = -1;
   for (let c = 0; c < header.length; c++) {
     const h = header[c];
-    if (h === "h. inicial" || h === "h inicial") horimInicialCol = c;
-    if (h === "h. final" || h === "h final") horimFinalCol = c;
+    if (h === "hinicial") horimInicialCol = c;
+    if (h === "hfinal") horimFinalCol = c;
   }
   if (horimInicialCol < 0) horimInicialCol = 2;
   if (horimFinalCol < 0) horimFinalCol = 3;
@@ -546,7 +571,7 @@ function parseCarcaraPdeSheet(
       fleet: layout.fleet,
       fleetLabel: layout.fleetLabel,
       date: dataConvertida,
-      obra: layout.obraCol >= 0 ? trim(row[layout.obraCol]) : "",
+      obra: pdeObraFromRow(row, layout.obraCol),
       hours: horas,
       horimInicial,
       horimFinal,
@@ -589,6 +614,21 @@ function isSeparatorRow(row: unknown[]) {
 }
 
 // FIX 2: blacklist de abas que não são equipamento individual
+function looksLikeObraValue(value: unknown) {
+  const text = trim(value);
+  return Boolean(text && /[A-Za-z\u00C0-\u024F]/.test(text) && !/^(motorista|observa|obs)$/i.test(text));
+}
+
+function pdeObraFromRow(row: unknown[], obraCol: number) {
+  if (obraCol < 0) return "";
+  for (const col of [obraCol, obraCol - 1, obraCol + 1]) {
+    if (col < 0 || col >= row.length) continue;
+    const value = row[col];
+    if (looksLikeObraValue(value)) return trim(value);
+  }
+  return "";
+}
+
 const PDE_SHEET_BLACKLIST = [
   "dados auxiliares",
   "mes",

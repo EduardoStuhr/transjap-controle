@@ -28,6 +28,11 @@ const aggregateModelByFleet = new Set(
 
 const ownFleetCatalogByFleet = new Set(FLEET_EQUIPMENT_CATALOG.map((item) => normalizeFleet(item.id)));
 
+export function isKnownOwnFleetEquipment(value: string | null | undefined) {
+  const fleet = normalizeFleet(value);
+  return Boolean(fleet && /^[0-9]+$/.test(fleet) && ownFleetCatalogByFleet.has(fleet));
+}
+
 function contextSource(context?: EquipmentContext) {
   return typeof context === "string" ? context : context?.source;
 }

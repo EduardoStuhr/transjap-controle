@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { DbProductionAnalysis } from "@/db/schema";
+import { normalizeObraName, uniqueNormalizedObras } from "@/lib/production-consumption-utils";
 
 interface AnalysesDialogProps {
   isOpen: boolean;
@@ -31,6 +32,22 @@ function formatDate(dateStr: string): string {
 
 function uniqueValues<T>(arr: T[]): T[] {
   return [...new Set(arr.filter(Boolean))].sort() as T[];
+}
+
+function analysisObraLabels(analysis: DbProductionAnalysis): string[] {
+  const context = analysis.context as { obras?: unknown } | null;
+  if (Array.isArray(context?.obras)) {
+    const obras = context.obras.filter(
+      (obra): obra is string => typeof obra === "string" && obra.trim().length > 0,
+    );
+    if (obras.length > 0) return obras;
+  }
+  if (normalizeObraName(analysis.obra) === "MULTIOBRA") return [];
+  return analysis.obra ? [analysis.obra] : [];
+}
+
+function analysisObraDisplay(analysis: DbProductionAnalysis) {
+  return analysisObraLabels(analysis).join(" | ") || analysis.obra || "—";
 }
 
 export function AnalysesDialog({
@@ -52,11 +69,18 @@ export function AnalysesDialog({
     if (isOpen) setDraftIds(selectedIds);
   }, [isOpen, selectedIds]);
 
-  const obras = uniqueValues(analyses.map((a) => a.obra));
+  const obras = uniqueNormalizedObras(analyses.flatMap(analysisObraLabels));
   const materials = uniqueValues(analyses.map((a) => a.material));
 
   const filtered = analyses.filter((analysis) => {
-    if (obra && analysis.obra !== obra) return false;
+    if (
+      obra &&
+      !analysisObraLabels(analysis).some(
+        (value) => normalizeObraName(value) === normalizeObraName(obra),
+      )
+    ) {
+      return false;
+    }
     if (material && analysis.material !== material) return false;
     if (dateFrom && analysis.dateEnd < dateFrom) return false;
     if (dateTo && analysis.dateStart > dateTo) return false;
@@ -183,8 +207,8 @@ export function AnalysesDialog({
                   <span className="min-w-0">
                     <span className="block text-sm font-black">{analysis.name}</span>
                     <span className="mt-1 block text-xs text-on-surface-variant">
-                      {analysis.obra} · {analysis.material} · {formatDate(analysis.dateStart)} a{" "}
-                      {formatDate(analysis.dateEnd)}
+                      {analysisObraDisplay(analysis)} · {analysis.material} ·{" "}
+                      {formatDate(analysis.dateStart)} a {formatDate(analysis.dateEnd)}
                     </span>
                     <span className="mt-1 block text-[10px] uppercase tracking-widest text-on-surface-variant">
                       Criado por: {analysis.createdBy || "Sistema"}
@@ -268,7 +292,8 @@ export function AnalysisHistoryPanel({
         <div>
           <h3 className="text-[10px] font-black uppercase tracking-widest">Histórico Acumulado</h3>
           <p className="mt-1 text-xs text-on-surface-variant">
-            Todas as análises compartilhadas permanecem disponíveis para acumulado, comparação e auditoria.
+            Todas as análises compartilhadas permanecem disponíveis para acumulado, comparação e
+            auditoria.
           </p>
         </div>
         <Button
@@ -285,11 +310,13 @@ export function AnalysisHistoryPanel({
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-border-low text-on-surface-variant">
-              {["", "Análise", "Obra", "Material", "Período", "Criado por", "Criada em"].map((header) => (
-                <th key={header} className="py-2 text-left font-black uppercase tracking-widest">
-                  {header}
-                </th>
-              ))}
+              {["", "Análise", "Obra", "Material", "Período", "Criado por", "Criada em"].map(
+                (header) => (
+                  <th key={header} className="py-2 text-left font-black uppercase tracking-widest">
+                    {header}
+                  </th>
+                ),
+              )}
             </tr>
           </thead>
           <tbody>
@@ -311,7 +338,7 @@ export function AnalysisHistoryPanel({
                     />
                   </td>
                   <td className="py-2 pr-4 font-semibold">{analysis.name}</td>
-                  <td className="py-2 pr-4">{analysis.obra || "—"}</td>
+                  <td className="py-2 pr-4">{analysisObraDisplay(analysis)}</td>
                   <td className="py-2 pr-4">{analysis.material || "—"}</td>
                   <td className="py-2 pr-4">
                     {formatDate(analysis.dateStart)} a {formatDate(analysis.dateEnd)}

@@ -335,16 +335,16 @@ function Manutencao() {
         onRecordClick={(id) => setSelectedRecordId(id)}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4 mb-6 sm:mb-8">
         <Metric label="Total" value={totalMaintenance} tone="primary" />
         <Metric label="Concluídas" value={completedCount} tone="success" />
         <Metric label="Em andamento" value={activeCount} tone="primary" />
         <Metric label="Tempo médio (min)" value={averageStepMinutes} tone="primary" />
-        <div className="border rounded-lg p-4 bg-surface-container border-border-low">
-          <p className="text-[10px] font-black uppercase tracking-widest mb-2 text-on-surface-variant">
+        <div className="border rounded-lg p-3 sm:p-4 bg-surface-container border-border-low">
+          <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest mb-1 sm:mb-2 text-on-surface-variant">
             Custo do mês
           </p>
-          <p className="text-2xl font-black font-mono text-primary">
+          <p className="text-lg sm:text-2xl font-black font-mono text-primary leading-tight">
             {monthlyCost.toLocaleString("pt-BR", {
               style: "currency",
               currency: "BRL",
@@ -353,7 +353,7 @@ function Manutencao() {
         </div>
       </div>
 
-      <div className="bg-surface-container border border-border-low rounded-lg p-5 mb-8 shadow-industrial">
+      <div className="bg-surface-container border border-border-low rounded-lg p-4 sm:p-5 mb-6 sm:mb-8 shadow-industrial">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
           <div>
             <h2 className="text-lg font-black text-on-surface uppercase flex items-center gap-2">
@@ -454,33 +454,37 @@ function Manutencao() {
         />
       </div>
 
-      <div className="mb-8">
-        <h2 className="text-lg font-black text-on-surface uppercase mb-4 flex items-center gap-2">
+      <div className="mb-6 sm:mb-8">
+        <h2 className="text-base sm:text-lg font-black text-on-surface uppercase mb-3 sm:mb-4 flex items-center gap-2">
           <Icon name="category" className="text-primary" />
           Tipos de Manutenção
         </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
           {TYPES.map((type) => (
             <button
               key={type.name}
               type="button"
               onClick={() => setSelectedType(selectedType === type.name ? null : type.name)}
-              className={`p-4 rounded-lg border transition-all ${
+              className={`p-3 sm:p-4 rounded-lg border transition-all ${
                 selectedType === type.name
                   ? `${type.color} border-current shadow-md scale-105`
                   : "bg-surface-container border-border-low hover:border-primary/50"
               }`}
             >
-              <Icon name={type.icon} className="text-3xl mb-2 block" />
-              <h3 className="text-xs font-black uppercase leading-tight">{type.name}</h3>
-              <p className="text-2xl font-black mt-1">{typeCounts[type.name] || 0}</p>
+              <Icon name={type.icon} className="text-2xl sm:text-3xl mb-1 sm:mb-2 block" />
+              <h3 className="text-[11px] sm:text-xs font-black uppercase leading-tight">
+                {type.name}
+              </h3>
+              <p className="text-xl sm:text-2xl font-black mt-0.5 sm:mt-1">
+                {typeCounts[type.name] || 0}
+              </p>
             </button>
           ))}
         </div>
       </div>
 
       <div className="bg-surface-container border border-border-low shadow-industrial rounded-lg overflow-hidden">
-        <div className="p-6 border-b border-border-low bg-surface-low flex justify-between items-center gap-4">
+        <div className="p-3 sm:p-6 border-b border-border-low bg-surface-low flex flex-col gap-3 sm:gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-black text-on-surface uppercase">
               Registro de Intervenções
@@ -520,7 +524,20 @@ function Manutencao() {
 
         {filteredRecords.length > 0 ? (
           viewMode === "list" ? (
-            <div className="overflow-x-auto">
+            <>
+              <div className="grid gap-3 p-3 md:hidden">
+                {filteredRecords.map((record) => (
+                  <MaintenanceCard
+                    key={record.id}
+                    record={record}
+                    onOpen={openRecord}
+                    onRequestDelete={requestDeleteMaintenance}
+                    canDelete={canDeleteMaintenance}
+                    formatEquipment={formatEquipment}
+                  />
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-left">
                 <thead className="bg-surface-lowest border-b border-border-low">
                   <tr>
@@ -556,9 +573,10 @@ function Manutencao() {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 p-3 sm:p-6">
               {filteredRecords.map((record) => (
                 <MaintenanceCard
                   key={record.id}
@@ -654,7 +672,7 @@ function Metric({
 }) {
   return (
     <div
-      className={`border rounded-lg p-4 ${
+      className={`border rounded-lg p-3 sm:p-4 ${
         tone === "success"
           ? "bg-status-success/10 border-status-success/30"
           : tone === "error"
@@ -663,7 +681,7 @@ function Metric({
       }`}
     >
       <p
-        className={`text-[10px] font-black uppercase tracking-widest mb-2 ${
+        className={`text-[9px] sm:text-[10px] font-black uppercase tracking-widest mb-1 sm:mb-2 ${
           tone === "success"
             ? "text-status-success"
             : tone === "error"
@@ -674,7 +692,7 @@ function Metric({
         {label}
       </p>
       <p
-        className={`text-3xl font-black ${
+        className={`text-2xl sm:text-3xl font-black leading-tight ${
           tone === "success"
             ? "text-status-success"
             : tone === "error"
@@ -792,10 +810,10 @@ function MaintenanceCard({
           onOpen(record);
         }
       }}
-      className="border border-border-low rounded-lg p-4 text-left hover:border-primary/50 hover:shadow-md transition-industrial group bg-surface-highest/50"
+      className="border border-border-low rounded-lg p-3 sm:p-4 text-left hover:border-primary/50 hover:shadow-md transition-industrial group bg-surface-highest/50"
     >
-      <div className="flex items-start justify-between mb-3">
-        <Icon name="build" className="text-primary text-2xl" />
+      <div className="flex items-start justify-between gap-2 mb-2 sm:mb-3">
+        <Icon name="build" className="text-primary text-xl sm:text-2xl" />
         <div className="flex flex-col items-end gap-1">
           <StatusBadge status={record.status} />
           {(() => {
@@ -812,11 +830,14 @@ function MaintenanceCard({
           })()}
         </div>
       </div>
-      <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-1">
+      <h3 className="text-sm sm:text-base font-bold text-on-surface group-hover:text-primary transition-colors mb-1 leading-tight break-words">
         {formatEquipment(record.equipment)}
       </h3>
-      <p className="text-xs text-on-surface-variant mb-3">{record.type}</p>
-      <dl className="space-y-2 text-xs text-on-surface-variant mb-3 pb-3 border-b border-border-low">
+      <p className="text-xs text-on-surface-variant mb-1 sm:mb-3">{record.type}</p>
+      <p className="mb-3 text-xs font-bold text-on-surface sm:hidden line-clamp-2">
+        {record.item || "Sem item informado"}
+      </p>
+      <dl className="hidden sm:block space-y-2 text-xs text-on-surface-variant mb-3 pb-3 border-b border-border-low">
         <div className="flex justify-between">
           <dt>Aberto por:</dt>
           <dd className="font-bold text-on-surface">{record.submittedBy || "—"}</dd>
@@ -830,8 +851,8 @@ function MaintenanceCard({
           <dd className="font-bold text-on-surface text-right truncate">{record.item || "—"}</dd>
         </div>
       </dl>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-black text-primary uppercase tracking-widest flex items-center gap-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-low pt-2 sm:border-t-0 sm:pt-0">
+        <div className="text-[11px] sm:text-xs font-black text-primary uppercase tracking-widest flex items-center gap-1">
           <Icon name="arrow_forward" />
           Abrir manutenção
         </div>
@@ -858,7 +879,7 @@ function MaintenanceCard({
 function StatusBadge({ status }: { status: MaintenanceStatus }) {
   return (
     <span
-      className={`px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded border ${
+      className={`px-2 sm:px-3 py-0.5 sm:py-1 text-[9px] sm:text-[10px] font-black uppercase tracking-widest rounded border ${
         status === "Concluída"
           ? "bg-status-success/10 text-status-success border-status-success/30"
           : status === "Em andamento" || status === "Aberta"
@@ -892,7 +913,7 @@ function MaintenanceFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[calc(100vw-0.75rem)] max-w-2xl max-h-[90vh] overflow-y-auto p-3 sm:p-6">
         <DialogHeader>
           <DialogTitle className="text-2xl font-black uppercase">Registrar Manutenção</DialogTitle>
         </DialogHeader>
@@ -1114,18 +1135,19 @@ function MaintenanceDetailsDialog({
 
   return (
     <Dialog open={Boolean(record)} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[calc(100vw-0.75rem)] max-w-2xl max-h-[90vh] overflow-y-auto p-3 sm:p-6">
         {record && (
           <>
-            <DialogHeader>
-              <div className="flex items-start justify-between gap-3">
-                <DialogTitle className="text-2xl font-black uppercase">
+            <DialogHeader className="space-y-2 sm:space-y-3">
+              <div className="flex items-start justify-between gap-2 sm:gap-3">
+                <DialogTitle className="text-lg sm:text-2xl font-black uppercase leading-tight break-words pr-1">
                   {equipmentLabel}
                 </DialogTitle>
-                <div className="flex gap-2 shrink-0">
+                <div className="flex gap-1 sm:gap-2 shrink-0">
                   <Button
                     size="sm"
                     variant="outline"
+                    className="h-9 w-9 p-0"
                     onClick={() => exportMaintenanceAsPdf(record, movements)}
                     aria-label="Exportar PDF"
                   >
@@ -1134,6 +1156,7 @@ function MaintenanceDetailsDialog({
                   <Button
                     size="sm"
                     variant="outline"
+                    className="h-9 w-9 p-0"
                     onClick={() => exportMaintenanceAsCsv(record, movements)}
                     aria-label="Exportar CSV"
                   >
@@ -1143,23 +1166,27 @@ function MaintenanceDetailsDialog({
                     <Button
                       size="sm"
                       variant="outline"
-                      className="border-status-error/40 text-status-error hover:bg-status-error/10"
+                      className="h-9 px-2 sm:px-3 border-status-error/40 text-status-error hover:bg-status-error/10"
                       onClick={() => onRequestDelete(record)}
                       aria-label="Excluir manutenção"
                     >
                       <Icon name="delete" />
-                      Excluir
+                      <span className="hidden sm:inline">Excluir</span>
                     </Button>
                   )}
                 </div>
               </div>
             </DialogHeader>
-            <div className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Info label="OS" value={record.id} />
+            <div className="space-y-4 sm:space-y-5">
+              <div className="grid grid-cols-3 sm:grid-cols-2 gap-2 sm:gap-3">
+                <Info label="OS" value={record.id} valueClassName="break-all" />
                 <Info label="Tipo" value={record.type} />
                 <Info label="Status" value={record.status} />
-                <Info label="Aberto por" value={record.submittedBy || "—"} />
+                <Info
+                  label="Aberto por"
+                  value={record.submittedBy || "—"}
+                  className="col-span-3 sm:col-span-1"
+                />
                 <Info
                   label="Peças do estoque"
                   value={inventoryCost.toLocaleString("pt-BR", {
@@ -1180,19 +1207,22 @@ function MaintenanceDetailsDialog({
                     style: "currency",
                     currency: "BRL",
                   })}
+                  valueClassName="text-primary"
                 />
               </div>
-              <div className="bg-surface-highest border border-border-low rounded-lg p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+              <div className="bg-surface-highest border border-border-low rounded-lg p-3 sm:p-4">
+                <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
                   Item / Componente
                 </p>
-                <p className="text-sm font-bold text-on-surface mt-1">{record.item || "—"}</p>
+                <p className="text-sm font-bold text-on-surface mt-1 break-words">
+                  {record.item || "—"}
+                </p>
               </div>
-              <div className="bg-surface-highest border border-border-low rounded-lg p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+              <div className="bg-surface-highest border border-border-low rounded-lg p-3 sm:p-4">
+                <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
                   Serviço a executar
                 </p>
-                <p className="text-sm text-on-surface mt-1 whitespace-pre-wrap">
+                <p className="text-sm text-on-surface mt-1 whitespace-pre-wrap break-words">
                   {record.serviceDescription || "—"}
                 </p>
               </div>
@@ -1893,13 +1923,27 @@ function TextArea({
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function Info({
+  label,
+  value,
+  className = "",
+  valueClassName = "",
+}: {
+  label: string;
+  value: string;
+  className?: string;
+  valueClassName?: string;
+}) {
   return (
-    <div className="bg-surface-highest border border-border-low rounded-lg p-3">
-      <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+    <div
+      className={`bg-surface-highest border border-border-low rounded-lg p-2.5 sm:p-3 ${className}`}
+    >
+      <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-on-surface-variant leading-tight">
         {label}
       </p>
-      <p className="font-bold text-on-surface mt-1">{value}</p>
+      <p className={`text-sm sm:text-base font-bold text-on-surface mt-1 leading-tight ${valueClassName}`}>
+        {value}
+      </p>
     </div>
   );
 }

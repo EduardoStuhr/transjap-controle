@@ -259,7 +259,7 @@ export function TaskDetailsPanel({
         </div>
       </header>
 
-      <div className="p-5 max-h-[calc(100vh-220px)] overflow-y-auto">
+      <div className="p-4 sm:p-5 max-h-[calc(var(--app-viewport-height)-var(--safe-area-inset-top)-var(--safe-area-inset-bottom)-220px)] overflow-y-auto">
         <Tabs defaultValue="details" className="w-full">
           <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="details" className="flex items-center gap-1.5">

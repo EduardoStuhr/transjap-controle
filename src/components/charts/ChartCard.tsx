@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 type SizeType = "sm" | "md" | "lg" | "full";
 
@@ -64,7 +64,10 @@ export function ChartCard({
   const chartHeight = height ?? SIZE_TO_HEIGHT[size];
 
   return (
-    <div className="rounded-lg border border-border-low bg-surface-container p-6">
+    <div
+      className="app-chart-card rounded-lg border border-border-low bg-surface-container p-6"
+      style={{ "--chart-card-height": `${chartHeight}px` } as CSSProperties}
+    >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-black uppercase tracking-widest">{title}</h3>
@@ -78,7 +81,7 @@ export function ChartCard({
           </span>
         )}
       </div>
-      <div style={{ width: "100%", height: chartHeight }}>
+      <div className="app-chart-plot">
         {hasData ? (
           children
         ) : (

@@ -197,6 +197,37 @@
 
   --radius: 8px;
   --shadow-1: 0 1px 2px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.18);
+
+  --capacitor-status-bar-height: 0px;
+  --capacitor-navigation-bar-height: 0px;
+  --android-safe-area-top: 0px;
+  --android-safe-area-bottom: 0px;
+  --android-safe-area-left: 0px;
+  --android-safe-area-right: 0px;
+  --safe-area-inset-top: max(
+    env(safe-area-inset-top, 0px),
+    var(--android-safe-area-top),
+    var(--capacitor-status-bar-height)
+  );
+  --safe-area-inset-bottom: max(
+    env(safe-area-inset-bottom, 0px),
+    var(--android-safe-area-bottom),
+    var(--capacitor-navigation-bar-height)
+  );
+  --safe-area-inset-left: max(env(safe-area-inset-left, 0px), var(--android-safe-area-left));
+  --safe-area-inset-right: max(env(safe-area-inset-right, 0px), var(--android-safe-area-right));
+  --app-header-height: clamp(3.5rem, 7dvh, 4rem);
+  --app-bottom-nav-height: clamp(4.25rem, 8.5dvh, 4.875rem);
+  --app-viewport-height: 100dvh;
+}
+
+:root.capacitor-android {
+  --capacitor-status-bar-height: 0px;
+  --capacitor-navigation-bar-height: 0px;
+  --android-safe-area-top: 0px;
+  --android-safe-area-bottom: 0px;
+  --android-safe-area-left: 0px;
+  --android-safe-area-right: 0px;
 }
 
 @layer base {
@@ -204,16 +235,70 @@
     border-color: var(--border-low);
   }
   html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+  html {
+    background-color: var(--background);
+    color-scheme: dark;
+  }
   body {
+    margin: 0;
     background-color: var(--background);
     color: var(--foreground);
     font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+    touch-action: manipulation;
+  }
+  select,
+  option,
+  optgroup {
+    background-color: var(--surface-highest);
+    color: var(--on-surface);
+  }
+  select {
+    color-scheme: dark;
+  }
+  option:checked {
+    background-color: var(--primary);
+    color: var(--on-primary);
+  }
+  :root.capacitor-android select,
+  :root.capacitor-android option,
+  :root.capacitor-android optgroup {
+    background-color: #353535;
+    color: #e5e2e1;
+  }
+  img,
+  svg,
+  canvas,
+  video {
+    max-width: 100%;
+  }
+  table {
+    max-width: 100%;
   }
 }
 
 @layer utilities {
+  .min-h-screen {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  .h-screen {
+    height: 100vh;
+    height: 100dvh;
+  }
+  .max-h-screen {
+    max-height: 100vh;
+    max-height: 100dvh;
+  }
   .shadow-industrial {
     box-shadow: var(--shadow-industrial);
   }
@@ -279,6 +364,185 @@
   /* Pulse variations */
   .pulse-gentle {
     animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  .app-layout-shell {
+    height: 100vh;
+    height: 100dvh;
+    height: var(--app-viewport-height);
+    max-height: var(--app-viewport-height);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-content-shell {
+    min-height: 0;
+    height: var(--app-viewport-height);
+    max-height: var(--app-viewport-height);
+    overflow: hidden;
+  }
+
+  .app-status-strip {
+    top: var(--safe-area-inset-top);
+    left: var(--safe-area-inset-left);
+    right: var(--safe-area-inset-right);
+  }
+
+  .app-desktop-sidebar {
+    top: var(--safe-area-inset-top);
+    bottom: var(--safe-area-inset-bottom);
+    height: auto;
+  }
+
+  .app-header {
+    top: 0;
+    left: 0;
+    right: 0;
+    min-height: calc(var(--safe-area-inset-top) + var(--app-header-height));
+    height: auto;
+    padding-top: var(--safe-area-inset-top);
+    padding-left: max(0.75rem, var(--safe-area-inset-left));
+    padding-right: max(0.75rem, var(--safe-area-inset-right));
+    box-sizing: border-box;
+  }
+
+  .app-main {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: var(--app-viewport-height);
+    max-height: var(--app-viewport-height);
+    padding-top: calc(var(--safe-area-inset-top) + var(--app-header-height) + 1rem);
+    padding-bottom: calc(var(--app-bottom-nav-height) + var(--safe-area-inset-bottom) + 32px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
+  }
+
+  .task-list,
+  .agenda-list,
+  .task-list-wrapper {
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .app-mobile-drawer {
+    padding-top: var(--safe-area-inset-top);
+    padding-bottom: var(--safe-area-inset-bottom);
+    padding-left: var(--safe-area-inset-left);
+    padding-right: var(--safe-area-inset-right);
+  }
+
+  .app-mobile-drawer-panel {
+    width: min(18rem, calc(100vw - var(--safe-area-inset-left) - var(--safe-area-inset-right) - 1rem));
+    max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom));
+  }
+
+  .app-bottom-nav {
+    bottom: 0;
+    left: 0;
+    right: 0;
+    min-height: calc(var(--app-bottom-nav-height) + var(--safe-area-inset-bottom));
+    padding-left: max(0.5rem, var(--safe-area-inset-left));
+    padding-right: max(0.5rem, var(--safe-area-inset-right));
+    padding-bottom: calc(0.5rem + var(--safe-area-inset-bottom));
+    box-sizing: border-box;
+  }
+
+  .app-dialog-content {
+    width: min(calc(100vw - var(--safe-area-inset-left) - var(--safe-area-inset-right) - 1rem), 32rem);
+    max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 1rem) !important;
+    overflow-y: auto;
+  }
+
+  .app-sheet-content {
+    max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom)) !important;
+  }
+
+  .app-chart-card {
+    overflow: hidden;
+  }
+
+  .app-chart-plot {
+    width: 100%;
+    height: var(--chart-card-height, 280px);
+    min-height: 220px;
+  }
+
+  @media (min-width: 768px) {
+    .app-header {
+      left: calc(16rem + var(--safe-area-inset-left));
+      right: var(--safe-area-inset-right);
+    }
+
+    .app-main {
+      padding-bottom: calc(var(--safe-area-inset-bottom) + 3rem);
+    }
+  }
+
+  @media (max-width: 767px) {
+    .app-main {
+      width: 100%;
+      max-width: 100%;
+      padding-left: max(0.875rem, var(--safe-area-inset-left));
+      padding-right: max(0.875rem, var(--safe-area-inset-right));
+    }
+
+    .app-main :where(section, article, div, form, header, footer) {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .app-main :where(.grid) > * {
+      min-width: 0;
+    }
+
+    .app-main :where(button, a, input, select, textarea) {
+      max-width: 100%;
+    }
+
+    .app-main h1,
+    .app-main h2,
+    .app-main h3,
+    .app-main p {
+      overflow-wrap: anywhere;
+    }
+
+    .app-bottom-nav {
+      overscroll-behavior-x: contain;
+      scroll-snap-type: x proximity;
+    }
+
+    .app-bottom-nav-item {
+      flex: 0 0 clamp(3.75rem, 19vw, 4.5rem);
+      min-width: 0;
+      min-height: 3rem;
+      justify-content: center;
+      scroll-snap-align: start;
+    }
+
+    .app-bottom-nav-label {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .app-chart-card {
+      padding: 1rem;
+    }
+
+    .app-chart-plot {
+      height: min(var(--chart-card-height, 280px), 58dvh);
+    }
+
+    .recharts-wrapper,
+    .recharts-responsive-container {
+      max-width: 100%;
+    }
   }
 }
 

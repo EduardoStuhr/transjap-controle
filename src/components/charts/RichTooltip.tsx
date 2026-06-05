@@ -33,6 +33,8 @@ export function RichTooltip({
   format = {},
 }: RichTooltipProps) {
   if (!active || !payload?.length) return null;
+  const point = payload[0]?.payload ?? {};
+  const obraLabel = String(point.resolvedObraLabel ?? point.obraLabel ?? point.obra ?? "");
 
   return (
     <div
@@ -112,6 +114,11 @@ export function RichTooltip({
           </div>
         );
       })}
+      {obraLabel && (
+        <div style={{ marginTop: 6, color: "var(--fg-3)", lineHeight: 1.35 }}>
+          <div>Obra: {obraLabel}</div>
+        </div>
+      )}
     </div>
   );
 }

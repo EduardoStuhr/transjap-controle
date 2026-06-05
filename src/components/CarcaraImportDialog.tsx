@@ -12,7 +12,7 @@ import {
 import { Icon } from "@/components/AppLayout";
 import { ManualPdeDialog } from "@/components/ManualPdeDialog";
 import { createAnalysis } from "@/lib/api/production-consumption";
-import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
+import { calculateCompactedM3, normalizeObraKey } from "@/lib/production-consumption-utils";
 import {
   normalizeDateKey,
   normalizeFleet,
@@ -87,6 +87,25 @@ type Preview = {
   obras: string[];
   materials: string[];
 };
+
+type CreateAnalysisResult = {
+  analysisId: string;
+  trips: number;
+  fueling: number;
+  dailyParts: number;
+  compactedM3: number;
+  liters: number;
+  metrics: unknown;
+};
+
+function isCreateAnalysisResult(value: unknown): value is CreateAnalysisResult {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { analysisId?: unknown }).analysisId === "string" &&
+    Boolean((value as { analysisId: string }).analysisId.trim())
+  );
+}
 
 function vehicleKey(row: { prefix: string; vehicleId: string; plate: string }) {
   return row.prefix || row.vehicleId || row.plate || "Sem identificação";
@@ -191,12 +210,17 @@ export function CarcaraImportDialog({
       return null;
     }
     const pdeRowsUsed = rawPde;
-    const pdeKeys = new Set(pdeRowsUsed.map((row) => `${row.fleet}|${row.date}`));
+    const pdeKeys = new Set(
+      pdeRowsUsed.map((row) => `${row.fleet}|${row.date}|${normalizeObraKey(row.obra)}`),
+    );
     const pdePending = rawFueling
       .map((row) => {
         const fleet = normalizeFleet(row.prefix || row.vehicleId || row.plate);
         const date = normalizeDateKey(row.datetime);
-        return pdeKeys.has(`${fleet}|${date}`) ? "" : `${fleet} em ${date}`;
+        const obraKey = normalizeObraKey(row.obra);
+        return pdeKeys.has(`${fleet}|${date}|${obraKey}`)
+          ? ""
+          : `${fleet} em ${date}${row.obra ? ` (${row.obra})` : ""}`;
       })
       .filter(Boolean);
     const allDates = [
@@ -512,8 +536,24 @@ export function CarcaraImportDialog({
     if (!preview || !canGoConfirm) return;
     setCreating(true);
     onCreatingChange?.(true);
+    let createResult: unknown;
     try {
-      const result = await createAnalysis({
+      console.log("[CREATE_ANALYSIS_DEBUG]", {
+        variableName: "createAnalysisPayload",
+        value: {
+          draft,
+          tripsRows: rawTrips.length,
+          fuelingRows: rawFueling.length,
+          dailyPartRows: rawPde.length,
+          preview: {
+            trips: preview.trips.length,
+            fueling: preview.fueling.length,
+            pdeRows: preview.pdeRows.length,
+            pdeRowsUsed: preview.pdeRowsUsed.length,
+          },
+        },
+      });
+      createResult = await createAnalysis({
         data: {
           name: draft.name,
           obra: draft.obra,
@@ -527,12 +567,35 @@ export function CarcaraImportDialog({
           dailyPartRows: rawPde,
         },
       });
+      console.log("[CREATE_ANALYSIS_DEBUG]", {
+        variableName: "createAnalysisResult",
+        value: createResult,
+      });
+      if (!isCreateAnalysisResult(createResult)) {
+        console.error("[CREATE_ANALYSIS_ERROR]", {
+          object: "createAnalysisResult",
+          value: createResult,
+          line: "CarcaraImportDialog.handleCreate -> result.analysisId",
+          reason: "createAnalysis retornou sem analysisId valido",
+        });
+        throw new Error("A criação da análise não retornou um analysisId válido.");
+      }
+      const result = createResult;
+      console.log("[CREATE_ANALYSIS_DEBUG]", {
+        variableName: "result.analysisId",
+        value: result.analysisId,
+      });
       await onSuccess(result.analysisId);
       toast.success("Análise criada", {
         description: `${result.trips} viagens, ${result.fueling} abastecimentos e ${result.dailyParts} apontamentos PDE usados.`,
       });
       onClose();
     } catch (err) {
+      console.error("[CREATE_ANALYSIS_ERROR]", {
+        object: "handleCreate",
+        value: createResult,
+        error: err,
+      });
       toast.error("Erro ao criar análise", {
         description: err instanceof Error ? err.message : "Tente novamente.",
       });
@@ -848,14 +911,11 @@ export function CarcaraImportDialog({
               Volte ao preview e confira as planilhas antes de confirmar.
             </div>
           )}
-
         </div>
 
         <DialogFooter className="sticky bottom-0 z-20 bg-surface border-t border-border-low p-4">
           {busy && (
-            <span className="mr-auto self-center text-xs text-on-surface-variant">
-              {busyLabel}
-            </span>
+            <span className="mr-auto self-center text-xs text-on-surface-variant">{busyLabel}</span>
           )}
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancelar

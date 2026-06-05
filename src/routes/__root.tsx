@@ -15,6 +15,8 @@ import appCss from "../styles.css?url";
 import { LoginPanel } from "@/components/LoginPanel";
 import { Toaster } from "@/components/ui/sonner";
 import { useAuthStore } from "@/lib/auth-store";
+import { configureCapacitorShell, installMobileViewportGuards } from "@/lib/capacitor-shell";
+import { refreshNativePushRegistrationIfActive } from "@/lib/native-push";
 
 function NotFoundComponent() {
   return (
@@ -77,7 +79,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
+      {
+        name: "viewport",
+        content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover",
+      },
       { name: "theme-color", content: "#05070c" },
       { name: "color-scheme", content: "dark" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
@@ -136,11 +141,23 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const user = useAuthStore((state) => state.user);
+
+  useEffect(() => {
+    const cleanupViewport = installMobileViewportGuards();
+    void configureCapacitorShell();
+    return cleanupViewport;
+  }, []);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator) || import.meta.env.DEV) return;
     navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    void refreshNativePushRegistrationIfActive();
+  }, [user]);
 
   return (
     <QueryClientProvider client={queryClient}>

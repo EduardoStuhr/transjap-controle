@@ -5,6 +5,30 @@
 
 export type ChartSize = "small" | "medium" | "large" | "full";
 
+export const INTEGRATION_STATUS_LABELS = {
+  OK: "Dados completos",
+  NO_PRODUCTION: "Diesel ou horas PDE presentes, mas sem produção RCO",
+  NO_DIESEL: "RCO ou PDE presentes, mas sem diesel alocado",
+  BLOCKED_SOURCE: "CMB bruto bloqueado porque já possui allocation oficial",
+  WORKSITE_ABSENT: "Obra não informada",
+  WRONG_WORKSITE: "Obra do CMB/PDE diferente da obra da análise",
+  NO_DATA: "Sem RCO, PDE ou diesel",
+} as const;
+
+export type IntegrationStatus = keyof typeof INTEGRATION_STATUS_LABELS;
+
+export function integrationStatusLabel(status: string | null | undefined) {
+  return status && status in INTEGRATION_STATUS_LABELS
+    ? INTEGRATION_STATUS_LABELS[status as IntegrationStatus]
+    : String(status ?? "");
+}
+
+export function formatIntegrationStatus(status: string | null | undefined) {
+  if (!status) return "";
+  const label = integrationStatusLabel(status);
+  return label && label !== status ? `${status} - ${label}` : status;
+}
+
 export interface ChartDimensions {
   height: number;
   width: "half" | "full";
@@ -26,6 +50,12 @@ export interface DailyMetrics {
   compactedM3: number;
   looseM3: number;
   diesel: number;
+  hours?: number;
+  relatedM3?: number;
+  m3PerHour?: number;
+  litersPerM3?: number;
+  status?: IntegrationStatus;
+  statusReason?: string;
   cost: number;
   trips: number;
   revenue: number;

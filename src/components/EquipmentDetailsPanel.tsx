@@ -64,7 +64,7 @@ export function EquipmentDetailsPanel({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="w-full sm:w-[500px] md:w-[600px] max-h-screen overflow-y-auto"
+        className="app-sheet-content w-full sm:w-[500px] md:w-[600px] overflow-y-auto"
       >
         <SheetHeader className="space-y-3 pb-4 border-b border-border-low">
           <div className="flex items-start justify-between gap-4">
@@ -126,7 +126,7 @@ export function EquipmentDetailsPanel({
               <p className="text-xs font-black text-on-surface-variant uppercase tracking-widest">
                 Informações Principais
               </p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 min-[390px]:grid-cols-2 gap-3">
                 <div className="bg-surface-highest/50 border border-border-low rounded-lg p-4">
                   <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest mb-2">
                     Horímetro
@@ -335,7 +335,7 @@ export function EquipmentDetailsPanel({
           {/* PHOTOS TAB */}
           <TabsContent value="photos" className="space-y-4 mt-6">
             {equipment.photos && equipment.photos.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 min-[390px]:grid-cols-2 gap-3">
                 {equipment.photos.map((photo, index) => (
                   <button
                     key={index}

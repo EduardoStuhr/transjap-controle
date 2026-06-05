@@ -97,6 +97,28 @@ export function multiplePdeMatchesAudit(
   };
 }
 
+export function pdeOutsideRcoAudit(
+  fuel: FuelEntry,
+  pde: PDEEntry,
+  ignoredHours: number,
+  gaps: Array<{ start: number; end: number }>,
+  expectedObra: string,
+): FuelAllocationAuditResult {
+  return {
+    ...auditBase(fuel),
+    type: "PDE_OUTSIDE_RCO",
+    message: `PDE ${pde.id} ignorado porque a obra nao pertence ao RCO da analise.`,
+    unresolvedHours: ignoredHours,
+    metadata: {
+      pdeId: pde.id,
+      pdeDate: pde.date,
+      pdeObra: pde.obra ?? "",
+      expectedObra,
+      gaps,
+    },
+  };
+}
+
 export function noMatchingPdeAudit(
   fuel: FuelEntry,
   hours: number,

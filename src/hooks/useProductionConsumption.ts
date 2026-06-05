@@ -7,12 +7,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DbProductionAnalysis, DbTrip, DbFueling, DbEquipmentDailyPart } from "@/db/schema";
 import { normalizeFleet } from "@/lib/carcara-parser";
 import type { DashboardFilterState } from "@/lib/production-consumption-types";
-import { obraMatches } from "@/lib/production-consumption-utils";
+import {
+  normalizeObraKey,
+  normalizeObraName,
+  uniqueNormalizedObras,
+} from "@/lib/production-consumption-utils";
 import {
   equipmentMatches,
   normalizeEquipmentKey,
   type EquipmentContext,
 } from "@/lib/equipment-normalization";
+
+type ObraScopedRow = {
+  obra?: string | null;
+  resolvedObraKey?: string | null;
+  resolvedObraLabel?: string | null;
+  obraStatus?: "ok" | "inferred" | "absent" | string | null;
+};
+
+const OBRA_NAO_INFORMADA_KEY = "OBRA_NAO_INFORMADA";
 
 const DEFAULT_FILTERS: DashboardFilterState = {
   dateFrom: "",
@@ -47,6 +60,23 @@ function normalizeIds(ids: string[]) {
   return Array.from(new Set(ids.filter(Boolean)));
 }
 
+function analysisObraLabels(analysis: DbProductionAnalysis): string[] {
+  const context = analysis.context as { obras?: unknown } | null;
+  if (Array.isArray(context?.obras)) {
+    const obras = context.obras.filter(
+      (obra): obra is string => typeof obra === "string" && obra.trim().length > 0,
+    );
+    if (obras.length > 0) return obras;
+  }
+  if (normalizeObraName(analysis.obra) === "MULTIOBRA") return [];
+  return analysis.obra ? [analysis.obra] : [];
+}
+
+function analysisObraDisplay(analysis: DbProductionAnalysis | null) {
+  if (!analysis) return "?";
+  return uniqueNormalizedObras(analysisObraLabels(analysis)).join(" | ") || analysis.obra || "?";
+}
+
 function normalizedFleetNumber(value: string | null | undefined) {
   const fleet = normalizeFleet(value);
   return /^[0-9]+$/.test(fleet) ? fleet : "";
@@ -62,9 +92,9 @@ function hasRealPdeEvidence(
   if (/\bC\s*B\b|\bCB\b/.test(text)) return false;
   return Boolean(
     part.sourceSheet?.trim() ||
-      (part.hours || 0) > 0 ||
-      (part.horimInicial || 0) > 0 ||
-      (part.horimFinal || 0) > 0,
+    (part.hours || 0) > 0 ||
+    (part.horimInicial || 0) > 0 ||
+    (part.horimFinal || 0) > 0,
   );
 }
 
@@ -112,9 +142,7 @@ function pdeRuleEquipmentMatches(key: string, selected: string) {
  * Persiste em localStorage automaticamente
  */
 export function useDashboardFilters(storageKey = "dashboard_filters") {
-  const [filters, setFilters] = useState<DashboardFilterState>(() =>
-    readStoredFilters(storageKey),
-  );
+  const [filters, setFilters] = useState<DashboardFilterState>(() => readStoredFilters(storageKey));
 
   const updateFilters = useCallback(
     (updates: Partial<DashboardFilterState>) => {
@@ -160,8 +188,7 @@ export function useAnalysisSelection(analyses: DbProductionAnalysis[]) {
       const kept = current.filter((id) => availableIds.has(id));
       if (isInitialSelection) return allIds;
       const allPreviouslySelected =
-        previousAvailableIds.length > 0 &&
-        previousAvailableIds.every((id) => current.includes(id));
+        previousAvailableIds.length > 0 && previousAvailableIds.every((id) => current.includes(id));
       if (allPreviouslySelected) return allIds;
       if (kept.length > 0) return kept.length === current.length ? current : kept;
       return allIds;
@@ -171,15 +198,12 @@ export function useAnalysisSelection(analyses: DbProductionAnalysis[]) {
     if (allIds.length > 0) hasLoadedAnalysesRef.current = true;
   }, [analyses]);
 
-  const updateSelectedIds = useCallback(
-    (ids: string[] | ((current: string[]) => string[])) => {
-      setSelectedIds((current) => {
-        const next = typeof ids === "function" ? ids(current) : ids;
-        return normalizeIds(next);
-      });
-    },
-    [],
-  );
+  const updateSelectedIds = useCallback((ids: string[] | ((current: string[]) => string[])) => {
+    setSelectedIds((current) => {
+      const next = typeof ids === "function" ? ids(current) : ids;
+      return normalizeIds(next);
+    });
+  }, []);
 
   const selectedAnalyses = useMemo(
     () => analyses.filter((a) => selectedIds.includes(a.id)),
@@ -193,7 +217,7 @@ export function useAnalysisSelection(analyses: DbProductionAnalysis[]) {
   const label = useMemo(() => {
     if (selectedIds.length === 0) return "Selecione uma análise";
     if (isMultipleSelected) return `${selectedIds.length} análises acumuladas`;
-    return `${primaryAnalysis?.name ?? "?"} · ${primaryAnalysis?.obra ?? "?"}`;
+    return `${primaryAnalysis?.name ?? "?"} · ${analysisObraDisplay(primaryAnalysis)}`;
   }, [selectedIds, isMultipleSelected, primaryAnalysis]);
 
   return {
@@ -218,6 +242,22 @@ export function useFilteredData(
   const dateKey = (value: string) => (value ? value.slice(0, 10) : "");
   const equipmentKey = (row: { prefix?: string; vehicleId?: string; plate?: string }) =>
     row.prefix || row.vehicleId || row.plate || "";
+  const selectedObraKey = filters.obra === "all" ? "" : normalizeObraKey(filters.obra);
+  const filterObraKey =
+    selectedObraKey && normalizeObraKey("Obra não informada") === selectedObraKey
+      ? OBRA_NAO_INFORMADA_KEY
+      : selectedObraKey;
+  const rowObraKey = useCallback((row: ObraScopedRow | string | null | undefined) => {
+    if (typeof row === "string" || row == null) return normalizeObraKey(row);
+    if (row.resolvedObraKey) return row.resolvedObraKey;
+    if (row.obraStatus === "absent") return OBRA_NAO_INFORMADA_KEY;
+    return normalizeObraKey(row.resolvedObraLabel || row.obra);
+  }, []);
+  const matchesSelectedObra = useCallback(
+    (row: ObraScopedRow | string | null | undefined) =>
+      !filterObraKey || rowObraKey(row) === filterObraKey,
+    [filterObraKey, rowObraKey],
+  );
   const pdeFleetKeys = useMemo(() => buildPdeFleetKeys(dailyParts), [dailyParts]);
   const fuelingContext = useCallback(
     (
@@ -246,7 +286,7 @@ export function useFilteredData(
     return trips.filter((row) => {
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
-      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
+      if (!matchesSelectedObra(row)) return false;
       if (filters.material !== "all" && row.material !== filters.material) return false;
       if (
         filters.aggregate !== "all" &&
@@ -257,36 +297,30 @@ export function useFilteredData(
       if (filters.analysisType === "production-only" && row.cubicMLoose <= 0) return false;
       return true;
     });
-  }, [trips, filters]);
+  }, [trips, filters, matchesSelectedObra]);
 
   const filteredFueling = useMemo(() => {
     return fueling.filter((row) => {
       if (filters.dateFrom && dateKey(row.datetime) < filters.dateFrom) return false;
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
-      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
+      if (!matchesSelectedObra(row)) return false;
       const key = equipmentKeyByPdeRule(equipmentKey(row), pdeFleetKeys, fuelingContext(row));
-      if (
-        filters.equipment !== "all" &&
-        !pdeRuleEquipmentMatches(key, filters.equipment)
-      ) {
+      if (filters.equipment !== "all" && !pdeRuleEquipmentMatches(key, filters.equipment)) {
         return false;
       }
-      if (
-        filters.aggregate !== "all" &&
-        !pdeRuleEquipmentMatches(key, filters.aggregate)
-      ) {
+      if (filters.aggregate !== "all" && !pdeRuleEquipmentMatches(key, filters.aggregate)) {
         return false;
       }
       if (filters.analysisType === "consumption-only" && row.liters <= 0) return false;
       return true;
     });
-  }, [fueling, filters, fuelingContext, pdeFleetKeys]);
+  }, [fueling, filters, fuelingContext, pdeFleetKeys, matchesSelectedObra]);
 
   const filteredDailyParts = useMemo(() => {
     return dailyParts.filter((row) => {
       if (filters.dateFrom && row.date < filters.dateFrom) return false;
       if (filters.dateTo && row.date > filters.dateTo) return false;
-      if (filters.obra !== "all" && !obraMatches(row.obra, filters.obra)) return false;
+      if (!matchesSelectedObra(row)) return false;
       if (
         filters.equipment !== "all" &&
         !equipmentMatches(row.fleet, filters.equipment, "dailyPart") &&
@@ -296,7 +330,7 @@ export function useFilteredData(
       }
       return true;
     });
-  }, [dailyParts, filters]);
+  }, [dailyParts, filters, matchesSelectedObra]);
 
   return {
     filteredTrips,
@@ -317,6 +351,7 @@ export function useDashboardTabs(storageKey = "dashboard_activeTab") {
     { id: "compactacao", label: "Compactação" },
     { id: "overview", label: "Visão Geral" },
     { id: "dieselM3", label: "Diesel × m³" },
+    { id: "limpeza", label: "Limpeza" },
     { id: "production", label: "Produção" },
     { id: "consumption", label: "Consumo Diesel" },
     { id: "trucks", label: "Agregados" },

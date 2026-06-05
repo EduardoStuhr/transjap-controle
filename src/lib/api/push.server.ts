@@ -12,6 +12,11 @@ export type BrowserPushSubscription = {
   };
 };
 
+export type NativePushSubscription = {
+  token: string;
+  platform: "android" | "ios";
+};
+
 type StoredPushSubscription = BrowserPushSubscription & {
   id: string;
   userId: string;
@@ -36,9 +41,18 @@ type PushConfiguration = {
   subject: string;
 };
 
+type FcmConfiguration = {
+  projectId: string;
+  clientEmail: string;
+  privateKey: string;
+};
+
 const APP_ORIGIN = "https://sistema-transjap.com.br";
+const FCM_ENDPOINT_PREFIX = "fcm:";
+const FCM_CHANNEL_ID = "transjap_tasks";
 const localSubscriptions = new Map<string, StoredPushSubscription>();
 let subscriptionTablePromise: Promise<void> | null = null;
+let fcmAccessTokenCache: { token: string; expiresAt: number } | null = null;
 
 function nowIso() {
   return new Date().toISOString();
@@ -54,6 +68,35 @@ function pushConfiguration(): PushConfiguration | null {
     privateKey,
     subject: getOptionalEnvString("VAPID_SUBJECT") || "mailto:suporte@sistema-transjap.com.br",
   };
+}
+
+function fcmConfiguration(): FcmConfiguration | null {
+  const rawServiceAccount = getOptionalEnvString("FCM_SERVICE_ACCOUNT_JSON");
+  if (rawServiceAccount) {
+    try {
+      const parsed = JSON.parse(rawServiceAccount) as Partial<{
+        project_id: string;
+        client_email: string;
+        private_key: string;
+      }>;
+      if (parsed.project_id && parsed.client_email && parsed.private_key) {
+        return {
+          projectId: parsed.project_id,
+          clientEmail: parsed.client_email,
+          privateKey: parsed.private_key,
+        };
+      }
+    } catch {
+      console.warn("[push] FCM_SERVICE_ACCOUNT_JSON invalido.");
+    }
+  }
+
+  const projectId = getOptionalEnvString("FCM_PROJECT_ID");
+  const clientEmail = getOptionalEnvString("FCM_CLIENT_EMAIL");
+  const privateKey = getOptionalEnvString("FCM_PRIVATE_KEY");
+  if (!projectId || !clientEmail || !privateKey) return null;
+
+  return { projectId, clientEmail, privateKey };
 }
 
 export function getPushPublicConfiguration() {
@@ -100,6 +143,34 @@ function validateSubscription(subscription: BrowserPushSubscription) {
   if (!subscription.keys.p256dh || !subscription.keys.auth) {
     throw new Error("Chaves da assinatura de notificação ausentes.");
   }
+}
+
+function validateNativeSubscription(subscription: NativePushSubscription) {
+  if (subscription.platform !== "android" && subscription.platform !== "ios") {
+    throw new Error("Plataforma de notificacao nativa invalida.");
+  }
+  if (!subscription.token || subscription.token.length < 16) {
+    throw new Error("Token de notificacao nativa invalido.");
+  }
+}
+
+function nativePushEndpoint(subscription: NativePushSubscription) {
+  return `${FCM_ENDPOINT_PREFIX}${subscription.platform}:${encodeURIComponent(subscription.token)}`;
+}
+
+function parseNativePushEndpoint(endpoint: string): NativePushSubscription | null {
+  if (!endpoint.startsWith(FCM_ENDPOINT_PREFIX)) return null;
+  const withoutPrefix = endpoint.slice(FCM_ENDPOINT_PREFIX.length);
+  const separator = withoutPrefix.indexOf(":");
+  if (separator <= 0) return null;
+
+  const platform = withoutPrefix.slice(0, separator);
+  if (platform !== "android" && platform !== "ios") return null;
+
+  return {
+    platform,
+    token: decodeURIComponent(withoutPrefix.slice(separator + 1)),
+  };
 }
 
 export async function saveUserPushSubscription(
@@ -154,6 +225,61 @@ export async function saveUserPushSubscription(
   return { ok: true };
 }
 
+export async function saveUserNativePushSubscription(
+  user: AuthUser,
+  subscription: NativePushSubscription,
+) {
+  validateNativeSubscription(subscription);
+  const endpoint = nativePushEndpoint(subscription);
+  const timestamp = nowIso();
+  const d1 = getOptionalD1();
+  const stored: StoredPushSubscription = {
+    endpoint,
+    expirationTime: null,
+    keys: { p256dh: "native", auth: subscription.platform },
+    id: crypto.randomUUID(),
+    userId: user.id,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  if (!d1) {
+    const existing = localSubscriptions.get(endpoint);
+    localSubscriptions.set(endpoint, {
+      ...stored,
+      id: existing?.id || stored.id,
+      createdAt: existing?.createdAt || stored.createdAt,
+    });
+    return { ok: true };
+  }
+
+  await ensurePushSubscriptionsTable(d1);
+  await d1
+    .prepare(
+      `INSERT INTO push_subscriptions (
+        id, user_id, endpoint, p256dh, auth, expiration_time, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET
+        user_id = excluded.user_id,
+        p256dh = excluded.p256dh,
+        auth = excluded.auth,
+        expiration_time = excluded.expiration_time,
+        updated_at = excluded.updated_at`,
+    )
+    .bind(
+      stored.id,
+      stored.userId,
+      stored.endpoint,
+      stored.keys.p256dh,
+      stored.keys.auth,
+      stored.expirationTime,
+      stored.createdAt,
+      stored.updatedAt,
+    )
+    .run();
+  return { ok: true };
+}
+
 export async function removeUserPushSubscription(user: AuthUser, endpoint: string) {
   const d1 = getOptionalD1();
   if (!d1) {
@@ -168,6 +294,14 @@ export async function removeUserPushSubscription(user: AuthUser, endpoint: strin
     .bind(endpoint, user.id)
     .run();
   return { ok: true };
+}
+
+export async function removeUserNativePushSubscription(
+  user: AuthUser,
+  subscription: NativePushSubscription,
+) {
+  validateNativeSubscription(subscription);
+  return removeUserPushSubscription(user, nativePushEndpoint(subscription));
 }
 
 function rowToSubscription(row: SubscriptionRow): StoredPushSubscription {
@@ -372,9 +506,157 @@ async function sendPushNotification(
   });
 }
 
+function normalizePrivateKey(privateKey: string) {
+  return privateKey.replace(/\\n/g, "\n");
+}
+
+function pemToBytes(pem: string) {
+  const base64 = normalizePrivateKey(pem)
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s/g, "");
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function signJwtRs256(payload: Record<string, unknown>, config: FcmConfiguration) {
+  const textEncoder = new TextEncoder();
+  const header = encodeBase64Url(textEncoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+  const claims = encodeBase64Url(textEncoder.encode(JSON.stringify(payload)));
+  const signingInput = `${header}.${claims}`;
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    ownedBytes(pemToBytes(config.privateKey)),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = new Uint8Array(
+    await crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5",
+      key,
+      textEncoder.encode(signingInput),
+    ),
+  );
+  return `${signingInput}.${encodeBase64Url(signature)}`;
+}
+
+async function getFcmAccessToken(config: FcmConfiguration) {
+  if (fcmAccessTokenCache && fcmAccessTokenCache.expiresAt > Date.now() + 60_000) {
+    return fcmAccessTokenCache.token;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const assertion = await signJwtRs256(
+    {
+      iss: config.clientEmail,
+      scope: "https://www.googleapis.com/auth/firebase.messaging",
+      aud: "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
+    },
+    config,
+  );
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`FCM OAuth falhou: HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as { access_token?: string; expires_in?: number };
+  if (!data.access_token) throw new Error("FCM OAuth nao retornou access_token.");
+
+  fcmAccessTokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + Math.max(60, data.expires_in ?? 3600) * 1000,
+  };
+  return fcmAccessTokenCache.token;
+}
+
+function fcmData(payload: Record<string, unknown>) {
+  const data: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "title" || key === "body") continue;
+    if (value === null || value === undefined) continue;
+    data[key] = String(value);
+  }
+  return data;
+}
+
+async function sendFcmNotification(
+  subscription: NativePushSubscription,
+  payload: Record<string, unknown>,
+  config: FcmConfiguration,
+) {
+  const accessToken = await getFcmAccessToken(config);
+  return fetch(`https://fcm.googleapis.com/v1/projects/${config.projectId}/messages:send`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message: {
+        token: subscription.token,
+        notification: {
+          title: String(payload.title || "Transjap Sistema"),
+          body: String(payload.body || "Voce recebeu uma atualizacao."),
+        },
+        data: fcmData(payload),
+        android: {
+          priority: "HIGH",
+          notification: {
+            channel_id: FCM_CHANNEL_ID,
+            tag: String(payload.tag || "transjap-task"),
+            click_action: "OPEN_AGENDA",
+          },
+        },
+      },
+    }),
+  });
+}
+
+async function sendStoredPushNotification(
+  subscription: StoredPushSubscription,
+  payload: Record<string, unknown>,
+  webConfig: PushConfiguration | null,
+  fcmConfig: FcmConfiguration | null,
+) {
+  const nativeSubscription = parseNativePushEndpoint(subscription.endpoint);
+  if (nativeSubscription) {
+    if (!fcmConfig) return null;
+    return sendFcmNotification(nativeSubscription, payload, fcmConfig);
+  }
+
+  if (!webConfig) return null;
+  return sendPushNotification(subscription, payload, webConfig);
+}
+
+async function removePushIfExpired(subscription: StoredPushSubscription, response: Response) {
+  if (response.status === 404 || response.status === 410) {
+    await removeExpiredSubscription(subscription);
+    return;
+  }
+
+  if (parseNativePushEndpoint(subscription.endpoint) && response.status === 400) {
+    const body = await response.clone().text().catch(() => "");
+    if (/UNREGISTERED|INVALID_ARGUMENT/i.test(body)) {
+      await removeExpiredSubscription(subscription);
+    }
+  }
+}
+
 export async function sendNewTaskPushNotifications(task: TaskRecord) {
-  const config = pushConfiguration();
-  if (!config) return;
+  const webConfig = pushConfiguration();
+  const fcmConfig = fcmConfiguration();
+  if (!webConfig && !fcmConfig) return;
 
   const recipientIds = Array.from(
     new Set([...task.responsibleIds, ...resolveResponsibleIds(task.assignedTo)]),
@@ -391,10 +673,15 @@ export async function sendNewTaskPushNotifications(task: TaskRecord) {
   await Promise.all(
     subscriptions.map(async (subscription) => {
       try {
-        const response = await sendPushNotification(subscription, payload, config);
-        if (response.status === 404 || response.status === 410) {
-          await removeExpiredSubscription(subscription);
-        } else if (!response.ok) {
+        const response = await sendStoredPushNotification(
+          subscription,
+          payload,
+          webConfig,
+          fcmConfig,
+        );
+        if (!response) return;
+        await removePushIfExpired(subscription, response);
+        if (!response.ok) {
           console.warn(`[push] Falha ao notificar subscription: HTTP ${response.status}`);
         }
       } catch (error) {
@@ -409,8 +696,9 @@ export async function sendTaskActivityPushNotifications(
   actor: AuthUser,
   action: "respondeu" | "comentou",
 ) {
-  const config = pushConfiguration();
-  if (!config) return;
+  const webConfig = pushConfiguration();
+  const fcmConfig = fcmConfiguration();
+  if (!webConfig && !fcmConfig) return;
 
   const creatorId = task.createdById || findUserByName(task.createdBy)?.id || "";
   const participantIds = new Set([
@@ -433,10 +721,15 @@ export async function sendTaskActivityPushNotifications(
   await Promise.all(
     subscriptions.map(async (subscription) => {
       try {
-        const response = await sendPushNotification(subscription, payload, config);
-        if (response.status === 404 || response.status === 410) {
-          await removeExpiredSubscription(subscription);
-        } else if (!response.ok) {
+        const response = await sendStoredPushNotification(
+          subscription,
+          payload,
+          webConfig,
+          fcmConfig,
+        );
+        if (!response) return;
+        await removePushIfExpired(subscription, response);
+        if (!response.ok) {
           console.warn(`[push] Falha ao notificar subscription: HTTP ${response.status}`);
         }
       } catch (error) {

@@ -9,6 +9,7 @@ import {
   noMatchingPdeAudit,
   noPreviousHourmeterAudit,
   pdePartiallyCoveredAudit,
+  pdeOutsideRcoAudit,
   pdeUsingWorkedHoursFallbackAudit,
   pdeWithoutHourmeterAudit,
   unallocatedHoursAudit,
@@ -18,9 +19,13 @@ import type { FuelAllocationCalculation, FuelAllocationResult, FuelEntry, PDEEnt
 const HOURS_EPSILON = 0.000001;
 
 type OpenSlice = { start: number; end: number };
+type IgnoredPDEEntry = PDEEntry & { expectedObra?: string };
 type FuelAllocationState = {
   fallbackHoursUsed?: Map<string, number>;
   usedPdeHourmeterSlices?: Map<string, OpenSlice[]>;
+};
+type FuelAllocationOptions = {
+  ignoredPdes?: IgnoredPDEEntry[];
 };
 
 function validHourmeter(value: number | undefined): value is number {
@@ -124,6 +129,33 @@ function markPdeSliceUsed(
   usedPdeHourmeterSlices.set(pdeId, mergeSlices([...current, { start, end }]));
 }
 
+function removeIgnoredPdeSlices(
+  fuel: FuelEntry,
+  ignoredPdes: IgnoredPDEEntry[],
+  openSlices: OpenSlice[],
+  audits: FuelAllocationCalculation["audits"],
+) {
+  let nextOpenSlices = openSlices;
+  for (const pde of ignoredPdes) {
+    if (!validHourmeter(pde.startHourmeter) || !validHourmeter(pde.endHourmeter)) continue;
+    const ignoredGaps: OpenSlice[] = [];
+    for (const slice of [...nextOpenSlices]) {
+      const start = Math.max(slice.start, pde.startHourmeter);
+      const end = Math.min(slice.end, pde.endHourmeter);
+      if (end - start <= HOURS_EPSILON) continue;
+      ignoredGaps.push({ start, end });
+      nextOpenSlices = removeSlice(nextOpenSlices, start, end);
+    }
+    const ignoredHours = totalOpenHours(ignoredGaps);
+    if (ignoredHours > HOURS_EPSILON) {
+      audits.push(
+        pdeOutsideRcoAudit(fuel, pde, ignoredHours, ignoredGaps, pde.expectedObra ?? ""),
+      );
+    }
+  }
+  return nextOpenSlices;
+}
+
 export function resolvePreviousHourmeter(fuel: FuelEntry, previousFuel?: FuelEntry) {
   if (validHourmeter(fuel.previousHourmeter)) return fuel.previousHourmeter;
   if (previousFuel && validHourmeter(previousFuel.currentHourmeter)) {
@@ -137,6 +169,7 @@ export function calculateFuelAllocation(
   pdes: PDEEntry[],
   previousFuel?: FuelEntry,
   state: FuelAllocationState = {},
+  options: FuelAllocationOptions = {},
 ): FuelAllocationCalculation {
   const fallbackHoursUsed = state.fallbackHoursUsed ?? new Map<string, number>();
   const usedPdeHourmeterSlices = state.usedPdeHourmeterSlices ?? new Map<string, OpenSlice[]>();
@@ -196,6 +229,8 @@ export function calculateFuelAllocation(
       audits.push(pdePartiallyCoveredAudit(fuel, pde, hours, intervalHours));
     }
   }
+
+  openSlices = removeIgnoredPdeSlices(fuel, options.ignoredPdes ?? [], openSlices, audits);
 
   const hasHourmeterAllocations = allocations.length > 0;
   if (!hasHourmeterAllocations) {

@@ -218,7 +218,7 @@ function Equipamentos() {
       </div>
 
       {/* Status Summary */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
             <Icon name="check_circle" className="text-status-success text-2xl" />
@@ -288,7 +288,7 @@ function Equipamentos() {
               {e.model}
             </h3>
 
-            <dl className="grid grid-cols-2 gap-4 text-xs mb-4 pb-4 border-b border-border-low">
+            <dl className="grid grid-cols-1 min-[390px]:grid-cols-2 gap-4 text-xs mb-4 pb-4 border-b border-border-low">
               <div>
                 <dt className="uppercase tracking-wider text-on-surface-variant font-black mb-1">
                   <Icon name="schedule" className="inline text-base mr-1" />

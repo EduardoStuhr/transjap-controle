@@ -40,7 +40,6 @@ const LazyTaskDetailsModal = lazy(() =>
 export const Route = createFileRoute("/agenda")({ component: Agenda });
 
 type TaskFilter = TaskStatus | "Todas";
-type ViewMode = "grid" | "list";
 
 const FILTERS: TaskFilter[] = [
   "Todas",
@@ -63,6 +62,77 @@ function getDebugStringList(task: TaskRecord, fields: readonly string[]): string
   });
 }
 
+function describeDebugElement(element: HTMLElement) {
+  const styles = window.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  const name =
+    element.dataset.debugName ||
+    element.getAttribute("aria-label") ||
+    element.tagName.toLowerCase();
+
+  return {
+    element: name,
+    tag: element.tagName.toLowerCase(),
+    className: element.className,
+    display: styles.display,
+    flexWrap: styles.flexWrap,
+    overflowY: styles.overflowY,
+    width: styles.width,
+    maxWidth: styles.maxWidth,
+    rectWidth: Math.round(rect.width),
+    rectHeight: Math.round(rect.height),
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  };
+}
+
+function logAgendaTaskLayout() {
+  if (typeof window === "undefined") return;
+
+  window.requestAnimationFrame(() => {
+    const overflowContainers = Array.from(document.querySelectorAll<HTMLElement>("body *"))
+      .filter((element) => {
+        const overflowY = window.getComputedStyle(element).overflowY;
+        return overflowY === "auto" || overflowY === "scroll";
+      })
+      .map(describeDebugElement);
+
+    const taskContainers = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        [
+          ".app-layout-shell",
+          ".app-content-shell",
+          ".app-main",
+          ".app-bottom-nav",
+          "[data-agenda-route-header]",
+          "[data-agenda-filters]",
+          "[data-agenda-view-controls]",
+          "[data-task-list-wrapper]",
+          "[data-task-list-item]",
+          "[data-task-header-line]",
+          "[data-task-badges]",
+          "[data-task-unread-badges]",
+        ].join(", "),
+      ),
+    )
+      .slice(0, 16)
+      .map(describeDebugElement);
+
+    console.groupCollapsed("[AgendaLayoutDebug] task screen");
+    console.table(overflowContainers);
+    console.table(taskContainers);
+    console.info("[AgendaLayoutDebug] task labels", {
+      commonContainer: "TaskListItem",
+      commonSelector: "[data-task-list-item]",
+      visibilityPriorityStatusContainer: "TaskBadges",
+      visibilityPriorityStatusSelector: "[data-task-badges]",
+      unreadContainer: "UnreadActivityBadges",
+      unreadSelector: "[data-task-unread-badges]",
+    });
+    console.groupEnd();
+  });
+}
+
 function Agenda() {
   const user = useAuthStore((snapshot) => snapshot.user);
   const taskActions = useTaskActions();
@@ -74,7 +144,6 @@ function Agenda() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [filter, setFilter] = useState<TaskFilter>("Todas");
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [prefillEquipment, setPrefillEquipment] = useState<string | null>(null);
   const formatEquipment = useCallback(
     (value: string | undefined) => formatEquipmentReference(value, equipments),
@@ -146,6 +215,17 @@ function Agenda() {
     );
   }, [filteredTasks, user]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    logAgendaTaskLayout();
+    window.addEventListener("resize", logAgendaTaskLayout);
+    window.visualViewport?.addEventListener("resize", logAgendaTaskLayout);
+    return () => {
+      window.removeEventListener("resize", logAgendaTaskLayout);
+      window.visualViewport?.removeEventListener("resize", logAgendaTaskLayout);
+    };
+  }, [filter, filteredTasks.length]);
+
   const editingTask = useMemo(
     () => visibleTasks.find((task) => task.id === editingTaskId) || null,
     [editingTaskId, visibleTasks],
@@ -154,6 +234,7 @@ function Agenda() {
   const handleCreateTask = useCallback(
     async (data: TaskModalData) => {
       await taskActions.createTask(data);
+      setFilter("Todas");
       setShowCreateModal(false);
     },
     [taskActions],
@@ -240,7 +321,11 @@ function Agenda() {
 
   return (
     <AppLayout>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+      <div
+        data-debug-name="Agenda route header"
+        data-agenda-route-header
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8"
+      >
         <div>
           <h1 className="text-2xl font-black tracking-tight text-on-surface uppercase">
             Agenda Operacional
@@ -277,7 +362,11 @@ function Agenda() {
         </section>
       )}
 
-      <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+      <div
+        data-debug-name="Agenda filters"
+        data-agenda-filters
+        className="flex gap-2 mb-6 overflow-x-auto pb-2"
+      >
         {FILTERS.map((status) => (
           <button
             key={status}
@@ -294,46 +383,33 @@ function Agenda() {
         ))}
       </div>
 
-      <div className="flex gap-2 mb-6">
+      <div
+        data-debug-name="Agenda view controls"
+        data-agenda-view-controls
+        className="flex gap-2 mb-6"
+      >
         <button
           type="button"
-          onClick={() => setViewMode("list")}
-          className={`p-2 rounded transition-colors ${viewMode === "list" ? "bg-primary text-on-primary" : "text-on-surface-variant hover:bg-surface-container"}`}
-          aria-label="Visualizar como lista"
-        >
-          <Icon name="view_list" />
-        </button>
-        <button
-          type="button"
-          onClick={() => setViewMode("grid")}
-          className={`p-2 rounded transition-colors ${viewMode === "grid" ? "bg-primary text-on-primary" : "text-on-surface-variant hover:bg-surface-container"}`}
-          aria-label="Visualizar como grade"
+          className="p-2 rounded bg-primary text-on-primary transition-colors"
+          aria-label="Visualização em grade"
+          aria-pressed="true"
         >
           <Icon name="view_agenda" />
         </button>
       </div>
 
       {filteredTasks.length > 0 ? (
-        viewMode === "list" ? (
-          <VirtualTaskList
-            tasks={filteredTasks}
-            onOpen={openTaskDetails}
-            formatEquipment={formatEquipment}
-            user={user}
-          />
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredTasks.map((task) => (
-              <TaskGridCard
-                key={task.id}
-                task={task}
-                onOpen={openTaskDetails}
-                formatEquipment={formatEquipment}
-                user={user}
-              />
-            ))}
-          </div>
-        )
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredTasks.map((task) => (
+            <TaskGridCard
+              key={task.id}
+              task={task}
+              onOpen={openTaskDetails}
+              formatEquipment={formatEquipment}
+              user={user}
+            />
+          ))}
+        </div>
       ) : (
         <div className="text-center py-12">
           <Icon name="task_alt" className="text-5xl text-on-surface-variant/30 mx-auto mb-3" />
@@ -353,8 +429,8 @@ function Agenda() {
               setShowCreateModal(open);
               if (!open) setPrefillEquipment(null);
             }}
-            onSubmit={(data) => {
-              handleCreateTask(data);
+            onSubmit={async (data) => {
+              await handleCreateTask(data);
               setPrefillEquipment(null);
             }}
             mode="create"
@@ -505,47 +581,21 @@ function VirtualTaskList({
   formatEquipment: (value: string | undefined) => string;
   user: AuthUser | null;
 }) {
-  const rowHeight = 136;
-  const viewportHeight = Math.min(680, tasks.length * rowHeight);
-  const [scrollTop, setScrollTop] = useState(0);
-  const visibleRange = useMemo(() => {
-    const overscan = 5;
-    const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-    const end = Math.min(
-      tasks.length,
-      Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan,
-    );
-
-    return { start, end };
-  }, [scrollTop, tasks.length, viewportHeight]);
-
-  const visibleTasks = useMemo(
-    () => tasks.slice(visibleRange.start, visibleRange.end),
-    [tasks, visibleRange],
-  );
-
   return (
     <div
-      className="relative overflow-y-auto pr-1"
-      style={{ height: viewportHeight }}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      data-debug-name="Agenda task list"
+      data-task-list-wrapper
+      className="task-list agenda-list task-list-wrapper space-y-3"
     >
-      <div style={{ height: tasks.length * rowHeight, position: "relative" }}>
-        {visibleTasks.map((task, index) => (
-          <div
-            key={task.id}
-            className="absolute left-0 right-0"
-            style={{ top: (visibleRange.start + index) * rowHeight, height: rowHeight }}
-          >
-            <TaskListItem
-              task={task}
-              onOpen={onOpen}
-              formatEquipment={formatEquipment}
-              user={user}
-            />
-          </div>
-        ))}
-      </div>
+      {tasks.map((task) => (
+        <TaskListItem
+          key={task.id}
+          task={task}
+          onOpen={onOpen}
+          formatEquipment={formatEquipment}
+          user={user}
+        />
+      ))}
     </div>
   );
 }
@@ -570,47 +620,55 @@ const TaskListItem = memo(function TaskListItem({
     <button
       type="button"
       onClick={() => onOpen(task.id)}
-      className="w-full bg-surface-container border border-border-low rounded-lg p-4 text-left hover:border-primary/50 hover:shadow-md transition-industrial group"
+      data-debug-name="TaskListItem"
+      data-task-list-item
+      className="w-full min-w-0 bg-surface-container border border-border-low rounded-lg p-3 sm:p-4 text-left hover:border-primary/50 hover:shadow-md transition-industrial group"
     >
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs font-mono text-on-surface-variant font-bold">#{task.id}</span>
+          <div
+            data-debug-name="TaskListItem header line"
+            data-task-header-line
+            className="mb-2 flex min-w-0 flex-col items-start gap-1.5"
+          >
+            <span className="text-xs font-mono text-on-surface-variant font-bold break-all">
+              #{task.id}
+            </span>
             <RecipientViewedDots task={task} />
             <UnreadActivityBadges task={task} user={user} />
           </div>
-          <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors truncate">
+          <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors line-clamp-2 break-words">
             {task.title}
           </h3>
-          <div className="flex flex-wrap gap-3 mt-2 text-xs text-on-surface-variant">
-            <span className="flex items-center gap-1">
-              <Icon name="outgoing_mail" className="text-base" />
+          <div className="flex flex-wrap gap-x-3 gap-y-2 mt-2 text-xs text-on-surface-variant">
+            <span className="flex min-w-0 items-center gap-1 break-words">
+              <Icon name="outgoing_mail" className="text-base shrink-0" />
               Enviado por {task.createdBy || "Sistema"}
             </span>
-            <span className="flex items-center gap-1">
-              <Icon name="person" className="text-base" />
+            <span className="flex min-w-0 items-center gap-1 break-words">
+              <Icon name="person" className="text-base shrink-0" />
               {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}
             </span>
-            <span className="flex items-center gap-1">
-              <Icon name="domain" className="text-base" />
+            <span className="flex min-w-0 items-center gap-1 break-words">
+              <Icon name="domain" className="text-base shrink-0" />
               {task.sector || "Sem setor"}
             </span>
             {task.equipment && (
-              <span className="flex items-center gap-1">
-                <Icon name="precision_manufacturing" className="text-base" />
+              <span className="flex min-w-0 items-center gap-1 break-words">
+                <Icon name="precision_manufacturing" className="text-base shrink-0" />
                 {formatEquipment(task.equipment)}
               </span>
             )}
             {urgency && (
               <span
-                className={`${urgency.colorClass} font-bold ${urgency.level === "RED" || urgency.level === "ORANGE" ? "animate-pulse" : ""}`}
+                className={`${urgency.colorClass} font-bold break-words ${urgency.level === "RED" || urgency.level === "ORANGE" ? "animate-pulse" : ""}`}
               >
                 {urgency.timeRemaining}
               </span>
             )}
             {completionLabel && (
-              <span className="flex items-center gap-1 text-status-success font-bold">
-                <Icon name="check_circle" className="text-base" />
+              <span className="flex min-w-0 items-center gap-1 text-status-success font-bold break-words">
+                <Icon name="check_circle" className="text-base shrink-0" />
                 {completionLabel}
               </span>
             )}
@@ -645,30 +703,30 @@ const TaskGridCard = memo(function TaskGridCard({
     <button
       type="button"
       onClick={() => onOpen(task.id)}
-      className="bg-surface-container border border-border-low rounded-lg p-5 text-left hover:border-primary/50 hover:shadow-md transition-industrial group"
+      className="overflow-hidden bg-surface-container border border-border-low rounded-lg p-4 sm:p-5 text-left hover:border-primary/50 hover:shadow-md transition-industrial group"
     >
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <div className={`px-2 py-1 rounded text-[10px] font-bold ${config.color}`}>
+      <div className="flex min-w-0 flex-wrap items-start gap-2 mb-3">
+        <div className={`max-w-full px-2 py-1 rounded text-[10px] font-bold leading-tight break-words ${config.color}`}>
           {config.label}
         </div>
         <UnreadActivityBadges task={task} user={user} />
       </div>
-      <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-3 line-clamp-2">
+      <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors mb-3 line-clamp-2 break-words">
         {task.title}
       </h3>
       <div className="space-y-2 text-xs text-on-surface-variant mb-4">
-        <p className="truncate">
+        <p className="break-words">
           <strong>Enviado por:</strong> {task.createdBy || "Sistema"}
         </p>
-        <p className="truncate">
+        <p className="break-words">
           <strong>Destinatários:</strong>{" "}
           {task.assignedTo.length > 0 ? task.assignedTo.join(", ") : "Sem destinatário"}
         </p>
-        <p className="truncate">
+        <p className="break-words">
           <strong>Setor:</strong> {task.sector || "Sem setor"}
         </p>
         {task.equipment && (
-          <p className="truncate">
+          <p className="break-words">
             <strong>Equipamento:</strong> {formatEquipment(task.equipment)}
           </p>
         )}
@@ -689,14 +747,14 @@ const TaskGridCard = memo(function TaskGridCard({
           </p>
         )}
       </div>
-      <div className="pt-3 border-t border-border-low flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono text-on-surface-variant">#{task.id}</span>
+      <div className="pt-3 border-t border-border-low flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="text-[10px] font-mono text-on-surface-variant break-all">#{task.id}</span>
           <RecipientViewedDots task={task} />
         </div>
-        <div className="flex items-center gap-2">
-          <div className="px-2 py-1 rounded text-[10px] font-bold bg-surface-high text-on-surface-variant flex items-center gap-1">
-            <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm" />
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <div className="max-w-full px-2 py-1 rounded text-[10px] font-bold leading-tight bg-surface-high text-on-surface-variant inline-flex items-center gap-1 break-words">
+            <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm shrink-0" />
             {visibility}
           </div>
           <PriorityBadge priority={task.priority} />
@@ -711,13 +769,17 @@ function TaskBadges({ task, user }: { task: TaskRecord; user: AuthUser | null })
   const visibility = getTaskVisibilityLabel(task);
 
   return (
-    <div className="flex items-center gap-3 flex-shrink-0">
-      <div className="px-3 py-1 rounded text-[10px] font-bold bg-surface-high text-on-surface-variant flex items-center gap-1">
-        <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm" />
+    <div
+      data-debug-name="TaskBadges"
+      data-task-badges
+      className="flex w-full min-w-0 flex-wrap items-center justify-start gap-1.5 sm:w-auto sm:flex-shrink-0 sm:justify-end"
+    >
+      <div className="max-w-full shrink-0 px-2 sm:px-3 py-1 rounded text-[10px] font-bold leading-tight bg-surface-high text-on-surface-variant inline-flex items-center gap-1 whitespace-nowrap">
+        <Icon name={visibility === "Privada" ? "lock" : "group"} className="text-sm shrink-0" />
         {visibility}
       </div>
       <PriorityBadge priority={task.priority} />
-      <div className={`px-3 py-1 rounded text-[10px] font-bold ${config.color}`}>
+      <div className={`max-w-full shrink-0 px-2 sm:px-3 py-1 rounded text-[10px] font-bold leading-tight whitespace-nowrap ${config.color}`}>
         {config.label}
       </div>
     </div>
@@ -757,15 +819,19 @@ function UnreadActivityBadges({ task, user }: { task: TaskRecord; user: AuthUser
   if (unread.kinds.length === 0) return null;
 
   return (
-    <span className="flex items-center gap-1.5 flex-wrap">
+    <span
+      data-debug-name="UnreadActivityBadges"
+      data-task-unread-badges
+      className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5"
+    >
       {unread.kinds.map((kind) => {
         const badge = UNREAD_BADGES[kind];
         return (
           <span
             key={kind}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${badge.className}`}
+            className={`inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide leading-tight whitespace-nowrap ${badge.className}`}
           >
-            <Icon name={badge.icon} className="text-xs" />
+            <Icon name={badge.icon} className="text-xs shrink-0" />
             {badge.label}
           </span>
         );
@@ -777,7 +843,7 @@ function UnreadActivityBadges({ task, user }: { task: TaskRecord; user: AuthUser
 function PriorityBadge({ priority }: { priority: TaskRecord["priority"] }) {
   return (
     <div
-      className={`px-3 py-1 rounded text-[10px] font-bold ${
+      className={`inline-flex max-w-full shrink-0 items-center justify-center rounded px-2 sm:px-3 py-1 text-center text-[10px] font-bold leading-tight whitespace-nowrap ${
         priority === "Alta" || priority === "Urgente"
           ? "bg-status-error/10 text-status-error"
           : priority === "Média"

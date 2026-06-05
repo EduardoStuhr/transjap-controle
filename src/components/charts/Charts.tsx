@@ -14,6 +14,7 @@ import {
   LabelList,
   Legend,
   Line,
+  LineChart,
   Pie,
   PieChart,
   ReferenceLine,
@@ -32,6 +33,12 @@ import {
   CHART_LEGEND_STYLE,
   CHART_TICK as TICK,
 } from "@/lib/chart-theme";
+import {
+  multiObraMetricDisplayKey,
+  multiObraMetricKey,
+  multiObraMetricOutlierKey,
+  type MultiObraSeries,
+} from "@/lib/multi-obra-chart";
 import { RichTooltip } from "./RichTooltip";
 
 const MONO = "JetBrains Mono, ui-monospace, monospace";
@@ -159,6 +166,7 @@ export function ChartProdConsumo({ data }: { data: ProdConsumoPoint[] }) {
           name="Diesel (L)"
           stroke={C.steel}
           strokeWidth={2}
+          connectNulls
           dot={false}
           activeDot={{ r: 3, strokeWidth: 0 }}
         />
@@ -227,7 +235,56 @@ export function ChartHourlyProduction({
             style: { fontSize: 10, fill: C.fg3 },
           }}
         />
-        <Tooltip content={<RichTooltip units={units} format={format} />} />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: 10,
+                  fontSize: 11,
+                  minWidth: 210,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+                  {label}
+                </div>
+                {series.map((s) => {
+                  const payloadRow = payload.find((item) => item.dataKey === s.dataKey)?.payload as
+                    | Record<string, unknown>
+                    | undefined;
+                  const value = Number(payloadRow?.[s.dataKey] ?? 0);
+                  const display = Number(payloadRow?.[s.dataKey] ?? value);
+                  const outlier = false;
+                  if (!value && !display) return null;
+                  return (
+                    <div
+                      key={s.dataKey}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        padding: "2px 0",
+                      }}
+                    >
+                      <span style={{ color: "var(--fg-2)", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ width: 8, height: 2, background: s.color, borderRadius: 1 }} />
+                        {s.obra}
+                        {outlier ? " · outlier" : ""}
+                      </span>
+                      <span style={{ fontFamily: MONO, fontWeight: 700, color: s.color }}>
+                        {fmt.dec(value, 2)} mÂ³
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }}
+        />
         <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
         {multipleObras ? (
           series.map((item) => (
@@ -493,6 +550,7 @@ export function ChartLine({
           stroke={color}
           strokeWidth={2}
           fill={fillArea ? `url(#g-${dataKey})` : "transparent"}
+          connectNulls
           dot={false}
           activeDot={{ r: 3, strokeWidth: 0 }}
         />
@@ -535,6 +593,7 @@ export function ChartLineLpm3({
           stroke={color}
           strokeWidth={2}
           fill="url(#g-lpm3-item)"
+          connectNulls
           dot={false}
           activeDot={{ r: 3, strokeWidth: 0 }}
         />
@@ -579,12 +638,49 @@ export function ChartM3Diesel({
           tickFormatter={(value: number) => fmt.k(value)}
         />
         <Tooltip
-          content={
-            <RichTooltip
-              units={{ m3: "m³", diesel: "L" }}
-              format={{ m3: (value: number) => fmt.dec(value, 1), diesel: (value: number) => fmt.dec(value, 2) }}
-            />
-          }
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const point = payload[0].payload as Record<string, unknown>;
+            const row = (name: string, raw: unknown, suffix = "", digits = 2) => {
+              const numeric = typeof raw === "number" ? raw : Number(raw);
+              const valueText = Number.isFinite(numeric)
+                ? fmt.dec(numeric, digits)
+                : String(raw ?? "-");
+              return (
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "2px 0" }}>
+                  <span style={{ color: C.fg3 }}>{name}</span>
+                  <span style={{ color: C.fg, fontFamily: MONO, fontWeight: 600 }}>
+                    {valueText}
+                    {suffix && <span style={{ color: C.fg3, marginLeft: 4 }}>{suffix}</span>}
+                  </span>
+                </div>
+              );
+            };
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 11,
+                  boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+                  minWidth: 180,
+                }}
+              >
+                <div style={{ color: "var(--fg-3)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                  {String(label ?? "")}
+                </div>
+                {Boolean(point.resolvedObraLabel || point.obraLabel || point.obra) && (
+                  <div style={{ color: C.fg3, lineHeight: 1.35, marginBottom: 6 }}>
+                    <div>Obra: {String(point.resolvedObraLabel ?? point.obraLabel ?? point.obra)}</div>
+                  </div>
+                )}
+                {row(mName, point.m3, "m3", 1)}
+                {row(lName, point.diesel, "L", 2)}
+              </div>
+            );
+          }}
         />
         <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
         <Bar yAxisId="m3" dataKey="m3" name={mName} fill={mColor} radius={[2, 2, 0, 0]} barSize={12} />
@@ -595,6 +691,7 @@ export function ChartM3Diesel({
           name={lName}
           stroke={lColor}
           strokeWidth={2.4}
+          connectNulls
           dot={false}
           activeDot={{ r: 4, strokeWidth: 0 }}
         />
@@ -604,20 +701,39 @@ export function ChartM3Diesel({
 }
 
 export function ChartLineRef({
+  title = "ChartLineRef",
   data,
   dataKey,
+  dataKeys,
+  series,
   refValue,
   refLabel = "Meta",
   color = C.yellow,
   unit = "",
 }: {
+  title?: string;
   data: Array<Record<string, unknown>>;
   dataKey: string;
+  dataKeys?: unknown;
+  series?: unknown;
   refValue?: number;
   refLabel?: string;
   color?: string;
   unit?: string;
 }) {
+  if (typeof window !== "undefined" && dataKey === "lPorM3") {
+    console.log(
+      "[COMPACTACAO_M3L_CHART_DATA]",
+      data.filter((d) => String(d.date ?? d.d ?? "").includes("25")),
+    );
+    console.log("[COMPACTACAO_M3L_PROPS]", {
+      title,
+      dataKeys: dataKeys ?? [dataKey],
+      series: series ?? null,
+      data,
+    });
+  }
+
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 14, right: 24, left: 0, bottom: 4 }}>
@@ -629,8 +745,6 @@ export function ChartLineRef({
             if (!active || !payload?.length) return null;
             const point = payload[0].payload as Record<string, unknown>;
             const value = Number(payload[0].value ?? 0);
-            const status = String(point.status ?? "OK");
-            const isSuspect = status === "SUSPEITO";
             const row = (name: string, raw: unknown, suffix = "") => {
               const numeric = typeof raw === "number" ? raw : Number(raw);
               const valueText = Number.isFinite(numeric)
@@ -651,12 +765,12 @@ export function ChartLineRef({
               <div
                 style={{
                   background: "var(--bg-2)",
-                  border: `1px solid ${isSuspect ? C.warn : "var(--line)"}`,
+                  border: "1px solid var(--line)",
                   borderRadius: 6,
                   padding: "8px 10px",
                   fontSize: 11,
                   boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
-                  minWidth: 260,
+                  minWidth: 180,
                 }}
               >
                 <div
@@ -670,29 +784,12 @@ export function ChartLineRef({
                 >
                   {String(label ?? "")}
                 </div>
+                {Boolean(point.resolvedObraLabel || point.obraLabel || point.obra) && (
+                  <div style={{ color: C.fg3, lineHeight: 1.35, marginBottom: 6 }}>
+                    <div>Obra: {String(point.resolvedObraLabel ?? point.obraLabel ?? point.obra)}</div>
+                  </div>
+                )}
                 {row(unit ? `${dataKey} (${unit})` : dataKey, value, unit)}
-                {row("m3 usado", point.m3Usado ?? point.relatedM3 ?? point.m3, "m3")}
-                {row("diesel usado", point.diesel, "L")}
-                {row("horas", point.horas, "h")}
-                {Boolean(point.formulaUsed) && (
-                  <div style={{ marginTop: 6, color: C.fg3, lineHeight: 1.35 }}>
-                    Formula: {String(point.formulaUsed)}
-                  </div>
-                )}
-                <div
-                  style={{
-                    marginTop: 6,
-                    color: isSuspect ? C.warn : C.ok,
-                    fontWeight: 700,
-                  }}
-                >
-                  Status: {status}
-                </div>
-                {isSuspect && (
-                  <div style={{ marginTop: 4, color: C.warn, lineHeight: 1.35 }}>
-                    Valor suspeito: producao alta com diesel baixo/ausente. Verificar rateio/PDE/CMB.
-                  </div>
-                )}
               </div>
             );
           }}
@@ -711,8 +808,9 @@ export function ChartLineRef({
           name={unit ? `${dataKey} (${unit})` : dataKey}
           stroke={color}
           strokeWidth={2.4}
+          connectNulls
           dot={(props: { cx?: number; cy?: number; payload?: Record<string, unknown> }) =>
-            props.payload?.status === "SUSPEITO" ? (
+            props.payload?.status && props.payload.status !== "OK" ? (
               <circle
                 cx={Number(props.cx ?? 0)}
                 cy={Number(props.cy ?? 0)}
@@ -1095,7 +1193,50 @@ export function ChartProductivity({
         <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
         <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
         <YAxis tick={TICK} axisLine={false} tickLine={false} width={48} />
-        <Tooltip content={<RichTooltip units={{ m3PorH: "m³/h" }} />} />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const point = payload[0].payload as Record<string, unknown>;
+            const row = (name: string, raw: unknown, suffix = "", digits = 2) => {
+              const numeric = typeof raw === "number" ? raw : Number(raw);
+              const valueText = Number.isFinite(numeric)
+                ? fmt.dec(numeric, digits)
+                : String(raw ?? "-");
+              return (
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "2px 0" }}>
+                  <span style={{ color: C.fg3 }}>{name}</span>
+                  <span style={{ color: C.fg, fontFamily: MONO, fontWeight: 600 }}>
+                    {valueText}
+                    {suffix && <span style={{ color: C.fg3, marginLeft: 4 }}>{suffix}</span>}
+                  </span>
+                </div>
+              );
+            };
+            return (
+              <div
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                  padding: "8px 10px",
+                  fontSize: 11,
+                  boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+                  minWidth: 280,
+                }}
+              >
+                <div style={{ color: "var(--fg-3)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                  {String(label ?? "")}
+                </div>
+                {Boolean(point.resolvedObraLabel || point.obraLabel || point.obra) && (
+                  <div style={{ color: C.fg3, lineHeight: 1.35, marginBottom: 6 }}>
+                    <div>Obra: {String(point.resolvedObraLabel ?? point.obraLabel ?? point.obra)}</div>
+                  </div>
+                )}
+                {row("m3/h", point.m3PorH, "m3/h", 2)}
+              </div>
+            );
+          }}
+        />
         <Area
           type="monotone"
           dataKey="m3PorH"
@@ -1103,6 +1244,7 @@ export function ChartProductivity({
           stroke={color}
           strokeWidth={2}
           fill="url(#g-productivity-item)"
+          connectNulls
           dot={false}
           activeDot={{ r: 3, strokeWidth: 0 }}
         />
@@ -1300,22 +1442,7 @@ export function ChartM3PerLiterRanking({
                 <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
                   {row.id}
                 </div>
-                <AggregateRankingRow
-                  k="m3 relacionado"
-                  v={`${fmt.dec(Number(row.m3 ?? 0), 1)} m3`}
-                />
-                <AggregateRankingRow k="Diesel" v={`${fmt.dec(Number(row.litros ?? 0), 1)} L`} />
-                <AggregateRankingRow k="Horas" v={`${fmt.dec(Number(row.horas ?? 0), 1)} h`} />
-                <AggregateRankingRow
-                  k="Share medio"
-                  v={`${fmt.dec(Number(row.share ?? 0) * 100, 2)}%`}
-                />
-                <AggregateRankingRow k="Dias com share" v={fmt.int(Number(row.dias ?? 0))} />
-                <AggregateRankingRow k="L/h" v={`${fmt.dec(Number(row.lph ?? 0), 2)} L/h`} />
                 <AggregateRankingRow k="m3/L" v={`${fmt.dec(m3PerLiter, 3)} m3/L`} />
-                <div style={{ marginTop: 6, color: C.fg3 }}>
-                  m3 relacionado de {fmt.dec(m3PerLiter, 2)} por litro
-                </div>
               </div>
             );
           }}
@@ -1394,6 +1521,8 @@ export type ChartSeriesConfig = {
   dataKey: string;
   name: string;
   color: string;
+  valueDataKey?: string;
+  outlierDataKey?: string;
 };
 
 export function ChartMultiLine({
@@ -1894,6 +2023,218 @@ export function ChartDonut({
         </text>
         <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={8} iconType="square" />
       </PieChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ============================================================================
+// Multi-obra: comparativo Produção × Diesel com obras como séries separadas
+// ============================================================================
+
+type ChartM3DieselMultiObraProps = {
+  data: Array<Record<string, unknown>>;
+  series: MultiObraSeries[];
+  mName?: string;
+};
+
+const MULTI_OBRA_PALETTE = [
+  { bar: "oklch(0.78 0.16 90)",  line: "oklch(0.70 0.13 250)" },
+  { bar: "oklch(0.72 0.18 35)",  line: "oklch(0.68 0.13 200)" },
+  { bar: "oklch(0.72 0.15 150)", line: "oklch(0.66 0.16 320)" },
+  { bar: "oklch(0.78 0.10 280)", line: "oklch(0.72 0.16 60)" },
+];
+
+export function ChartM3DieselMultiObra({
+  data,
+  series,
+  mName = "m³",
+}: ChartM3DieselMultiObraProps) {
+  const barSize = Math.max(6, Math.min(12, 26 / Math.max(series.length, 1)));
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 14, right: 24, left: 4, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis
+          yAxisId="m3"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(value: number) => fmt.k(value)}
+        />
+        <YAxis
+          yAxisId="diesel"
+          orientation="right"
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          tickFormatter={(value: number) => fmt.k(value)}
+        />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            return (
+              <div style={{
+                background: "var(--bg-2)", border: "1px solid var(--line)",
+                borderRadius: 6, padding: 10, fontSize: 11, minWidth: 220,
+              }}>
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>{label}</div>
+                {series.map((obra, idx) => {
+                  const mKey = multiObraMetricKey(obra.key, "m3");
+                  const dKey = multiObraMetricKey(obra.key, "diesel");
+                  const m3 = (payload.find((p) => p.dataKey === mKey)?.value as number | undefined) ?? 0;
+                  const diesel = (payload.find((p) => p.dataKey === dKey)?.value as number | undefined) ?? 0;
+                  if (!m3 && !diesel) return null;
+                  const palette = MULTI_OBRA_PALETTE[idx % MULTI_OBRA_PALETTE.length];
+                  return (
+                    <div key={obra.key} style={{ marginTop: idx > 0 ? 8 : 0, paddingTop: idx > 0 ? 6 : 0, borderTop: idx > 0 ? "1px solid var(--line-soft)" : undefined }}>
+                      <div style={{ fontWeight: 600, color: "var(--fg-2)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                        {obra.obra}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 3 }}>
+                        <span style={{ color: "var(--fg-3)", display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ width: 8, height: 8, background: obra.color ?? palette.bar, borderRadius: 2 }} />
+                          {mName}
+                        </span>
+                        <span style={{ fontFamily: "JetBrains Mono, monospace", color: "var(--fg)" }}>
+                          {fmt.dec(m3, 1)} m³
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 2 }}>
+                        <span style={{ color: "var(--fg-3)", display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ width: 8, height: 2, background: obra.color ?? palette.line, borderRadius: 1 }} />
+                          Diesel
+                        </span>
+                        <span style={{ fontFamily: "JetBrains Mono, monospace", color: "var(--fg)" }}>
+                          {fmt.dec(diesel, 1)} L
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }}
+        />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        {series.map((obra, idx) => {
+          const palette = MULTI_OBRA_PALETTE[idx % MULTI_OBRA_PALETTE.length];
+          return (
+            <Bar
+              key={multiObraMetricKey(obra.key, "m3")}
+              yAxisId="m3"
+              dataKey={multiObraMetricKey(obra.key, "m3")}
+              name={`${obra.obra} - ${mName}`}
+              fill={obra.color ?? palette.bar}
+              radius={[2, 2, 0, 0]}
+              barSize={barSize}
+            />
+          );
+        })}
+        {series.map((obra, idx) => {
+          const palette = MULTI_OBRA_PALETTE[idx % MULTI_OBRA_PALETTE.length];
+          return (
+            <Line
+              key={multiObraMetricKey(obra.key, "diesel")}
+              yAxisId="diesel"
+              type="monotone"
+              dataKey={multiObraMetricKey(obra.key, "diesel")}
+              name={`${obra.obra} - Diesel`}
+              stroke={obra.color ?? palette.line}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, strokeWidth: 0 }}
+            />
+          );
+        })}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ============================================================================
+// Multi-obra: Eficiência m³/L com obras como séries separadas
+// ============================================================================
+
+type ChartEfficiencyMultiObraProps = {
+  data: Array<Record<string, unknown>>;
+  series: MultiObraSeries[];
+};
+
+export function ChartEfficiencyMultiObra({ data, series }: ChartEfficiencyMultiObraProps) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data} margin={{ top: 14, right: 24, left: 4, bottom: 4 }}>
+        <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
+        <XAxis dataKey="d" tick={TICK} axisLine={{ stroke: C.grid }} tickLine={false} />
+        <YAxis
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={42}
+          tickFormatter={(value: number) => fmt.dec(value, 1)}
+          label={{ value: "m³/L", angle: -90, position: "insideLeft", style: { fontSize: 10, fill: "var(--fg-3)" } }}
+        />
+        <Tooltip
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
+            const validRows = payload
+              .filter((p) =>
+                series.some((obra) => p.dataKey === multiObraMetricDisplayKey(obra.key, "m3PerLiter")),
+              )
+              .filter((p) => typeof p.value === "number" && p.value > 0);
+            if (validRows.length === 0) return null;
+            return (
+              <div style={{
+                background: "var(--bg-2)", border: "1px solid var(--line)",
+                borderRadius: 6, padding: 10, fontSize: 11, minWidth: 220,
+              }}>
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>{label}</div>
+                {validRows.map((p) => {
+                  const obra = series.find((o) => p.dataKey === multiObraMetricDisplayKey(o.key, "m3PerLiter"));
+                  if (!obra) return null;
+                  const paletteIdx = series.indexOf(obra);
+                  const palette = MULTI_OBRA_PALETTE[paletteIdx % MULTI_OBRA_PALETTE.length];
+                  const row = p.payload as Record<string, unknown>;
+                  const value = Number(row[multiObraMetricKey(obra.key, "m3PerLiter")] ?? p.value ?? 0);
+                  const outlier = Boolean(row[multiObraMetricOutlierKey(obra.key, "m3PerLiter")]);
+                  return (
+                    <div key={obra.key} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "2px 0" }}>
+                      <span style={{ color: "var(--fg-2)", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ width: 8, height: 2, background: obra.color ?? palette.line, borderRadius: 1 }} />
+                        {obra.obra}
+                        {outlier ? " · outlier" : ""}
+                      </span>
+                      <span style={{ fontFamily: "JetBrains Mono, monospace", fontWeight: 700, color: obra.color ?? palette.line }}>
+                        {fmt.dec(value, 2)} m³/L
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }}
+        />
+        <Legend wrapperStyle={CHART_LEGEND_STYLE} iconSize={9} iconType="square" />
+        {series.map((obra, idx) => {
+          const palette = MULTI_OBRA_PALETTE[idx % MULTI_OBRA_PALETTE.length];
+          return (
+            <Line
+              key={obra.key}
+              type="monotone"
+              dataKey={multiObraMetricDisplayKey(obra.key, "m3PerLiter")}
+              name={obra.obra}
+              stroke={obra.color ?? palette.line}
+              strokeWidth={2.4}
+              dot={{ r: 3, strokeWidth: 0, fill: obra.color ?? palette.line }}
+              activeDot={{ r: 5, strokeWidth: 0 }}
+              connectNulls={false}
+            />
+          );
+        })}
+      </LineChart>
     </ResponsiveContainer>
   );
 }

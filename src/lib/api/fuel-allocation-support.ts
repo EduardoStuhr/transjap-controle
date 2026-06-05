@@ -272,7 +272,9 @@ function findPriorFuel(fuel: FuelEntry, historicalFuels: FuelEntry[], selectedId
 }
 
 function median(values: number[]) {
-  const sorted = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+  const sorted = values
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
   if (sorted.length === 0) return 0;
   return sorted[Math.floor(sorted.length / 2)];
 }
@@ -312,7 +314,8 @@ function normalizePdeHourmeterScale(fuels: FuelEntry[], pdes: PDEEntry[]) {
     ...pde,
     startHourmeter:
       typeof pde.startHourmeter === "number" ? pde.startHourmeter * scale : pde.startHourmeter,
-    endHourmeter: typeof pde.endHourmeter === "number" ? pde.endHourmeter * scale : pde.endHourmeter,
+    endHourmeter:
+      typeof pde.endHourmeter === "number" ? pde.endHourmeter * scale : pde.endHourmeter,
   }));
 }
 
@@ -321,7 +324,14 @@ function calculateFromExistingData(
   pdeRows: DbEquipmentDailyPart[],
   historicalFuelRows: DbFueling[],
 ) {
-  const groups = new Map<string, { fuels: FuelEntry[]; pdes: PDEEntry[]; sourceIds: string[] }>();
+  const groups = new Map<
+    string,
+    {
+      fuels: FuelEntry[];
+      pdes: PDEEntry[];
+      sourceIds: string[];
+    }
+  >();
 
   for (const row of fuelRows) {
     const fuel = fuelEntryFromRow(row);
@@ -339,7 +349,7 @@ function calculateFromExistingData(
     if (!fleet || !row.usedInAnalysis) continue;
     const group = groups.get(`${row.analysisId}:${fleet}`);
     if (!group) continue;
-    group.pdes.push({
+    const pde: PDEEntry = {
       id: row.id,
       equipmentId: fleet,
       fleet,
@@ -348,7 +358,8 @@ function calculateFromExistingData(
       startHourmeter: row.horimInicial > 0 ? row.horimInicial : undefined,
       endHourmeter: row.horimFinal > 0 ? row.horimFinal : undefined,
       workedHours: row.hours,
-    });
+    };
+    group.pdes.push(pde);
   }
 
   const sourceIds: string[] = [];

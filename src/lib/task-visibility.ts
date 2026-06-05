@@ -134,6 +134,14 @@ export function hasUserViewedTask(task: TaskRecord, user: AuthUser | null): bool
   return Boolean(getTaskViewedAt(task, user));
 }
 
+function hasRecipientViewedTask(task: TaskRecord): boolean {
+  if (task.viewed) return true;
+
+  return getTaskRecipientNames(task).some((recipientName) =>
+    Boolean(getTaskViewedAtForRecipient(task, recipientName)),
+  );
+}
+
 export function isUserTaskRecipient(task: TaskRecord, user: AuthUser | null): boolean {
   if (!user) return false;
   if (getTaskCreatorIds(task).includes(user.id) || getTaskCreatorNames(task).includes(user.name)) {
@@ -158,7 +166,11 @@ export function isTaskUnreadForUser(task: TaskRecord, user: AuthUser | null): bo
 
 export function getTaskStatusForUser(task: TaskRecord, user: AuthUser | null): TaskStatus {
   if (task.status !== "Não visualizado" && task.status !== "Visualizado") return task.status;
-  return hasUserViewedTask(task, user) ? "Visualizado" : "Não visualizado";
+  return task.status === "Visualizado" ||
+    hasRecipientViewedTask(task) ||
+    hasUserViewedTask(task, user)
+    ? "Visualizado"
+    : "Não visualizado";
 }
 
 /**
