@@ -45,6 +45,10 @@ export function isAdminUser(user: Pick<AuthUser, "role"> | null | undefined): bo
   return normalizeRole(user?.role) === "admin";
 }
 
+export function isEduardoUser(user: Pick<AuthUser, "id" | "name"> | null | undefined): boolean {
+  return user?.id === "usr-eduardo" || user?.name?.toLowerCase() === "eduardo";
+}
+
 export function findUserById(id: string | undefined): AuthUser | null {
   if (!id) return null;
   return USERS_BY_ID.get(id) ?? null;

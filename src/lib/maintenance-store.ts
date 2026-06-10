@@ -703,6 +703,29 @@ export function useMaintenanceActions() {
       });
     },
 
+    async removeExternalCost(recordId: string, costEntryId: string) {
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      const entry = record?.costEntries.find((candidate) => candidate.id === costEntryId);
+      if (!record || !entry) return null;
+
+      const costEntries = record.costEntries.filter((candidate) => candidate.id !== costEntryId);
+      return updateRecord({
+        ...record,
+        supplierName: costEntries.length === 0 ? "" : record.supplierName,
+        materialDescription: costEntries.length === 0 ? "" : record.materialDescription,
+        cost: costEntries.length === 0 ? 0 : record.cost,
+        costEntries,
+        timeline: [
+          timeline(
+            "Custo de fornecedor removido",
+            `${entry.partName || "Material"} - ${entry.supplierName || "Fornecedor não informado"} - R$ ${entry.amount.toFixed(2)}`,
+          ),
+          ...record.timeline,
+        ],
+      });
+    },
+
     async completeRecord(recordId: string, note = "") {
       const current = getCachedState(queryClient);
       const record = current.records.find((candidate) => candidate.id === recordId);
@@ -781,6 +804,11 @@ export const maintenanceActions = {
   addExternalCost: (): never => {
     throw new Error(
       "maintenanceActions.addExternalCost() foi removido. Use useMaintenanceActions().addExternalCost().",
+    );
+  },
+  removeExternalCost: (): never => {
+    throw new Error(
+      "maintenanceActions.removeExternalCost() foi removido. Use useMaintenanceActions().removeExternalCost().",
     );
   },
   completeRecord: (): never => {

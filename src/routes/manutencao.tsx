@@ -15,17 +15,24 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useActiveTabScroll } from "@/hooks/useActiveTabScroll";
 import { useInventoryActions, useInventoryStore } from "@/lib/inventory-store";
 import type { InventoryItem, StockMovement } from "@/lib/inventory-types";
 import { useAuthStore } from "@/lib/auth-store";
 import { isAdminUser } from "@/lib/auth-users";
-import { exportMaintenanceAsCsv, exportMaintenanceAsPdf } from "@/lib/maintenance-export";
+import {
+  exportMaintenanceAsCsv,
+  exportMaintenanceAsPdf,
+  exportOpenMaintenanceAsExcel,
+  exportOpenMaintenanceAsPdf,
+} from "@/lib/maintenance-export";
 import {
   getMaintenanceExternalCost,
   getMaintenanceTotalCost,
   useMaintenanceActions,
   useMaintenanceStore,
   type MaintenanceCostDraft,
+  type MaintenanceCostEntry,
   type MaintenanceDraft,
   type MaintenanceRecord,
   type MaintenanceStep,
@@ -51,6 +58,17 @@ type MaintenanceType = {
   description: string;
   color: string;
 };
+
+type MaintenanceStatusFilter = "all" | "open" | "completed";
+
+const STATUS_FILTERS: Array<{
+  value: MaintenanceStatusFilter;
+  label: string;
+}> = [
+  { value: "all", label: "Todas" },
+  { value: "open", label: "Em aberto" },
+  { value: "completed", label: "Concluídas" },
+];
 
 const TYPE_META: Record<string, Omit<MaintenanceType, "name">> = {
   Preventiva: {
@@ -109,6 +127,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function Manutencao() {
+  const statusTabsRef = useActiveTabScroll<HTMLDivElement>();
   const inventoryActions = useInventoryActions();
   const maintenanceActions = useMaintenanceActions();
   const records = useMaintenanceStore((snapshot) => snapshot.records);
@@ -118,11 +137,13 @@ function Manutencao() {
   const user = useAuthStore((snapshot) => snapshot.user);
   const canDeleteMaintenance = isAdminUser(user);
   const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<MaintenanceStatusFilter>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MaintenanceRecord | null>(null);
   const [deletingMaintenance, setDeletingMaintenance] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
   const [draft, setDraft] = useState<MaintenanceDraft>(EMPTY_MAINTENANCE);
   const [consumption, setConsumption] = useState({
     itemId: "",
@@ -136,13 +157,25 @@ function Manutencao() {
   const formatEquipment = (value: string | undefined) =>
     formatEquipmentReference(value, equipments) || "Sem equipamento";
 
-  const filteredRecords = useMemo(
-    () =>
-      selectedType
-        ? records.filter((record) => record.type.toLowerCase().includes(selectedType.toLowerCase()))
-        : records,
-    [records, selectedType],
+  const filteredRecords = useMemo(() => {
+    return records.filter((record) => {
+      const matchesType =
+        !selectedType || record.type.toLowerCase().includes(selectedType.toLowerCase());
+      const matchesStatus =
+        statusFilter === "all" ||
+        (statusFilter === "open" && record.status !== "Concluída") ||
+        (statusFilter === "completed" && record.status === "Concluída");
+
+      return matchesType && matchesStatus;
+    });
+  }, [records, selectedType, statusFilter]);
+  const visibleOpenRecords = useMemo(
+    () => filteredRecords.filter((record) => record.status !== "Concluída"),
+    [filteredRecords],
   );
+  const exportFilterDescription = `Tipo: ${selectedType || "Todos"} · Status da tela: ${
+    STATUS_FILTERS.find((filter) => filter.value === statusFilter)?.label || "Todas"
+  }`;
 
   const selectedRecord = records.find((record) => record.id === selectedRecordId) || null;
   const selectedInventoryItem = inventoryItems.find((item) => item.id === consumption.itemId);
@@ -168,30 +201,31 @@ function Manutencao() {
   const activeCount = records.filter(
     (record) => record.status === "Aberta" || record.status === "Em andamento",
   ).length;
-  const averageStepMinutes = useMemo(() => {
-    const completedSteps = records.flatMap((record) =>
-      record.steps.filter((step) => step.durationMinutes > 0),
-    );
-    if (completedSteps.length === 0) return 0;
-    const total = completedSteps.reduce((sum, step) => sum + step.durationMinutes, 0);
-    return Math.round(total / completedSteps.length);
-  }, [records]);
 
-  const monthlyCost = useMemo(() => {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    return records.reduce((sum, record) => {
-      const createdMs = (() => {
-        if (!record.createdAt) return 0;
-        if (record.createdAt.includes("/")) {
-          const [d, m, y] = record.createdAt.split("/").map(Number);
-          return new Date(y, m - 1, d).getTime() || 0;
-        }
-        return new Date(record.createdAt).getTime() || 0;
-      })();
-      return createdMs >= monthStart ? sum + getMaintenanceTotalCost(record) : sum;
-    }, 0);
-  }, [records]);
+  const exportReportOptions = {
+    formatEquipment,
+    filterDescription: exportFilterDescription,
+  };
+
+  const exportOpenMaintenancePdf = () => {
+    exportOpenMaintenanceAsPdf(visibleOpenRecords, exportReportOptions);
+  };
+
+  const exportOpenMaintenanceExcel = async () => {
+    setExportingExcel(true);
+    try {
+      await exportOpenMaintenanceAsExcel(visibleOpenRecords, exportReportOptions);
+      toast.success("Excel exportado", {
+        description: `${visibleOpenRecords.length} manutenções abertas incluídas.`,
+      });
+    } catch (error) {
+      toast.error("Não foi possível exportar o Excel", {
+        description: getErrorMessage(error),
+      });
+    } finally {
+      setExportingExcel(false);
+    }
+  };
 
   const openCreateMaintenance = () => {
     setDraft({ ...EMPTY_MAINTENANCE });
@@ -324,10 +358,43 @@ function Manutencao() {
             Gestão de preventivas, corretivas e inspeções técnicas
           </p>
         </div>
-        <Button onClick={openCreateMaintenance} className="font-black gap-2 shadow-industrial">
-          <Icon name="add" />
-          Registrar Manutenção
-        </Button>
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={exportOpenMaintenancePdf}
+            disabled={visibleOpenRecords.length === 0}
+            className="font-black gap-2"
+            title={
+              visibleOpenRecords.length === 0
+                ? "Nenhuma manutenção aberta visível nos filtros atuais"
+                : "Exportar manutenções abertas visíveis em PDF"
+            }
+          >
+            <Icon name="picture_as_pdf" />
+            Exportar PDF
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={exportOpenMaintenanceExcel}
+            disabled={visibleOpenRecords.length === 0}
+            isLoading={exportingExcel}
+            className="font-black gap-2"
+            title={
+              visibleOpenRecords.length === 0
+                ? "Nenhuma manutenção aberta visível nos filtros atuais"
+                : "Exportar manutenções abertas visíveis em Excel"
+            }
+          >
+            <Icon name="table_view" />
+            Exportar Excel
+          </Button>
+          <Button onClick={openCreateMaintenance} className="font-black gap-2 shadow-industrial">
+            <Icon name="add" />
+            Registrar Manutenção
+          </Button>
+        </div>
       </div>
 
       <EquipmentsInMaintenancePanel
@@ -335,22 +402,10 @@ function Manutencao() {
         onRecordClick={(id) => setSelectedRecordId(id)}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4 mb-6 sm:mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 mb-6 sm:mb-8">
         <Metric label="Total" value={totalMaintenance} tone="primary" />
         <Metric label="Concluídas" value={completedCount} tone="success" />
         <Metric label="Em andamento" value={activeCount} tone="primary" />
-        <Metric label="Tempo médio (min)" value={averageStepMinutes} tone="primary" />
-        <div className="border rounded-lg p-3 sm:p-4 bg-surface-container border-border-low">
-          <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest mb-1 sm:mb-2 text-on-surface-variant">
-            Custo do mês
-          </p>
-          <p className="text-lg sm:text-2xl font-black font-mono text-primary leading-tight">
-            {monthlyCost.toLocaleString("pt-BR", {
-              style: "currency",
-              currency: "BRL",
-            })}
-          </p>
-        </div>
       </div>
 
       <div className="bg-surface-container border border-border-low rounded-lg p-4 sm:p-5 mb-6 sm:mb-8 shadow-industrial">
@@ -493,32 +548,56 @@ function Manutencao() {
               {selectedType ? `Filtrando por: ${selectedType}` : "Histórico real de manutenções"}
             </p>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              className={`p-2 rounded transition-colors ${viewMode === "list" ? "bg-primary text-on-primary" : "text-on-surface-variant hover:bg-surface-high"}`}
-              aria-label="Lista"
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div
+              ref={statusTabsRef}
+              className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 scroll-smooth overscroll-x-contain"
+              aria-label="Filtrar intervenções por status"
             >
-              <Icon name="view_list" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("grid")}
-              className={`p-2 rounded transition-colors ${viewMode === "grid" ? "bg-primary text-on-primary" : "text-on-surface-variant hover:bg-surface-high"}`}
-              aria-label="Grade"
-            >
-              <Icon name="grid_3x3" />
-            </button>
-            {selectedType && (
+              {STATUS_FILTERS.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  onClick={() => setStatusFilter(filter.value)}
+                  data-active={statusFilter === filter.value}
+                  className={`whitespace-nowrap rounded-lg px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-colors ${
+                    statusFilter === filter.value
+                      ? "bg-primary text-on-primary shadow-industrial border-b-2 border-primary"
+                      : "border border-border-low bg-surface-container text-on-surface hover:border-primary/50"
+                  }`}
+                  aria-pressed={statusFilter === filter.value}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setSelectedType(null)}
-                className="px-3 py-2 text-xs font-bold text-on-surface-variant hover:bg-surface-high rounded transition-colors"
+                onClick={() => setViewMode("list")}
+                className={`p-2 rounded transition-colors ${viewMode === "list" ? "bg-primary text-on-primary" : "text-on-surface-variant hover:bg-surface-high"}`}
+                aria-label="Lista"
               >
-                Limpar filtro
+                <Icon name="view_list" />
               </button>
-            )}
+              <button
+                type="button"
+                onClick={() => setViewMode("grid")}
+                className={`p-2 rounded transition-colors ${viewMode === "grid" ? "bg-primary text-on-primary" : "text-on-surface-variant hover:bg-surface-high"}`}
+                aria-label="Grade"
+              >
+                <Icon name="grid_3x3" />
+              </button>
+              {selectedType && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedType(null)}
+                  className="px-3 py-2 text-xs font-bold text-on-surface-variant hover:bg-surface-high rounded transition-colors"
+                >
+                  Limpar filtro
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -546,6 +625,7 @@ function Manutencao() {
                       "Tipo",
                       "Item",
                       "Aberto por",
+                      "Custo",
                       "Status",
                       canDeleteMaintenance ? "Ações" : null,
                     ]
@@ -592,16 +672,22 @@ function Manutencao() {
         ) : (
           <div className="text-center py-12">
             <Icon name="build" className="text-5xl text-on-surface-variant/30 mx-auto mb-3" />
-            <p className="text-on-surface-variant">Nenhuma manutenção cadastrada</p>
-            <Button
-              type="button"
-              onClick={openCreateMaintenance}
-              variant="outline"
-              className="mt-4 gap-2"
-            >
-              <Icon name="add" />
-              Registrar primeira manutenção
-            </Button>
+            <p className="text-on-surface-variant">
+              {records.length > 0
+                ? "Nenhuma manutenção encontrada com os filtros selecionados"
+                : "Nenhuma manutenção cadastrada"}
+            </p>
+            {records.length === 0 && (
+              <Button
+                type="button"
+                onClick={openCreateMaintenance}
+                variant="outline"
+                className="mt-4 gap-2"
+              >
+                <Icon name="add" />
+                Registrar primeira manutenção
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -719,6 +805,8 @@ function MaintenanceTableRow({
   canDelete: boolean;
   formatEquipment: (value: string | undefined) => string;
 }) {
+  const totalCost = getMaintenanceTotalCost(record);
+
   return (
     <tr
       role="button"
@@ -747,6 +835,12 @@ function MaintenanceTableRow({
       <td className="px-6 py-4 text-sm font-bold text-on-surface">{record.item || "—"}</td>
       <td className="px-6 py-4 text-sm font-bold text-on-surface-variant">
         {record.submittedBy || "—"}
+      </td>
+      <td className="px-6 py-4 text-sm font-black text-primary whitespace-nowrap">
+        {totalCost.toLocaleString("pt-BR", {
+          style: "currency",
+          currency: "BRL",
+        })}
       </td>
       <td className="px-6 py-4">
         <div className="flex flex-col gap-1">
@@ -799,6 +893,8 @@ function MaintenanceCard({
   canDelete: boolean;
   formatEquipment: (value: string | undefined) => string;
 }) {
+  const totalCost = getMaintenanceTotalCost(record);
+
   return (
     <article
       role="button"
@@ -837,6 +933,15 @@ function MaintenanceCard({
       <p className="mb-3 text-xs font-bold text-on-surface sm:hidden line-clamp-2">
         {record.item || "Sem item informado"}
       </p>
+      <div className="mb-3 flex items-center justify-between rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+        <span className="font-black uppercase tracking-wider text-on-surface-variant">Custo</span>
+        <span className="font-black text-primary">
+          {totalCost.toLocaleString("pt-BR", {
+            style: "currency",
+            currency: "BRL",
+          })}
+        </span>
+      </div>
       <dl className="hidden sm:block space-y-2 text-xs text-on-surface-variant mb-3 pb-3 border-b border-border-low">
         <div className="flex justify-between">
           <dt>Aberto por:</dt>
@@ -1067,6 +1172,8 @@ function MaintenanceDetailsDialog({
     amount: 0,
   });
   const [savingCost, setSavingCost] = useState(false);
+  const [removeCostTarget, setRemoveCostTarget] = useState<MaintenanceCostEntry | null>(null);
+  const [removingCost, setRemovingCost] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
   const [completingRecord, setCompletingRecord] = useState(false);
   const activeStepIndex = record ? getActiveStepIndex(record.steps) : -1;
@@ -1078,6 +1185,7 @@ function MaintenanceDetailsDialog({
   useEffect(() => {
     setWaitingPart("");
     setCostDraft({ supplierName: "", partName: "", amount: 0 });
+    setRemoveCostTarget(null);
     setCompletionNote("");
   }, [record?.id]);
 
@@ -1098,6 +1206,22 @@ function MaintenanceDetailsDialog({
       toast.error("Não foi possível registrar o custo.");
     } finally {
       setSavingCost(false);
+    }
+  };
+
+  const removeSupplierCost = async () => {
+    if (!record || !removeCostTarget) return;
+
+    setRemovingCost(true);
+    try {
+      const updatedRecord = await actions.removeExternalCost(record.id, removeCostTarget.id);
+      if (updatedRecord) setRecord(updatedRecord);
+      setRemoveCostTarget(null);
+      toast.success("Peça removida do custo da manutenção.");
+    } catch {
+      toast.error("Não foi possível remover a peça.");
+    } finally {
+      setRemovingCost(false);
     }
   };
 
@@ -1138,12 +1262,12 @@ function MaintenanceDetailsDialog({
       <DialogContent className="w-[calc(100vw-0.75rem)] max-w-2xl max-h-[90vh] overflow-y-auto p-3 sm:p-6">
         {record && (
           <>
-            <DialogHeader className="space-y-2 sm:space-y-3">
-              <div className="flex items-start justify-between gap-2 sm:gap-3">
-                <DialogTitle className="text-lg sm:text-2xl font-black uppercase leading-tight break-words pr-1">
+            <DialogHeader className="space-y-2 pr-8 sm:space-y-3 sm:pr-7">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <DialogTitle className="text-lg sm:text-2xl font-black uppercase leading-tight break-words">
                   {equipmentLabel}
                 </DialogTitle>
-                <div className="flex gap-1 sm:gap-2 shrink-0">
+                <div className="flex flex-wrap gap-1 self-start sm:shrink-0 sm:gap-2">
                   <Button
                     size="sm"
                     variant="outline"
@@ -1395,12 +1519,25 @@ function MaintenanceDetailsDialog({
                           {formatBrDateTime(entry.createdAt)}
                           {entry.createdBy ? ` por ${entry.createdBy}` : ""}
                         </p>
-                        <strong className="font-mono text-primary">
-                          {entry.amount.toLocaleString("pt-BR", {
-                            style: "currency",
-                            currency: "BRL",
-                          })}
-                        </strong>
+                        <div className="flex items-center justify-between gap-2 sm:justify-end">
+                          <strong className="font-mono text-primary">
+                            {entry.amount.toLocaleString("pt-BR", {
+                              style: "currency",
+                              currency: "BRL",
+                            })}
+                          </strong>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 w-8 shrink-0 p-0 border-status-error/40 text-status-error hover:bg-status-error/10"
+                            onClick={() => setRemoveCostTarget(entry)}
+                            aria-label={`Remover ${entry.partName || "peça"}`}
+                            title="Remover peça"
+                          >
+                            <Icon name="delete" />
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1410,6 +1547,40 @@ function MaintenanceDetailsDialog({
                   </p>
                 )}
               </section>
+              <AlertDialog
+                open={Boolean(removeCostTarget)}
+                onOpenChange={(open) => {
+                  if (!open && !removingCost) setRemoveCostTarget(null);
+                }}
+              >
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Remover peça?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      O lançamento de {removeCostTarget?.partName || "peça / serviço"} no valor de{" "}
+                      {removeCostTarget?.amount.toLocaleString("pt-BR", {
+                        style: "currency",
+                        currency: "BRL",
+                      })}{" "}
+                      será removido do custo desta manutenção.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={removingCost}>Cancelar</AlertDialogCancel>
+                    <AlertDialogAction
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void removeSupplierCost();
+                      }}
+                      disabled={removingCost}
+                      className="bg-status-error text-white hover:bg-status-error/90"
+                    >
+                      {removingCost ? "Removendo..." : "Remover"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               {record.description && (
                 <div>
                   <p className="text-xs font-black uppercase tracking-widest text-on-surface-variant mb-2">

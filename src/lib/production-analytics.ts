@@ -1,6 +1,7 @@
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import type { DbEquipmentDailyPart, DbFueling, DbProductionAnalysis, DbTrip } from "@/db/schema";
 import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
+import { resolveEquipmentOperationalClass } from "@/lib/production-consumption-items";
 
 export const AGGREGATE_TRIP_PRICE = 1.65;
 
@@ -550,10 +551,8 @@ function dailyHoursByDateObra(dailyParts: DbEquipmentDailyPart[]) {
 export function calculateMachineMetrics(
   fueling: DbFueling[],
   dailyParts: DbEquipmentDailyPart[],
-  trips: DbTrip[] = [],
+  _trips: DbTrip[] = [],
 ): MachineMetric[] {
-  const productionMap = productionByDateObra(trips);
-  const hoursMap = dailyHoursByDateObra(dailyParts);
   const map = new Map<
     string,
     {
@@ -564,6 +563,8 @@ export function calculateMachineMetrics(
       cost: number;
       allocatedCompactedM3: number;
       allocatedTrips: number;
+      hasExcavationPde: boolean;
+      hasNonExcavationPde: boolean;
       statuses: Set<string>;
     }
   >();
@@ -578,6 +579,8 @@ export function calculateMachineMetrics(
       cost: 0,
       allocatedCompactedM3: 0,
       allocatedTrips: 0,
+      hasExcavationPde: false,
+      hasNonExcavationPde: false,
       statuses: new Set<string>(),
     };
     map.set(key, current);
@@ -596,36 +599,31 @@ export function calculateMachineMetrics(
     item.hours += row.hours;
     if (row.status) item.statuses.add(row.status);
     if (!row.usedInAnalysis || row.hours <= 0) return;
-    const key = `${row.date}|${row.obra || "Sem obra"}`;
-    const production = productionMap.get(key);
-    const totalHours = hoursMap.get(key) ?? 0;
-    if (production && totalHours > 0) {
-      const share = row.hours / totalHours;
-      item.allocatedCompactedM3 += production.compactedM3 * share;
-      item.allocatedTrips += production.trips * share;
-    }
+    const operationalClass = resolveEquipmentOperationalClass({
+      fleet: row.fleet,
+      equipment: row.fleetLabel || row.fleet,
+      obra: row.obra,
+      description: row.status,
+      raw: row,
+    });
+    if (operationalClass.item === "escavacao") item.hasExcavationPde = true;
+    else item.hasNonExcavationPde = true;
   });
 
   return [...map.values()]
     .map((row) => {
       const fuelPerHour = calculateFuelPerHour(row.liters, row.hours);
-      const productionPerHour = calculateProductionPerHour(row.allocatedCompactedM3, row.hours);
-      const fuelPerM3 = calculateFuelPerM3(row.liters, row.allocatedCompactedM3);
-      const efficiencyPercent = calculateOperationalEfficiency({
-        liters: row.liters,
-        hours: row.hours,
-        compactedM3: row.allocatedCompactedM3,
-      });
+      const productionPerHour = 0;
+      const fuelPerM3 = 0;
+      const efficiencyPercent = 0;
       const status =
         row.liters > 0 && row.hours <= 0
           ? "CMB sem PDE"
           : row.hours > 0 && row.liters <= 0
             ? "PDE sem CMB"
-            : row.hours > 0 && row.allocatedCompactedM3 <= 0
-              ? "Equipamento improdutivo"
-              : row.statuses.size
-                ? [...row.statuses].join(", ")
-                : "OK";
+            : row.statuses.size
+              ? [...row.statuses].join(", ")
+              : "OK";
       return {
         equipment: row.equipment,
         label: row.label,
@@ -639,7 +637,7 @@ export function calculateMachineMetrics(
         productionPerHour,
         tripsPerHour: safeDivide(row.allocatedTrips, row.hours),
         fuelPerM3,
-        costPerM3: safeDivide(row.cost, row.allocatedCompactedM3),
+        costPerM3: 0,
         efficiencyPercent,
         status,
       };
@@ -1023,7 +1021,11 @@ function buildAuditIssues(
         message: `PDE sem CMB para equipamento próprio ${row.equipment}.`,
       });
     }
-    if (row.hours > 0 && row.allocatedCompactedM3 <= 0) {
+    if (
+      row.hours > 0 &&
+      row.allocatedCompactedM3 <= 0 &&
+      row.status === "Equipamento improdutivo"
+    ) {
       issues.push({
         severity: "critical",
         type: "EQUIPAMENTO_IMPRODUTIVO",
@@ -1121,7 +1123,7 @@ function buildOperationalAlerts(
   }
 
   const lowMachine = machineMetrics
-    .filter((row) => row.hours > 0 && row.liters > 0)
+    .filter((row) => row.hours > 0 && row.liters > 0 && row.efficiencyPercent > 0)
     .sort((a, b) => a.efficiencyPercent - b.efficiencyPercent)[0];
   if (lowMachine && lowMachine.efficiencyPercent < 45) {
     alerts.push(`Equipamento ${lowMachine.equipment} teve baixa produtividade operacional.`);
@@ -1242,11 +1244,7 @@ export function buildProductionAnalytics({
     },
     context: {
       scopes: ["daily", "weekly", "monthly", "worksite", "global"],
-      obras: [
-        ...new Set(
-          filteredTrips.map((row) => row.obra).filter(Boolean),
-        ),
-      ].sort(),
+      obras: [...new Set(filteredTrips.map((row) => row.obra).filter(Boolean))].sort(),
       materials: [
         ...new Set(
           [

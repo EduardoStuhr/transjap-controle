@@ -454,8 +454,16 @@
 
   .app-dialog-content {
     width: min(calc(100vw - var(--safe-area-inset-left) - var(--safe-area-inset-right) - 1rem), 32rem);
-    max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 1rem) !important;
+    max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 4.5rem) !important;
     overflow-y: auto;
+  }
+
+  .app-dialog-close {
+    top: calc(-2.75rem - min(var(--safe-area-inset-top), 0.5rem));
+  }
+
+  :root.capacitor-android .app-dialog-content {
+    max-height: calc(var(--app-viewport-height) - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 4.75rem) !important;
   }
 
   .app-sheet-content {

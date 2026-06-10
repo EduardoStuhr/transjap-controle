@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as TrocaFiltrosDieselRouteImport } from './routes/troca-filtros-diesel'
 import { Route as RelatoriosRouteImport } from './routes/relatorios'
 import { Route as ProducaoConsumoRouteImport } from './routes/producao-consumo'
 import { Route as PerfilRouteImport } from './routes/perfil'
@@ -20,6 +21,11 @@ import { Route as CalendarioRouteImport } from './routes/calendario'
 import { Route as AgendaRouteImport } from './routes/agenda'
 import { Route as IndexRouteImport } from './routes/index'
 
+const TrocaFiltrosDieselRoute = TrocaFiltrosDieselRouteImport.update({
+  id: '/troca-filtros-diesel',
+  path: '/troca-filtros-diesel',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RelatoriosRoute = RelatoriosRouteImport.update({
   id: '/relatorios',
   path: '/relatorios',
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/perfil': typeof PerfilRoute
   '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
+  '/troca-filtros-diesel': typeof TrocaFiltrosDieselRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -94,6 +101,7 @@ export interface FileRoutesByTo {
   '/perfil': typeof PerfilRoute
   '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
+  '/troca-filtros-diesel': typeof TrocaFiltrosDieselRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,6 +115,7 @@ export interface FileRoutesById {
   '/perfil': typeof PerfilRoute
   '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
+  '/troca-filtros-diesel': typeof TrocaFiltrosDieselRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
     | '/perfil'
     | '/producao-consumo'
     | '/relatorios'
+    | '/troca-filtros-diesel'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -133,6 +143,7 @@ export interface FileRouteTypes {
     | '/perfil'
     | '/producao-consumo'
     | '/relatorios'
+    | '/troca-filtros-diesel'
   id:
     | '__root__'
     | '/'
@@ -145,6 +156,7 @@ export interface FileRouteTypes {
     | '/perfil'
     | '/producao-consumo'
     | '/relatorios'
+    | '/troca-filtros-diesel'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -158,10 +170,18 @@ export interface RootRouteChildren {
   PerfilRoute: typeof PerfilRoute
   ProducaoConsumoRoute: typeof ProducaoConsumoRoute
   RelatoriosRoute: typeof RelatoriosRoute
+  TrocaFiltrosDieselRoute: typeof TrocaFiltrosDieselRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/troca-filtros-diesel': {
+      id: '/troca-filtros-diesel'
+      path: '/troca-filtros-diesel'
+      fullPath: '/troca-filtros-diesel'
+      preLoaderRoute: typeof TrocaFiltrosDieselRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/relatorios': {
       id: '/relatorios'
       path: '/relatorios'
@@ -246,6 +266,7 @@ const rootRouteChildren: RootRouteChildren = {
   PerfilRoute: PerfilRoute,
   ProducaoConsumoRoute: ProducaoConsumoRoute,
   RelatoriosRoute: RelatoriosRoute,
+  TrocaFiltrosDieselRoute: TrocaFiltrosDieselRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

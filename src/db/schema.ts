@@ -456,3 +456,32 @@ export const fuelAttribution = sqliteTable(
 
 export type DbFuelAttribution = typeof fuelAttribution.$inferSelect;
 export type DbFuelAttributionInsert = typeof fuelAttribution.$inferInsert;
+
+export const dieselFilterChanges = sqliteTable(
+  "diesel_filter_changes",
+  {
+    id: text("id").primaryKey(),
+    date: text("date").notNull(),
+    primaryFilter: text("primary_filter"),
+    secondaryFilter: text("secondary_filter"),
+    racor: text("racor"),
+    brand: text("brand"),
+    fleet: text("fleet").notNull(),
+    hourmeter: real("hourmeter").notNull(),
+    obra: text("obra"),
+    responsible: text("responsible"),
+    notes: text("notes"),
+    createdBy: text("created_by"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at"),
+  },
+  (table) => ({
+    idxFleetDate: index("idx_diesel_filter_changes_fleet_date").on(table.fleet, table.date),
+    idxDate: index("idx_diesel_filter_changes_date").on(table.date),
+    idxObra: index("idx_diesel_filter_changes_obra").on(table.obra),
+    idxResponsible: index("idx_diesel_filter_changes_responsible").on(table.responsible),
+  }),
+);
+
+export type DbDieselFilterChange = typeof dieselFilterChanges.$inferSelect;
+export type DbDieselFilterChangeInsert = typeof dieselFilterChanges.$inferInsert;

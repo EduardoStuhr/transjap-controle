@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { authActions, useAuthStore } from "@/lib/auth-store";
+import { isEduardoUser, type AuthUser } from "@/lib/auth-users";
 import { getInventoryAlerts, useInventoryStore } from "@/lib/inventory-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskStore } from "@/lib/task-store";
@@ -28,10 +29,24 @@ const NAV = [
   { to: "/manutencao", label: "Manutenção", icon: "build" },
   { to: "/equipamentos", label: "Equipamentos", icon: "construction" },
   { to: "/producao-consumo", label: "Produção × Consumo", icon: "query_stats" },
+  {
+    to: "/troca-filtros-diesel",
+    label: "Troca de Filtros Diesel",
+    icon: "oil_barrel",
+    restrictedTo: "eduardo",
+  },
   { to: "/estoque", label: "Estoque de Peças", icon: "inventory_2" },
   { to: "/relatorios", label: "Relatórios", icon: "insights" },
   { to: "/perfil", label: "Perfil", icon: "account_circle" },
 ] as const;
+
+function canShowNavItem(
+  item: (typeof NAV)[number],
+  user: Pick<AuthUser, "id" | "name"> | null | undefined,
+) {
+  if (!("restrictedTo" in item)) return true;
+  return item.restrictedTo === "eduardo" && isEduardoUser(user);
+}
 
 const READ_ALERTS_STORAGE_PREFIX = "transjap:alerts:read:v1:";
 
@@ -134,6 +149,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   const [notifOpen, setNotifOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const user = useAuthStore((snapshot) => snapshot.user);
+  const visibleNav = useMemo(() => NAV.filter((item) => canShowNavItem(item, user)), [user]);
   const [viewedAlertKeys, setViewedAlertKeys] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
@@ -597,7 +613,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
         </main>
       </div>
       <nav className="app-bottom-nav md:hidden fixed z-50 flex items-start overflow-x-auto scrollbar-hide border-t border-border-low bg-surface-low/95 backdrop-blur pt-2 gap-1">
-        {NAV.map((item) => {
+        {visibleNav.map((item) => {
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link
@@ -661,6 +677,7 @@ function SidebarInner({
 }) {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
+  const visibleNav = useMemo(() => NAV.filter((item) => canShowNavItem(item, user)), [user]);
   return (
     <>
       <div className="p-6 flex items-center justify-center">
@@ -671,7 +688,7 @@ function SidebarInner({
         />
       </div>
       <nav className="mt-6 flex flex-col flex-1 px-4 gap-1">
-        {NAV.map((item) => {
+        {visibleNav.map((item) => {
           const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
           return (
             <Link

@@ -1255,6 +1255,7 @@ export function ChartProductivity({
 
 export type EquipmentEfficiencyRankingPoint = {
   id: string;
+  item?: string;
   equipamento?: string;
   litros?: number;
   horas?: number;
@@ -1388,7 +1389,10 @@ export function ChartM3PerLiterRanking({
   topN?: number;
 }) {
   const rows = data
-    .filter((row) => Number.isFinite(row.lpm3) && Number(row.lpm3) > 0)
+    .filter(
+      (row) =>
+        row.item !== "escavacao" && Number.isFinite(row.lpm3) && Number(row.lpm3) > 0,
+    )
     .sort((a, b) => Number(b.lpm3 ?? 0) - Number(a.lpm3 ?? 0))
     .slice(0, topN);
 
@@ -1480,7 +1484,7 @@ export function ChartCompareBars({
 }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ top: 14, right: 18, left: 0, bottom: 4 }}>
+      <BarChart data={data} margin={{ top: 28, right: 18, left: 0, bottom: 4 }}>
         <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
         <XAxis
           dataKey={nameKey}
@@ -1489,7 +1493,13 @@ export function ChartCompareBars({
           tickLine={false}
           interval={0}
         />
-        <YAxis tick={TICK} axisLine={false} tickLine={false} width={44} />
+        <YAxis
+          tick={TICK}
+          axisLine={false}
+          tickLine={false}
+          width={44}
+          domain={[0, (dataMax: number) => (dataMax > 0 ? dataMax * 1.15 : 1)]}
+        />
         <Tooltip content={<RichTooltip units={{ [dataKey]: unit }} />} />
         <Bar dataKey={dataKey} radius={[3, 3, 0, 0]} barSize={26}>
           {data.map((_, index) => (
@@ -1502,6 +1512,7 @@ export function ChartCompareBars({
             <LabelList
               dataKey={dataKey}
               position="top"
+              offset={6}
               formatter={(value) =>
                 typeof value === "number" ? `${fmt.dec(value, 2)}${unit ? ` ${unit}` : ""}` : ""
               }

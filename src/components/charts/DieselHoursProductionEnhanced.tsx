@@ -38,6 +38,7 @@ export interface EfficiencyBubblePoint {
 
 interface DieselHoursProductionEnhancedProps {
   data: EfficiencyBubblePoint[];
+  item?: string;
   title?: string;
   description?: string;
   size?: "sm" | "md" | "lg" | "full";
@@ -47,12 +48,44 @@ interface DieselHoursProductionEnhancedProps {
 function RichBubbleTooltip({
   active,
   payload,
+  hideProduction = false,
 }: {
   active?: boolean;
   payload?: Array<{ payload: EfficiencyBubblePoint }>;
+  hideProduction?: boolean;
 }) {
   if (!active || !payload?.[0]) return null;
   const point = payload[0].payload;
+
+  if (hideProduction) {
+    return (
+      <div
+        style={{
+          background: "rgba(15,15,15,0.96)",
+          border: "0.5px solid rgba(255,255,255,0.12)",
+          borderRadius: 8,
+          padding: "8px 12px",
+          fontSize: 12,
+        }}
+      >
+        <div className="mb-2 font-bold">{point.name}</div>
+        <div className="space-y-1 text-on-surface-variant">
+          <div className="flex justify-between gap-4">
+            <span>Horas:</span>
+            <span style={{ fontFamily: "monospace" }}>{point.hours.toFixed(1)} h</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>Litros diesel:</span>
+            <span style={{ fontFamily: "monospace" }}>{point.liters.toFixed(0)} L</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>Diesel/hora:</span>
+            <span style={{ fontFamily: "monospace" }}>{point.fuelPerHour.toFixed(2)} L/h</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -104,19 +137,23 @@ function RichBubbleTooltip({
 
 export function DieselHoursProductionEnhanced({
   data,
+  item,
   title = "Eficiência Operacional",
   description = "Diesel × Horas × Produção",
   size = "lg",
   hasData = true,
 }: DieselHoursProductionEnhancedProps) {
+  const hideProduction = item === "escavacao";
   const stats = useMemo(() => {
     if (data.length === 0) {
-      return { avgHours: 0, avgM3: 0 };
+      return { avgHours: 0, avgY: 0 };
     }
     const avgHours = data.reduce((sum, p) => sum + p.hours, 0) / data.length;
-    const avgM3 = data.reduce((sum, p) => sum + p.compactedM3, 0) / data.length;
-    return { avgHours, avgM3 };
-  }, [data]);
+    const avgY =
+      data.reduce((sum, p) => sum + (hideProduction ? p.fuelPerHour : p.compactedM3), 0) /
+      data.length;
+    return { avgHours, avgY };
+  }, [data, hideProduction]);
 
   // Calculate bubble size limits to prevent overlaps
   const bubbleSizeRange = useMemo(() => {
@@ -161,17 +198,19 @@ export function DieselHoursProductionEnhanced({
                 fontSize: 10,
               }}
             />
-            <ReferenceLine
-              y={stats.avgM3}
+            {!hideProduction && (
+              <ReferenceLine
+              y={stats.avgY}
               stroke="rgba(255,255,255,0.2)"
               strokeDasharray="5 5"
               label={{
-                value: `Med: ${stats.avgM3.toFixed(0)}m³`,
+                value: `Med: ${stats.avgY.toFixed(0)}m3`,
                 position: "insideLeft",
                 fill: "rgba(255,255,255,0.5)",
                 fontSize: 10,
               }}
-            />
+              />
+            )}
 
             <XAxis
               type="number"
@@ -185,9 +224,24 @@ export function DieselHoursProductionEnhanced({
                 fill: "rgba(255,255,255,0.7)",
               }}
             />
+            {hideProduction && (
+              <YAxis
+                type="number"
+                dataKey="fuelPerHour"
+                name="L/h"
+                {...CHART_AXIS_PROPS}
+                label={{
+                  value: "L/h",
+                  angle: -90,
+                  position: "insideLeft",
+                  fill: "rgba(255,255,255,0.7)",
+                }}
+              />
+            )}
             <YAxis
               type="number"
-              dataKey="compactedM3"
+              dataKey={hideProduction ? "fuelPerHour" : "compactedM3"}
+              hide={hideProduction}
               name="m³ Produzido"
               {...CHART_AXIS_PROPS}
               label={{
@@ -206,7 +260,10 @@ export function DieselHoursProductionEnhanced({
               name="Diesel (L)"
             />
 
-            <Tooltip content={<RichBubbleTooltip />} cursor={{ strokeDasharray: "3 3" }} />
+            <Tooltip
+              content={<RichBubbleTooltip hideProduction={hideProduction} />}
+              cursor={{ strokeDasharray: "3 3" }}
+            />
 
             <Legend
               wrapperStyle={CHART_LEGEND_STYLE as CSSProperties}
@@ -275,7 +332,7 @@ export function DieselHoursProductionEnhanced({
       </div>
 
       {/* Detailed view for small datasets */}
-      {data.length <= 3 && (
+      {data.length <= 3 && !hideProduction && (
         <div className="space-y-2 rounded-lg border border-border-low bg-surface-container p-4">
           <h4 className="mb-3 font-black uppercase tracking-widest text-on-surface">
             Detalhes de cada ponto

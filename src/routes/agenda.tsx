@@ -3,6 +3,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 
 import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
+import { useActiveTabScroll } from "@/hooks/useActiveTabScroll";
 import { useAuthStore, type AuthUser } from "@/lib/auth-store";
 import { getUrgencyLevel } from "@/lib/urgency";
 import { useTaskActions, useTaskStore } from "@/lib/task-store";
@@ -134,6 +135,7 @@ function logAgendaTaskLayout() {
 }
 
 function Agenda() {
+  const filterTabsRef = useActiveTabScroll<HTMLDivElement>();
   const user = useAuthStore((snapshot) => snapshot.user);
   const taskActions = useTaskActions();
   const tasks = useTaskStore((snapshot) => snapshot.tasks);
@@ -363,18 +365,20 @@ function Agenda() {
       )}
 
       <div
+        ref={filterTabsRef}
         data-debug-name="Agenda filters"
         data-agenda-filters
-        className="flex gap-2 mb-6 overflow-x-auto pb-2"
+        className="flex gap-2 mb-6 overflow-x-auto pb-2 scroll-smooth overscroll-x-contain"
       >
         {FILTERS.map((status) => (
           <button
             key={status}
             type="button"
             onClick={() => setFilter(status)}
+            data-active={filter === status}
             className={`px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider whitespace-nowrap transition-industrial ${
               filter === status
-                ? "bg-primary text-on-primary shadow-industrial"
+                ? "bg-primary text-on-primary shadow-industrial border-b-2 border-primary"
                 : "bg-surface-container border border-border-low text-on-surface hover:border-primary/50"
             }`}
           >

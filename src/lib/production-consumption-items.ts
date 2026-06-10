@@ -8,6 +8,7 @@ import {
 } from "@/lib/equipment-normalization";
 
 export type OperationalItem =
+  | "limpeza"
   | "escavacao"
   | "transporte"
   | "tratamento"
@@ -15,6 +16,7 @@ export type OperationalItem =
   | "outros";
 
 export const OPERATIONAL_ITEM_LABELS: Record<OperationalItem, string> = {
+  limpeza: "Limpeza",
   escavacao: "Escavação",
   transporte: "Transporte",
   tratamento: "Tratamento",
@@ -23,6 +25,7 @@ export const OPERATIONAL_ITEM_LABELS: Record<OperationalItem, string> = {
 };
 
 export const OPERATIONAL_ITEM_ORDER: OperationalItem[] = [
+  "limpeza",
   "escavacao",
   "transporte",
   "tratamento",
@@ -36,6 +39,7 @@ export type OperationalItemInput = {
   plate?: string | null;
   equipment?: string | null;
   equipmentLabel?: string | null;
+  obra?: string | null;
   vehicleType?: string | null;
   type?: string | null;
   model?: string | null;
@@ -61,8 +65,12 @@ export type EquipmentOperationalClass = {
   item: OperationalItem;
   isAggregate: boolean;
   reason: string;
-  classificationSource: "aggregate" | "catalog" | "text" | "fallback";
+  classificationSource: "fixed" | "aggregate" | "catalog" | "text" | "fallback";
 };
+
+export const FIXED_CLEANING_FLEET = "236";
+export const CAMPO_LOG_CLEANING_FLEET = "238";
+export const CAMPO_LOG_CLEANING_WORKSITE = "Campo Log 05";
 
 const catalogByFleet = new Map(
   FLEET_EQUIPMENT_CATALOG.map((item) => [normalizeFleet(item.id), item.model]),
@@ -109,6 +117,49 @@ function rawFleetLikeValues(value: unknown): string[] {
     record.equipmentLabel,
     record.equipment_label,
   ].flatMap((item) => rawStringValues(item));
+}
+
+function rawWorksiteLikeValues(value: unknown): string[] {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return [];
+  const record = value as Record<string, unknown>;
+  return [
+    record.obra,
+    record.worksite,
+    record.resolvedObraLabel,
+    record.resolved_obra_label,
+    record.obraOriginal,
+    record.obra_original,
+  ].flatMap((item) => rawStringValues(item));
+}
+
+function hasFleet(input: OperationalItemInput, fleet: string): boolean {
+  const values = [
+    input.prefix,
+    input.fleet,
+    input.equipment,
+    input.equipmentLabel,
+    ...rawFleetLikeValues(input.raw),
+  ].filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+
+  return values.some(
+    (value) => normalizeEquipmentKey(value, { source: "ownFleet" }) === `FROTA:${fleet}`,
+  );
+}
+
+function normalizeWorksite(value: string | null | undefined) {
+  return normalizeText(value).replace(/\b0+([0-9]+)\b/g, "$1");
+}
+
+export function isFixedCleaningFleet(input: OperationalItemInput): boolean {
+  return hasFleet(input, FIXED_CLEANING_FLEET);
+}
+
+export function isCampoLogCleaningFleet(input: OperationalItemInput): boolean {
+  if (!hasFleet(input, CAMPO_LOG_CLEANING_FLEET)) return false;
+  const targetWorksite = normalizeWorksite(CAMPO_LOG_CLEANING_WORKSITE);
+  return [input.obra, ...rawWorksiteLikeValues(input.raw)].some(
+    (value) => normalizeWorksite(value) === targetWorksite,
+  );
 }
 
 export function isPipaLike(input: PipaLikeInput): boolean {
@@ -159,9 +210,7 @@ function joinedSearchText(input: OperationalItemInput) {
 }
 
 function itemFromText(text: string): { item: OperationalItem; reason: string } | null {
-  if (
-    /\b(rolo|compactador|hamm|dynapac|muller|cp533|ca\s*25|ca\s*30)\b/.test(text)
-  ) {
+  if (/\b(rolo|compactador|hamm|dynapac|muller|cp533|ca\s*25|ca\s*30)\b/.test(text)) {
     return { item: "compactacao", reason: "texto/modelo indica rolo ou compactador" };
   }
 
@@ -181,7 +230,10 @@ function itemFromText(text: string): { item: OperationalItem; reason: string } |
       text,
     )
   ) {
-    return { item: "tratamento", reason: "texto/modelo indica tratamento, patrol, trator ou apoio" };
+    return {
+      item: "tratamento",
+      reason: "texto/modelo indica tratamento, patrol, trator ou apoio",
+    };
   }
 
   return null;
@@ -195,13 +247,33 @@ function catalogModelForKey(key: string) {
 export function resolveEquipmentOperationalClass(
   input: OperationalItemInput,
 ): EquipmentOperationalClass {
-  const value = input.fleet || input.equipment || "";
+  const value = input.fleet || input.equipment || input.prefix || input.equipmentLabel || "";
   const context: EquipmentContext = {
     description: [input.type, input.model, input.description].filter(Boolean).join(" "),
   };
   const key = normalizeEquipmentKey(value, context);
   const aggregate = isAggregateEquipment(value, context);
   const label = displayEquipmentLabel(value, context);
+
+  const fixedCleaningFleet = isFixedCleaningFleet(input)
+    ? FIXED_CLEANING_FLEET
+    : isCampoLogCleaningFleet(input)
+      ? CAMPO_LOG_CLEANING_FLEET
+      : null;
+
+  if (fixedCleaningFleet) {
+    return {
+      key: `FROTA:${fixedCleaningFleet}`,
+      label: `FROTA ${fixedCleaningFleet}`,
+      item: "limpeza",
+      isAggregate: false,
+      reason:
+        fixedCleaningFleet === FIXED_CLEANING_FLEET
+          ? `regra fixa da frota ${FIXED_CLEANING_FLEET}: classificada como Limpeza`
+          : `regra da frota ${CAMPO_LOG_CLEANING_FLEET} em ${CAMPO_LOG_CLEANING_WORKSITE}: classificada como Limpeza`,
+      classificationSource: "fixed",
+    };
+  }
 
   if (
     isPipaLike({

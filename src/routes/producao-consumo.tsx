@@ -153,9 +153,7 @@ const ChartLphRanking = lazyChart("ChartLphRanking");
 const ChartM3Diesel = lazyChart("ChartM3Diesel");
 const ChartM3DieselMultiObra = lazyChart("ChartM3DieselMultiObra");
 const ChartEfficiencyMultiObra = lazyChart("ChartEfficiencyMultiObra");
-const ChartM3PerLiterRanking = lazyChart("ChartM3PerLiterRanking");
 const ChartMultiLine = lazyChart("ChartMultiLine");
-const ChartProductivity = lazyChart("ChartProductivity");
 const ChartProducaoEmpoladaDiesel = lazyChart("ChartProducaoEmpoladaDiesel");
 const ChartProdConsumo = lazyChart("ChartProdConsumo");
 const ChartProdStack = lazyChart("ChartProdStack");
@@ -191,7 +189,11 @@ function timeEnd(label: string, enabled: boolean) {
 
 function isOperationalTab(tab: string): tab is Exclude<OperationalItem, "outros"> {
   return (
-    tab === "escavacao" || tab === "transporte" || tab === "tratamento" || tab === "compactacao"
+    tab === "limpeza" ||
+    tab === "escavacao" ||
+    tab === "transporte" ||
+    tab === "tratamento" ||
+    tab === "compactacao"
   );
 }
 
@@ -618,7 +620,7 @@ type ClassifiedFuelUsageRow = {
 };
 type DieselM3OriginFilter = "all" | DieselM3Source;
 type DieselM3View = "obraDay" | "item" | "equipment";
-type DieselM3RankingMode = "diesel" | "worstLitersPerM3" | "bestM3PerLiter";
+type DieselM3RankingMode = "diesel" | "lph";
 
 type DieselM3Filters = {
   dateFrom: string;
@@ -793,6 +795,7 @@ function resolveFuelOperationalClassification(
     plate: fuel.plate,
     equipment: resolvedLabel,
     equipmentLabel: resolvedLabel,
+    obra: resolvedWorksiteLabel(fuel as DbFueling & ObraScopeAudit),
     vehicleType: fuel.vehicleType,
     type: fuel.vehicleType,
     description: `${fuel.owner} ${fuel.operator} ${fuel.status ?? ""}`,
@@ -811,32 +814,70 @@ function resolveFuelOperationalClassification(
       equipmentLabel: resolvedLabel,
       raw: fuel,
     });
-  const isAggregateByPdeRule = !isPipa && rawAggregateByPdeRule;
-  const operationalItem = isPipa
-    ? "tratamento"
-    : isAggregateByPdeRule || operationalClass.isAggregate
-      ? "transporte"
-      : operationalClass.item;
-  const isAggregate = rawAggregateByPdeRule || operationalClass.isAggregate;
+  const hasFixedOperationalRule = operationalClass.classificationSource === "fixed";
+  const isAggregateByPdeRule = !hasFixedOperationalRule && !isPipa && rawAggregateByPdeRule;
+  const operationalItem = hasFixedOperationalRule
+    ? operationalClass.item
+    : isPipa
+      ? "tratamento"
+      : isAggregateByPdeRule || operationalClass.isAggregate
+        ? "transporte"
+        : operationalClass.item;
+  const isAggregate =
+    !hasFixedOperationalRule && (rawAggregateByPdeRule || operationalClass.isAggregate);
 
   return {
     equipment,
     resolvedLabel,
     operationalItem,
     dieselAuditSource: dieselAuditSourceForFuel(fuel),
-    kind: isPipa ? "ownFleet" : isAggregate ? "aggregate" : "ownFleet",
+    kind: hasFixedOperationalRule || isPipa ? "ownFleet" : isAggregate ? "aggregate" : "ownFleet",
     existsInPDE,
     isAggregate,
     isAggregateByPdeRule,
     isPipa,
     includedInTransport: operationalItem === "transporte" && !isPipa,
-    reason: isPipa
-      ? "Pipa redirecionado para Tratamento"
-      : isAggregateByPdeRule
-        ? invalidHourmeter
-          ? "CB/agregado com horimetro CMB invalido; usando CMB bruto em Transporte"
-          : "nao consta em PDE real; tratado como CB/agregado"
-        : operationalClass.reason,
+    reason: hasFixedOperationalRule
+      ? operationalClass.reason
+      : isPipa
+        ? "Pipa redirecionado para Tratamento"
+        : isAggregateByPdeRule
+          ? invalidHourmeter
+            ? "CB/agregado com horimetro CMB invalido; usando CMB bruto em Transporte"
+            : "nao consta em PDE real; tratado como CB/agregado"
+          : operationalClass.reason,
+  };
+}
+
+function resolveTripOperationalClassification(trip: DbTrip) {
+  const rawEquipment = equipmentRaw(trip);
+  const operationalClass = resolveEquipmentOperationalClass({
+    prefix: trip.prefix,
+    fleet: rawEquipment,
+    plate: trip.plate,
+    equipment: equipmentLabel(trip, "trip"),
+    obra: resolvedWorksiteLabel(trip as DbTrip & ObraScopeAudit),
+    description: `${trip.operation} ${trip.owner} ${trip.operator} ${trip.status ?? ""}`,
+    raw: trip,
+  });
+
+  if (operationalClass.classificationSource === "fixed") {
+    return {
+      item: operationalClass.item,
+      equipment: operationalClass.key,
+      label: operationalClass.label,
+      kind: "ownFleet" as EquipmentKind,
+      reason: operationalClass.reason,
+    };
+  }
+
+  const equipment = normalizeEquipmentKey(rawEquipment, "aggregate");
+  return {
+    item: "transporte" as OperationalItem,
+    equipment,
+    label: equipmentLabelFromKey(equipment, equipmentLabel(trip, "trip")),
+    kind: "aggregate" as EquipmentKind,
+    reason: "viagem RCO produtiva classificada como transporte",
   };
 }
 
@@ -977,6 +1018,10 @@ function divide(numerator: number, denominator: number) {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
+function suppressEquipmentProductionMetrics(_item: OperationalItem) {
+  return true;
+}
+
 function worksiteLabel(value: string | null | undefined) {
   const label = String(value ?? "").trim();
   return label || "Obra indefinida";
@@ -1104,9 +1149,10 @@ function buildPdeOperationalHours(dailyParts: DbEquipmentDailyPart[]) {
     const item = resolveEquipmentOperationalClass({
       fleet: part.fleet,
       equipment: part.fleetLabel || part.fleet,
+      obra: resolvedWorksiteLabel(part as DbEquipmentDailyPart & ObraScopeAudit),
       description: `${part.sourceSheet} ${part.status}`,
     }).item;
-    if (item === "outros") return;
+    if (item === "limpeza" || item === "outros") return;
     const equipmentKey =
       normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart") ||
       part.fleet ||
@@ -1191,9 +1237,10 @@ function buildEquipmentOperationalShare({
     const item = resolveEquipmentOperationalClass({
       fleet: part.fleet,
       equipment: part.fleetLabel || part.fleet,
+      obra: resolvedWorksiteLabel(part as DbEquipmentDailyPart & ObraScopeAudit),
       description: `${part.sourceSheet} ${part.status}`,
     }).item;
-    if (item === "outros") return;
+    if (item === "limpeza" || item === "outros") return;
     const dedupKey = `${part.date}|${obraKey}|${item}|${dailyPartEquipmentKey(part)}`;
     if (countedTotalHoursKeys.has(dedupKey)) return;
     countedTotalHoursKeys.add(dedupKey);
@@ -1220,8 +1267,10 @@ function buildEquipmentOperationalShare({
     const item = resolveEquipmentOperationalClass({
       fleet: part.fleet,
       equipment: part.fleetLabel || part.fleet,
+      obra,
       description: `${part.sourceSheet} ${part.status}`,
     }).item;
+    if (item === "limpeza" || item === "escavacao") return;
     const dayObraKey = dateWorksiteKey(part.date, obraKey);
     const totalOperationalHours = totalOperationalHoursByDateObra.get(dayObraKey) ?? 0;
     const itemTotalHours = itemOperationalHoursByDateObra.get(`${dayObraKey}|${item}`) ?? 0;
@@ -1342,7 +1391,7 @@ function itemDailyChartRows(summary: ItemSummary) {
       m3: fixedNumber(relatedM3, 2),
       lPorM3: fixedNumber(m3PerLiter, 3),
       m3PerLiter: fixedNumber(m3PerLiter, 3),
-      m3PorH: fixedNumber(itemHours > 0 ? divide(relatedM3, itemHours) : 0, 2),
+      m3PorH: 0,
       horas: fixedNumber(itemHours, 2),
       horasOperacionaisDia: fixedNumber(day.totalOperationalHours, 2),
       participacao: fixedNumber(divide(itemHours, day.totalOperationalHours) * 100, 2),
@@ -1354,6 +1403,7 @@ function itemEquipmentChartRows(summary: ItemSummary) {
   return summary.equipment
     .filter((row) => row.liters > 0 || row.hours > 0 || row.m3 > 0 || row.trips > 0)
     .map((row) => {
+      const suppressEquipmentProduction = suppressEquipmentProductionMetrics(summary.item);
       const shareDays = row.productionShares.filter((share) => share.itemTotalHours > 0);
       const averageShare = divide(
         shareDays.reduce((sum, share) => sum + share.share, 0),
@@ -1361,17 +1411,18 @@ function itemEquipmentChartRows(summary: ItemSummary) {
       );
       return {
         id: row.label,
+        item: row.item,
         equipamento: row.label,
         litros: fixedNumber(row.liters, 2),
         horas: fixedNumber(row.hours, 2),
         lph: fixedNumber(row.fuelPerHour, 2),
-        lpm3: fixedNumber(row.fuelPerM3, 3),
-        m3: fixedNumber(row.m3, 2),
+        lpm3: suppressEquipmentProduction ? 0 : fixedNumber(row.fuelPerM3, 3),
+        m3: suppressEquipmentProduction ? 0 : fixedNumber(row.m3, 2),
         share: fixedNumber(averageShare, 4),
         dias: shareDays.length,
-        viagens: fixedNumber(row.trips, 0),
-        lViagem: fixedNumber(row.fuelPerTrip, 2),
-        m3PorH: fixedNumber(row.productionPerHour, 2),
+        viagens: suppressEquipmentProduction ? 0 : fixedNumber(row.trips, 0),
+        lViagem: suppressEquipmentProduction ? 0 : fixedNumber(row.fuelPerTrip, 2),
+        m3PorH: suppressEquipmentProduction ? 0 : fixedNumber(row.productionPerHour, 2),
       };
     });
 }
@@ -1411,9 +1462,32 @@ function sumByKey<T>(rows: T[], keyOf: (row: T) => string, valueOf: (row: T) => 
 function ItemKpiGrid({ summary, mode }: { summary: ItemSummary; mode: OperationalItem }) {
   const equipmentCount = summary.equipment.filter(isCountableEquipment).length;
 
+  if (mode === "limpeza") {
+    return (
+      <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-4 gap-3">
+        <KpiCardCompact
+          label="Diesel"
+          value={formatLiters(summary.diesel)}
+          icon="local_gas_station"
+        />
+        <KpiCardCompact
+          label="Horas trabalhadas"
+          value={formatHours(summary.hours)}
+          icon="schedule"
+        />
+        <KpiCardCompact label="L/h" value={formatNumber(summary.fuelPerHour, 2)} icon="speed" />
+        <KpiCardCompact
+          label="Equipamentos"
+          value={String(equipmentCount)}
+          icon="precision_manufacturing"
+        />
+      </div>
+    );
+  }
+
   if (mode === "transporte") {
     return (
-      <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <KpiCardCompact
           label="Viagens"
           value={formatNumber(summary.trips, 0)}
@@ -1425,7 +1499,6 @@ function ItemKpiGrid({ summary, mode }: { summary: ItemSummary; mode: Operationa
           value={formatLiters(summary.diesel)}
           icon="local_gas_station"
         />
-        <KpiCardCompact label="Custo logistico" value={formatBRL(summary.cost)} icon="payments" />
         <KpiCardCompact label="m3/L" value={formatNumber(summary.fuelPerM3, 3)} icon="speed" />
         <KpiCardCompact
           label="L/viagem"
@@ -1460,19 +1533,10 @@ function ItemKpiGrid({ summary, mode }: { summary: ItemSummary; mode: Operationa
   );
 }
 
-function ItemEquipmentTable({
-  rows,
-  mode,
-}: {
-  rows: ReturnType<typeof itemEquipmentChartRows>;
-  mode: OperationalItem;
-}) {
+function ItemEquipmentTable({ rows }: { rows: ReturnType<typeof itemEquipmentChartRows> }) {
   if (rows.length === 0) return null;
 
-  const headings =
-    mode === "transporte"
-      ? ["Equipamento", "Viagens", "m3", "Diesel", "L/viagem", "m3/L"]
-      : ["Equipamento", "Horas", "Diesel", "L/h", "m3", "m3/L"];
+  const headings = ["Equipamento", "Horas", "Diesel", "L/h"];
 
   return (
     <div className="rounded border border-border-low bg-surface-container p-4">
@@ -1494,23 +1558,9 @@ function ItemEquipmentTable({
             {rows.slice(0, 12).map((row) => (
               <tr key={row.id} className="border-b border-border-low/40">
                 <td className="py-2 pr-4 font-semibold">{row.equipamento}</td>
-                {mode === "transporte" ? (
-                  <>
-                    <td className="py-2 pr-4 tnum">{formatNumber(row.viagens, 0)}</td>
-                    <td className="py-2 pr-4 tnum">{formatM3(row.m3)}</td>
-                    <td className="py-2 pr-4 tnum">{formatLiters(row.litros)}</td>
-                    <td className="py-2 pr-4 tnum">{formatNumber(row.lViagem, 2)}</td>
-                    <td className="py-2 pr-4 tnum">{formatNumber(row.lpm3, 3)}</td>
-                  </>
-                ) : (
-                  <>
-                    <td className="py-2 pr-4 tnum">{formatHours(row.horas)}</td>
-                    <td className="py-2 pr-4 tnum">{formatLiters(row.litros)}</td>
-                    <td className="py-2 pr-4 tnum">{formatNumber(row.lph, 2)}</td>
-                    <td className="py-2 pr-4 tnum">{formatM3(row.m3)}</td>
-                    <td className="py-2 pr-4 tnum">{formatNumber(row.lpm3, 3)}</td>
-                  </>
-                )}
+                <td className="py-2 pr-4 tnum">{formatHours(row.horas)}</td>
+                <td className="py-2 pr-4 tnum">{formatLiters(row.litros)}</td>
+                <td className="py-2 pr-4 tnum">{formatNumber(row.lph, 2)}</td>
               </tr>
             ))}
           </tbody>
@@ -1566,25 +1616,8 @@ function OperationalItemPanel({
     itemMultiObraInfo.series,
     ["m3PerLiter"],
   );
-  const itemMultiObraHasProductivity = multiObraHasMetricData(
-    itemMultiObraInfo.chartData,
-    itemMultiObraInfo.series,
-    ["m3PorH"],
-  );
-  const itemM3PorHourSeries = useMemo(
-    () =>
-      itemMultiObraInfo.series.map((obra) => ({
-        dataKey: multiObraMetricKey(obra.key, "m3PorH"),
-        name: obra.obra,
-        color: obra.color,
-      })),
-    [itemMultiObraInfo.series],
-  );
-  const histogramMetric =
-    summary.item === "transporte"
-      ? equipmentRows.map((row) => row.lViagem)
-      : equipmentRows.map((row) => row.lph);
-  const histogramUnit = summary.item === "transporte" ? "L/viagem" : "L/h";
+  const histogramMetric = equipmentRows.map((row) => row.lph);
+  const histogramUnit = "L/h";
   const lpm3Target = summary.fuelPerM3 > 0 ? summary.fuelPerM3 : 16.7;
 
   if (isDebugFlagEnabled("debugDailySeries") && summary.item === "compactacao") {
@@ -1659,15 +1692,36 @@ function OperationalItemPanel({
               <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
             </ChartCard>
             <ChartCard
-              title="Ranking de produtividade m3/L"
-              description="Producao por litro de diesel"
+              title="Ranking L/h de escavacao"
+              description="Diesel por hora de escavadeira"
               height={340}
-              hasData={equipmentRows.some((row) => row.lpm3 > 0)}
+              hasData={equipmentRows.some((row) => row.lph > 0)}
             >
-              <ChartM3PerLiterRanking data={equipmentRows} topN={10} />
+              <ChartLphRanking data={equipmentRows} topN={10} />
             </ChartCard>
           </div>
         </>
+      )}
+
+      {summary.item === "limpeza" && (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <ChartCard
+            title="Limpeza - diesel por equipamento"
+            description="Consumo das frotas 236 e 238 em Campo Log 05"
+            height={330}
+            hasData={equipmentRows.some((row) => row.litros > 0)}
+          >
+            <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
+          </ChartCard>
+          <ChartCard
+            title="Limpeza - diesel empilhado"
+            description="Litros por equipamento e dia"
+            height={330}
+            hasData={stack.data.length > 0 && stack.series.length > 0}
+          >
+            <ChartStackedBars data={stack.data} series={stack.series} />
+          </ChartCard>
+        </div>
       )}
 
       {summary.item === "transporte" && (
@@ -1691,37 +1745,30 @@ function OperationalItemPanel({
               )}
             </ChartCard>
             <ChartCard
-              title="Ranking por agregado"
-              description="Viagens por caminhao/agregado"
+              title="Ranking L/h por agregado"
+              description="Diesel por hora dos equipamentos de transporte"
               height={330}
-              hasData={equipmentRows.length > 0}
+              hasData={equipmentRows.some((row) => row.lph > 0)}
             >
-              <ChartHBars
-                data={equipmentRows}
-                dataKey="viagens"
-                nameKey="id"
-                unit=""
-                topN={10}
-                color="oklch(0.74 0.13 220)"
-              />
+              <ChartLphRanking data={equipmentRows} topN={10} />
             </ChartCard>
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <ChartCard
-              title="Distribuicao L/viagem"
-              description="Faixas de consumo logistico"
+              title="Distribuicao L/h"
+              description="Faixas de consumo por hora"
               height={320}
               hasData={histogramMetric.length > 0}
             >
               <ChartHistogram data={histogramRows(histogramMetric, histogramUnit)} />
             </ChartCard>
             <ChartCard
-              title="Ranking de produtividade m3/L"
-              description="Producao por litro de diesel"
+              title="Ranking por consumo"
+              description="Litros por caminhao/agregado"
               height={320}
-              hasData={equipmentRows.some((row) => row.lpm3 > 0)}
+              hasData={equipmentRows.some((row) => row.litros > 0)}
             >
-              <ChartM3PerLiterRanking data={equipmentRows} topN={8} />
+              <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
             </ChartCard>
           </div>
         </>
@@ -1764,12 +1811,12 @@ function OperationalItemPanel({
               <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
             </ChartCard>
             <ChartCard
-              title="Ranking de produtividade m3/L"
-              description="Producao por litro de diesel"
+              title="Ranking L/h por equipamento"
+              description="Diesel por hora"
               height={340}
-              hasData={equipmentRows.some((row) => row.lpm3 > 0)}
+              hasData={equipmentRows.some((row) => row.lph > 0)}
             >
-              <ChartM3PerLiterRanking data={equipmentRows} topN={10} />
+              <ChartLphRanking data={equipmentRows} topN={10} />
             </ChartCard>
           </div>
         </>
@@ -1779,21 +1826,18 @@ function OperationalItemPanel({
         <>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <ChartCard
-              title="Compactacao - produtividade"
-              description="m3 por hora dos rolos/compactadores"
+              title="Compactacao - eficiencia diaria"
+              description="Producao da obra/dia dividida pelo diesel do item"
               height={320}
-              hasData={itemHasMultipleObras ? itemMultiObraHasProductivity : dailyRows.length > 0}
+              hasData={itemHasMultipleObras ? itemMultiObraHasEfficiency : dailyRows.length > 0}
             >
               {itemHasMultipleObras ? (
-                <ChartMultiLine
+                <ChartEfficiencyMultiObra
                   data={itemMultiObraInfo.chartData}
-                  series={itemM3PorHourSeries}
-                  unit="m3/h"
-                  yLabel="m3/h"
-                  precision={2}
+                  series={itemMultiObraInfo.series}
                 />
               ) : (
-                <ChartProductivity data={dailyRows} />
+                <ChartLineLpm3 data={dailyRows} />
               )}
             </ChartCard>
             <ChartCard
@@ -1823,17 +1867,12 @@ function OperationalItemPanel({
           </div>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <ChartCard
-              title="Produtividade por equipamento"
-              description="m3/h por rolo ou compactador"
+              title="Consumo por equipamento"
+              description="Litros por rolo ou compactador"
               height={330}
-              hasData={equipmentRows.some((row) => row.m3PorH > 0)}
+              hasData={equipmentRows.some((row) => row.litros > 0)}
             >
-              <ChartCompareBars
-                data={equipmentRows.filter((row) => row.m3PorH > 0).slice(0, 8)}
-                dataKey="m3PorH"
-                nameKey="id"
-                unit="m3/h"
-              />
+              <ChartHBars data={equipmentRows} dataKey="litros" nameKey="id" unit="L" topN={10} />
             </ChartCard>
             <ChartCard
               title="Ranking L/h por equipamento"
@@ -1848,43 +1887,32 @@ function OperationalItemPanel({
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {summary.item === "transporte" ? (
-          <ChartCard
-            title={`Distribuicao ${histogramUnit}`}
-            description="Faixas por equipamento"
-            height={300}
-            hasData={histogramMetric.length > 0}
-          >
-            <ChartHistogram data={histogramRows(histogramMetric, histogramUnit)} />
-          </ChartCard>
-        ) : (
-          <ChartCard
-            title="Ranking L/h por equipamento"
-            description="Maior L/h primeiro; metas em 7,5 e 15 L/h"
-            height={300}
-            hasData={equipmentRows.some((row) => row.lph > 0)}
-            footer={
-              <div className="flex flex-wrap items-center justify-center gap-4 border-t border-border-low pt-3 text-[11px]">
-                <LegendDot color="var(--ok)" label="0-7,5 L/h - Eficiente" />
-                <LegendDot color="var(--warn)" label="7,5-15 L/h - Medio" />
-                <LegendDot color="var(--danger)" label="> 15 L/h - Alto consumo" />
-              </div>
-            }
-          >
-            <ChartLphRanking data={equipmentRows} topN={10} />
-          </ChartCard>
-        )}
         <ChartCard
-          title="Ranking de produtividade m3/L"
-          description="Maior producao por litro de diesel"
+          title="Ranking L/h por equipamento"
+          description="Maior L/h primeiro; metas em 7,5 e 15 L/h"
           height={300}
-          hasData={equipmentRows.some((row) => row.lpm3 > 0)}
+          hasData={equipmentRows.some((row) => row.lph > 0)}
+          footer={
+            <div className="flex flex-wrap items-center justify-center gap-4 border-t border-border-low pt-3 text-[11px]">
+              <LegendDot color="var(--ok)" label="0-7,5 L/h - Eficiente" />
+              <LegendDot color="var(--warn)" label="7,5-15 L/h - Medio" />
+              <LegendDot color="var(--danger)" label="> 15 L/h - Alto consumo" />
+            </div>
+          }
         >
-          <ChartM3PerLiterRanking data={equipmentRows} topN={8} />
+          <ChartLphRanking data={equipmentRows} topN={10} />
+        </ChartCard>
+        <ChartCard
+          title={`Distribuicao ${histogramUnit}`}
+          description="Faixas por equipamento"
+          height={300}
+          hasData={histogramMetric.length > 0}
+        >
+          <ChartHistogram data={histogramRows(histogramMetric, histogramUnit)} />
         </ChartCard>
       </div>
 
-      <ItemEquipmentTable rows={equipmentRows} mode={summary.item} />
+      <ItemEquipmentTable rows={equipmentRows} />
     </div>
   );
 }
@@ -2920,7 +2948,10 @@ function ProducaoConsumoRefactored() {
   }, [attributedFueling, filteredDailyParts, itemScopeProductiveTrips, productionDateObraKeys]);
 
   const productionFueling = useMemo(
-    () => classifiedFuelUsageRows.filter((row) => row.bucket === "producao").map((row) => row.fuel),
+    () =>
+      classifiedFuelUsageRows
+        .filter((row) => row.bucket === "producao" || row.item === "limpeza")
+        .map((row) => row.fuel),
     [classifiedFuelUsageRows],
   );
 
@@ -3882,14 +3913,14 @@ function ProducaoConsumoRefactored() {
         current.compactedM3Day = share.compactedM3Day;
         current.itemTotalHours = share.itemTotalHours;
         current.totalOperationalHours = share.totalOperationalHours;
-        current.m3PerLiter = divide(current.relatedM3, current.diesel);
-        current.m3PerHour = divide(current.relatedM3, current.equipmentHours);
+        current.m3PerLiter = 0;
+        current.m3PerHour = 0;
         return;
       }
       row.productionShares.push({
         ...share,
-        m3PerLiter: divide(share.relatedM3, share.diesel),
-        m3PerHour: divide(share.relatedM3, share.equipmentHours),
+        m3PerLiter: 0,
+        m3PerHour: 0,
       });
     };
     const addDailyDieselToProductionShare = (
@@ -3930,14 +3961,15 @@ function ProducaoConsumoRefactored() {
         });
         return;
       }
-      const relatedM3 = shares.reduce((sum, share) => sum + share.relatedM3, 0);
+      const totalShareHours = shares.reduce((sum, share) => sum + share.equipmentHours, 0);
       shares.forEach((share) => {
-        const dieselShare = relatedM3 > 0 ? share.relatedM3 / relatedM3 : 1 / shares.length;
+        const dieselShare =
+          totalShareHours > 0 ? share.equipmentHours / totalShareHours : 1 / shares.length;
         share.diesel += liters * dieselShare;
         share.dieselCoveredHours = (share.dieselCoveredHours ?? 0) + coveredHours * dieselShare;
         share.cost += cost * dieselShare;
-        share.m3PerLiter = divide(share.relatedM3, share.diesel);
-        share.m3PerHour = divide(share.relatedM3, share.equipmentHours);
+        share.m3PerLiter = 0;
+        share.m3PerHour = 0;
       });
     };
 
@@ -3981,84 +4013,141 @@ function ProducaoConsumoRefactored() {
       (sum, row) => sum + row.compactedM3,
       0,
     );
-    const compactedM3ByDateObra = new Map(
-      [...productionByDateObra.entries()].map(([key, production]) => [key, production.compactedM3]),
-    );
-    const operationalShares = buildEquipmentOperationalShare({
-      dailyParts: itemScopeDailyParts,
-      compactedM3ByDateObra,
+    const activeItemsByProductionKey = new Map<string, Set<OperationalItem>>();
+    const markActiveItem = (date: string, obraKey: string, item: OperationalItem) => {
+      if (item === "outros") return;
+      const key = dateWorksiteKey(date, obraKey);
+      const items = activeItemsByProductionKey.get(key) ?? new Set<OperationalItem>();
+      items.add(item);
+      activeItemsByProductionKey.set(key, items);
+    };
+    itemScopeDailyParts.forEach((part) => {
+      if (!part.usedInAnalysis || (part.hours || 0) <= 0) return;
+      const scopedPart = part as DbEquipmentDailyPart & ObraScopeAudit;
+      const operationalClass = resolveEquipmentOperationalClass({
+        fleet: part.fleet,
+        equipment: part.fleetLabel || part.fleet,
+        obra: resolvedWorksiteLabel(scopedPart),
+        description: `${part.sourceSheet} ${part.status}`,
+      });
+      const item = operationalClass.item;
+      const key = normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart");
+      const kind = operationalClass.isAggregate
+        ? ("aggregate" as EquipmentKind)
+        : ("ownFleet" as EquipmentKind);
+      const label = displayEquipmentLabel(part.fleet || part.fleetLabel, "dailyPart");
+      if (!selectedEquipmentMatches(key || part.fleet, label, kind, "dailyPart")) return;
+      markActiveItem(part.date, resolvedWorksiteKey(scopedPart), item);
     });
-    const operationalShareByEquipmentDay = new Map(
-      operationalShares.map((share) => [
-        `${share.date}|${share.obraKey}|${share.item}|${share.equipmentKey}`,
-        share,
-      ]),
-    );
+    itemScopeProductiveTrips.forEach((trip) => {
+      if (isTripPipaLike(trip)) return;
+      const date = extractDateKey(trip.datetime);
+      if (!date) return;
+      const scopedTrip = trip as DbTrip & ObraScopeAudit;
+      const classification = resolveTripOperationalClassification(trip);
+      if (
+        !selectedEquipmentMatches(
+          classification.equipment,
+          classification.label,
+          classification.kind,
+          classification.kind === "aggregate" ? "aggregate" : "trip",
+        )
+      ) {
+        return;
+      }
+      markActiveItem(date, resolvedWorksiteKey(scopedTrip), classification.item);
+    });
+    productionFueling.forEach((fuel) => {
+      const date = extractDateKey(fuel.datetime);
+      if (!date) return;
+      const classification = resolveFuelOperationalClassification(
+        fuel,
+        pdeFleetKeys,
+        aggregateKeys,
+      );
+      if (
+        !selectedEquipmentMatches(
+          classification.equipment,
+          classification.resolvedLabel,
+          classification.kind,
+          classification.kind === "aggregate" ? "aggregate" : "fueling",
+        )
+      ) {
+        return;
+      }
+      markActiveItem(
+        date,
+        resolvedWorksiteKey(fuel as DbFueling & ObraScopeAudit),
+        classification.operationalItem,
+      );
+    });
+
     const appliedOperationalShareKeys = new Set<string>();
     const countedDailyHoursKeys = new Set<string>();
+    const appliedItemProductionKeys = new Set<string>();
     // Fonte única das horas PDE por dia/item (deduplicada por frota; horímetro
     // ou workedHours). Substitui qualquer soma direta de part.hours.
-    const {
-      totalByDateObra: totalOperationalHoursByDateObra,
-      itemByDateObra: itemOperationalHoursByDateObra,
-    } = buildPdeOperationalHours(itemScopeDailyParts);
+    const { totalByDateObra: totalOperationalHoursByDateObra } =
+      buildPdeOperationalHours(itemScopeDailyParts);
+
+    productionByDateObra.forEach((production, productionKey) => {
+      const activeItems =
+        activeItemsByProductionKey.get(productionKey) ?? new Set<OperationalItem>();
+      activeItems.forEach((item) => {
+        if (item === "limpeza") return;
+        const itemProductionKey = `${productionKey}|${item}`;
+        if (appliedItemProductionKeys.has(itemProductionKey)) return;
+        appliedItemProductionKeys.add(itemProductionKey);
+        const compactedM3 = production.compactedM3;
+        const looseM3 = production.looseM3;
+        const trips = production.trips;
+        const revenue = production.revenue;
+        const summary = ensureSummary(item);
+        const day = ensureDaily(
+          item,
+          production.date,
+          production.obra,
+          "ok",
+          production.obraKey,
+          production.obra,
+        );
+        summary.compactedM3 += compactedM3;
+        summary.looseM3 += looseM3;
+        summary.trips += trips;
+        summary.revenue += revenue;
+        day.m3 += compactedM3;
+        day.relatedM3 += compactedM3;
+        day.looseM3 += looseM3;
+        day.trips += trips;
+      });
+    });
 
     itemScopeProductiveTrips.forEach((trip) => {
       if (isTripPipaLike(trip)) return;
-      const item = "transporte";
-      const summary = ensureSummary(item);
+      const classification = resolveTripOperationalClassification(trip);
+      const item = classification.item;
       const date = extractDateKey(trip.datetime);
       const scopedTrip = trip as DbTrip & ObraScopeAudit;
       const obra = resolvedWorksiteLabel(scopedTrip);
       const obraKey = resolvedWorksiteKey(scopedTrip);
-      const productionKey = dateWorksiteKey(date, obraKey);
-      const compactedM3 = calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
-      const looseM3 = trip.cubicMLoose || 0;
       const cost = AGGREGATE_TRIP_PRICE;
-      const key = normalizeEquipmentKey(equipmentRaw(trip), "aggregate");
-      const label = equipmentLabelFromKey(key, equipmentLabel(trip, "trip"));
-      if (!selectedEquipmentMatches(key, label, "aggregate", "aggregate")) return;
-      const equipment = ensureEquipment(
-        key,
-        item,
-        label,
-        "aggregate",
-        "trip",
-        "viagem RCO produtiva classificada como transporte",
-      );
+      const key = classification.equipment;
+      const label = classification.label;
+      if (
+        !selectedEquipmentMatches(
+          key,
+          label,
+          classification.kind,
+          classification.kind === "aggregate" ? "aggregate" : "trip",
+        )
+      ) {
+        return;
+      }
+      ensureEquipment(key, item, label, classification.kind, "trip", classification.reason);
+      const summary = ensureSummary(item);
       const day = ensureDaily(item, date, obra, obraStatusForRow(scopedTrip), obraKey, obra);
-
-      summary.compactedM3 += compactedM3;
-      summary.looseM3 += looseM3;
-      summary.trips += 1;
-      summary.revenue += trip.total || 0;
       summary.cost += cost;
-      equipment.m3 += compactedM3;
-      equipment.m3FromTrips += compactedM3;
-      equipment.m3Sources.add("trip");
-      equipment.trips += 1;
-      addProductionShare(equipment, {
-        date,
-        item,
-        obra,
-        obraKey,
-        equipmentKey: equipment.equipment,
-        equipmentLabel: equipment.label,
-        equipmentHours: 0,
-        itemTotalHours: 0,
-        compactedM3Day: productionByDateObra.get(productionKey)?.compactedM3 ?? compactedM3,
-        share: 0,
-        relatedM3: compactedM3,
-        looseM3,
-        trips: 1,
-        cost,
-        diesel: 0,
-        totalOperationalHours: 0,
-      });
-      day.m3 += compactedM3;
-      day.relatedM3 += compactedM3;
-      day.looseM3 += looseM3;
-      day.trips += 1;
+      day.cost += cost;
     });
 
     itemScopeDailyParts.forEach((part) => {
@@ -4069,6 +4158,7 @@ function ProducaoConsumoRefactored() {
       const operationalClass = resolveEquipmentOperationalClass({
         fleet: part.fleet,
         equipment: part.fleetLabel || part.fleet,
+        obra,
         description: `${part.sourceSheet} ${part.status}`,
       });
       const item = operationalClass.item;
@@ -4130,44 +4220,12 @@ function ProducaoConsumoRefactored() {
         return;
       }
       const production = productionByDateObra.get(productionKey);
-      const productionShare = operationalShareByEquipmentDay.get(shareKey);
-      if (!production || !productionShare || productionShare.itemTotalHours <= 0) {
-        addHoursOnlyShare(
-          production?.compactedM3 ?? 0,
-          totalOperationalHoursByDateObra.get(productionKey) ?? 0,
-        );
-        return;
-      }
-
-      const share = productionShare.share;
-      const compactedM3 = productionShare.relatedM3;
-      const looseM3 = production.looseM3 * share;
-      const trips = production.trips * share;
-      const revenue = production.revenue * share;
-
-      summary.compactedM3 += compactedM3;
-      summary.looseM3 += looseM3;
-      summary.trips += trips;
-      summary.revenue += revenue;
-      equipment.m3 += compactedM3;
-      equipment.m3AllocatedByHours += compactedM3;
-      equipment.m3Sources.add("dailyPart");
       equipment.m3AllocationRule =
-        "m3 do item = m3 compactado da obra/dia x horas do item / horas operacionais; m3 equipamento = m3 do item x horas do equipamento / horas do item";
-      equipment.m3TotalHours += productionShare.itemTotalHours;
-      equipment.m3Share += share;
-      equipment.trips += trips;
-      addProductionShare(equipment, {
-        ...productionShare,
-        equipmentLabel: equipment.label,
-        looseM3,
-        trips,
-        cost: 0,
-      });
-      day.m3 += compactedM3;
-      day.relatedM3 += compactedM3;
-      day.looseM3 += looseM3;
-      day.trips += trips;
+        "sem rateio: producao pertence a obra/dia; equipamento recebe apenas horas e diesel";
+      addHoursOnlyShare(
+        production?.compactedM3 ?? 0,
+        totalOperationalHoursByDateObra.get(productionKey) ?? 0,
+      );
     });
 
     productionFueling.forEach((fuel) => {
@@ -4227,14 +4285,19 @@ function ProducaoConsumoRefactored() {
 
     equipmentByKey.forEach((row) => {
       row.duplicateAcrossItems = (itemKeysByEquipment.get(row.equipment)?.size ?? 0) > 1;
-      if (row.m3AllocatedByHours > 0) {
-        row.m3 = row.m3AllocatedByHours;
-      }
-      row.relatedCompactedM3 = row.m3;
+      row.m3 = 0;
+      row.relatedCompactedM3 = 0;
+      row.m3FromTrips = 0;
+      row.m3AllocatedByHours = 0;
+      row.m3Sources.clear();
+      row.trips = 0;
       row.fuelPerHour = divide(row.liters, row.hours);
-      row.fuelPerM3 = divide(row.m3, row.liters);
-      row.fuelPerTrip = divide(row.liters, row.trips);
-      row.productionPerHour = divide(row.m3, row.hours);
+      row.fuelPerM3 = 0;
+      row.fuelPerTrip = 0;
+      row.productionPerHour = 0;
+      row.m3AllocationRule =
+        row.m3AllocationRule ||
+        "sem rateio: producao pertence a obra/dia; equipamento recebe apenas horas e diesel";
       row.includedInEquipmentCount = isCountableEquipment(row);
       row.equipmentCountReason = equipmentCountReason(row);
     });
@@ -4278,7 +4341,9 @@ function ProducaoConsumoRefactored() {
         const dayShares = summary.equipment.flatMap((equipment) =>
           equipment.productionShares.filter(
             (share) =>
-              share.date === day.date && share.obraKey === day.obraKey && share.item === summary.item,
+              share.date === day.date &&
+              share.obraKey === day.obraKey &&
+              share.item === summary.item,
           ),
         );
         const dieselCoveredHours = dayShares.reduce(
@@ -4307,7 +4372,7 @@ function ProducaoConsumoRefactored() {
         const relatedM3 = day.relatedM3;
         const m3Used = relatedM3;
         const m3PerLiter = efficiencyDiesel > 0 ? divide(relatedM3, efficiencyDiesel) : 0;
-        const m3PerHour = selectedItemHours > 0 ? divide(relatedM3, selectedItemHours) : 0;
+        const m3PerHour = 0;
         const suspect =
           summary.item === "compactacao"
             ? compactacaoM3LStatus({
@@ -4371,8 +4436,7 @@ function ProducaoConsumoRefactored() {
           obraLabel: day.obra,
           d: shortDateLabel(day.date),
           lPorM3: day.efficiencyDiesel > 0 ? divide(day.relatedM3, day.efficiencyDiesel) : 0,
-          m3PorH:
-            day.itemOperationalHours > 0 ? divide(day.relatedM3, day.itemOperationalHours) : 0,
+          m3PorH: 0,
         }))
         .sort((a, b) => a.date.localeCompare(b.date) || a.obra.localeCompare(b.obra));
       const validProductionDays = summary.daily;
@@ -4464,9 +4528,15 @@ function ProducaoConsumoRefactored() {
         if (Math.abs(generalValue) <= 0 && Math.abs(equipmentValue) <= 0) return;
         const somaObras = generalValue;
         const somaMateriais = generalValue;
+        const productionByWorksiteOnly = [
+          "m3_compactado",
+          "m3_solto",
+          "viagens",
+          "eficiencia_m3_l",
+        ].includes(metric);
         const diferencaMax = Math.max(
           Math.abs(generalValue - somaObras),
-          Math.abs(generalValue - equipmentValue),
+          productionByWorksiteOnly ? 0 : Math.abs(generalValue - equipmentValue),
           Math.abs(generalValue - somaMateriais),
         );
         rows.push({
@@ -4771,6 +4841,7 @@ function ProducaoConsumoRefactored() {
         const operationalClass = resolveEquipmentOperationalClass({
           fleet: part.fleet,
           equipment: part.fleetLabel || part.fleet,
+          obra: resolvedWorksiteLabel(part as DbEquipmentDailyPart & ObraScopeAudit),
           description: `${part.sourceSheet} ${part.status}`,
           raw: part,
         });
@@ -4824,7 +4895,7 @@ function ProducaoConsumoRefactored() {
         current.totalOperationalHours,
         input.totalOperationalHours,
       );
-      current.participation = divide(current.hours, current.totalOperationalHours);
+      current.participation = 0;
       if (!current.formulaUsed) current.formulaUsed = input.formulaUsed;
       current.status = mergeIntegrationStatus(current.status, input.status);
       current.statusReason = [current.statusReason, input.statusReason]
@@ -4853,7 +4924,7 @@ function ProducaoConsumoRefactored() {
           totalOperationalHoursByDateObra.get(`${part.date}|${obraKey}`) ?? 0;
         const baseCompactedM3 = production?.compactedM3 ?? 0;
         const participation = divide(hours, totalOperationalHours);
-        const relatedM3 = baseCompactedM3 * participation;
+        const relatedM3 = 0;
         const status = dieselIntegrationStatus({
           diesel: 0,
           m3: relatedM3,
@@ -4873,13 +4944,12 @@ function ProducaoConsumoRefactored() {
           relatedM3,
           hours,
           totalOperationalHours,
-          participation,
-          formulaUsed:
-            "m3 compactado base do dia x horas do equipamento / horas operacionais totais do PDE no dia",
+          participation: 0,
+          formulaUsed: "sem m3 por equipamento: producao pertence a obra/dia",
           trips: 0,
           obraStatus,
-          status,
-          statusReason: dieselIntegrationReason(status),
+          status: "OK",
+          statusReason: "m3 oficial calculado por obra/dia/item",
         });
       },
     );
@@ -4893,9 +4963,12 @@ function ProducaoConsumoRefactored() {
       const obraKey = resolvedWorksiteKey(scopedTrip);
       const obraStatus = obraStatusForRow(scopedTrip);
       const production = dailyProductionMap.get(`${date}|${obraKey}`);
-      const equipmentKey =
-        normalizeEquipmentKey(equipmentRaw(trip), "aggregate") || "SEM_EQUIPAMENTO";
-      const relatedM3 = calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
+      const classification = resolveTripOperationalClassification(trip);
+      const equipmentKey = classification.equipment || "SEM_EQUIPAMENTO";
+      const relatedM3 =
+        classification.item === "limpeza"
+          ? 0
+          : calculateCompactedVolume(trip.cubicMLoose || 0, trip.swellFactorApplied);
       const status = dieselIntegrationStatus({
         diesel: 0,
         m3: relatedM3,
@@ -4906,17 +4979,20 @@ function ProducaoConsumoRefactored() {
         date,
         obra,
         obraKey,
-        item: "transporte",
-        itemLabel: operationalItemLabel("transporte"),
+        item: classification.item,
+        itemLabel: operationalItemLabel(classification.item),
         equipmentKey,
-        equipmentLabel: equipmentLabelFromKey(equipmentKey, equipmentLabel(trip, "trip")),
-        kind: "aggregate",
-        baseCompactedM3: production?.compactedM3 ?? 0,
+        equipmentLabel: classification.label,
+        kind: classification.kind,
+        baseCompactedM3: classification.item === "limpeza" ? 0 : (production?.compactedM3 ?? 0),
         relatedM3,
         hours: 0,
         totalOperationalHours: 0,
         participation: 0,
-        formulaUsed: "m3 direto da viagem RCO de transporte",
+        formulaUsed:
+          classification.item === "limpeza"
+            ? "RCO vinculado a frota 236 sem producao atribuida"
+            : "m3 direto da viagem RCO de transporte",
         trips: 1,
         obraStatus,
         status,
@@ -4992,13 +5068,15 @@ function ProducaoConsumoRefactored() {
       current.isPipa ||= classification.isPipa;
       current.status = mergeIntegrationStatus(
         current.status,
-        dieselIntegrationStatus({
-          diesel: current.diesel,
-          m3: current.relatedM3,
-          hours: current.hours,
-          obraStatus: current.obraStatus,
-          wrongWorksite: sourceWrongWorksite,
-        }),
+        !sourceWrongWorksite
+          ? "OK"
+          : dieselIntegrationStatus({
+              diesel: current.diesel,
+              m3: current.relatedM3,
+              hours: current.hours,
+              obraStatus: current.obraStatus,
+              wrongWorksite: sourceWrongWorksite,
+            }),
       );
       current.statusReason = [
         current.statusReason,
@@ -5014,11 +5092,10 @@ function ProducaoConsumoRefactored() {
     const rowsByKey = new Map<string, DieselM3DetailRow>();
     dieselByKey.forEach((row, key) => {
       if (!rcoWorksiteDomain.has(row.obraKey)) return;
-      const relatedM3 = row.relatedM3;
       rowsByKey.set(key, {
         ...row,
-        m3PerLiter: divide(relatedM3, row.diesel),
-        litersPerM3: divide(row.diesel, relatedM3),
+        m3PerLiter: 0,
+        litersPerM3: 0,
       });
     });
 
@@ -5033,20 +5110,8 @@ function ProducaoConsumoRefactored() {
         dieselSource: "rawFueling",
         isPipa: false,
         sourceWorksite: row.obra,
-        status: dieselIntegrationStatus({
-          diesel: 0,
-          m3: row.relatedM3,
-          hours: row.hours,
-          obraStatus: row.obraStatus,
-        }),
-        statusReason: dieselIntegrationReason(
-          dieselIntegrationStatus({
-            diesel: 0,
-            m3: row.relatedM3,
-            hours: row.hours,
-            obraStatus: row.obraStatus,
-          }),
-        ),
+        status: "OK",
+        statusReason: "m3 oficial calculado por obra/dia/item",
       });
     });
 
@@ -5152,11 +5217,11 @@ function ProducaoConsumoRefactored() {
     ],
   );
 
-  const dieselM3UsesRelatedM3 =
-    dieselM3Filters.view !== "obraDay" ||
-    dieselM3Filters.item !== "all" ||
+  const dieselM3EquipmentScope =
+    dieselM3Filters.view === "equipment" ||
     dieselM3Filters.equipment !== "all" ||
     dieselM3Filters.aggregate !== "all";
+  const dieselM3UsesRelatedM3 = dieselM3EquipmentScope;
 
   const blockedRawFuelingByDateObra = useMemo(() => {
     const blocked = new Map<
@@ -5510,12 +5575,16 @@ function ProducaoConsumoRefactored() {
       rows.set(detail.item, current);
     });
     return [...rows.values()]
-      .map((row) => ({
-        ...row,
-        m3PorLitroBase: divide(row.m3Base, row.diesel),
-        m3PorLitroRelacionado: divide(row.m3Relacionado, row.diesel),
-        litrosPorM3Relacionado: divide(row.diesel, row.m3Relacionado),
-      }))
+      .map((row) => {
+        const officialM3 = row.m3Base;
+        return {
+          ...row,
+          m3Relacionado: row.m3Base,
+          m3PorLitroBase: divide(row.m3Base, row.diesel),
+          m3PorLitroRelacionado: divide(officialM3, row.diesel),
+          litrosPorM3Relacionado: divide(row.diesel, officialM3),
+        };
+      })
       .sort((a, b) => operationalItemRank(a.item) - operationalItemRank(b.item));
   }, [dieselM3Rows]);
 
@@ -5561,8 +5630,9 @@ function ProducaoConsumoRefactored() {
       .map((row) => ({
         ...row,
         lph: divide(row.diesel, row.horas),
-        m3PorLitro: divide(row.m3Relacionado, row.diesel),
-        litrosPorM3: divide(row.diesel, row.m3Relacionado),
+        m3Relacionado: 0,
+        m3PorLitro: 0,
+        litrosPorM3: 0,
       }))
       .sort((a, b) => b.diesel - a.diesel || b.m3Relacionado - a.m3Relacionado);
   }, [dieselM3Rows]);
@@ -5572,14 +5642,8 @@ function ProducaoConsumoRefactored() {
     const debugPerformance = debugPerformanceEnabled();
     if (debugPerformance) console.time("rankings");
     let result = [...dieselM3EquipmentRows];
-    if (dieselM3Filters.ranking === "bestM3PerLiter") {
-      result = result
-        .filter((row) => row.m3PorLitro > 0)
-        .sort((a, b) => b.m3PorLitro - a.m3PorLitro);
-    } else if (dieselM3Filters.ranking === "worstLitersPerM3") {
-      result = result
-        .filter((row) => row.litrosPorM3 > 0)
-        .sort((a, b) => b.litrosPorM3 - a.litrosPorM3);
+    if (dieselM3Filters.ranking === "lph") {
+      result = result.filter((row) => row.lph > 0).sort((a, b) => b.lph - a.lph);
     } else {
       result = result.sort((a, b) => b.diesel - a.diesel);
     }
@@ -5587,18 +5651,8 @@ function ProducaoConsumoRefactored() {
     return result;
   }, [dieselM3EquipmentRows, dieselM3Filters.ranking, needsDieselM3]);
 
-  const dieselM3RankingKey =
-    dieselM3Filters.ranking === "bestM3PerLiter"
-      ? "m3PorLitro"
-      : dieselM3Filters.ranking === "worstLitersPerM3"
-        ? "litrosPorM3"
-        : "diesel";
-  const dieselM3RankingUnit =
-    dieselM3Filters.ranking === "bestM3PerLiter"
-      ? "m³/L"
-      : dieselM3Filters.ranking === "worstLitersPerM3"
-        ? "L/m³"
-        : "L";
+  const dieselM3RankingKey = dieselM3Filters.ranking === "lph" ? "lph" : "diesel";
+  const dieselM3RankingUnit = dieselM3Filters.ranking === "lph" ? "L/h" : "L";
 
   const dieselM3CompareA =
     obraComparisonRows.find((row) => row.obraKey === dieselM3Filters.compareObraA) ??
@@ -5625,6 +5679,7 @@ function ProducaoConsumoRefactored() {
     console.groupEnd();
   }, [debugDieselM3, dieselM3BaseData, dieselM3Rows, obraComparisonRows]);
 
+  const limpezaSummary = itemSummaryById.get("limpeza") ?? emptyItemSummary("limpeza");
   const escavacaoSummary = itemSummaryById.get("escavacao") ?? emptyItemSummary("escavacao");
   const transporteSummary = itemSummaryById.get("transporte") ?? emptyItemSummary("transporte");
   const tratamentoSummary = itemSummaryById.get("tratamento") ?? emptyItemSummary("tratamento");
@@ -5675,6 +5730,7 @@ function ProducaoConsumoRefactored() {
         const item = resolveEquipmentOperationalClass({
           fleet: part.fleet,
           equipment: part.fleetLabel || part.fleet,
+          obra: resolvedWorksiteLabel(part as DbEquipmentDailyPart & ObraScopeAudit),
           description: `${part.sourceSheet} ${part.status}`,
         }).item;
         const equipmentKey =
@@ -5807,6 +5863,7 @@ function ProducaoConsumoRefactored() {
       const item = resolveEquipmentOperationalClass({
         fleet: part.fleet,
         equipment: part.fleetLabel || part.fleet,
+        obra: pdeWorksite,
         description: `${part.sourceSheet} ${part.status}`,
         raw: part,
       }).item;
@@ -6003,6 +6060,7 @@ function ProducaoConsumoRefactored() {
       const operationalClass = resolveEquipmentOperationalClass({
         fleet: part.fleet,
         equipment: part.fleetLabel || part.fleet,
+        obra: resolvedWorksiteLabel(part as DbEquipmentDailyPart & ObraScopeAudit),
         description: `${part.sourceSheet} ${part.status}`,
       });
       if (operationalClass.item !== "compactacao") return;
@@ -6075,6 +6133,7 @@ function ProducaoConsumoRefactored() {
         const item = resolveEquipmentOperationalClass({
           fleet: row.fleet,
           equipment: row.equipmentId || row.fleet,
+          obra: row.obra,
           description: row.fleet,
         }).item;
         const fleetKey = normalizeEquipmentKey(row.fleet, "fuelAllocation");
@@ -6109,6 +6168,7 @@ function ProducaoConsumoRefactored() {
         const itemResolved = resolveEquipmentOperationalClass({
           fleet: part.fleet,
           equipment: part.fleetLabel || part.fleet,
+          obra: resolvedWorksiteLabel(part as DbEquipmentDailyPart & ObraScopeAudit),
           description: `${part.sourceSheet} ${part.status}`,
         }).item;
         const fleetKey = normalizeEquipmentKey(part.fleet || part.fleetLabel, "dailyPart");
@@ -6232,11 +6292,7 @@ function ProducaoConsumoRefactored() {
     if (debugPerformance) console.time("auditoria");
     const rows = itemSummaries.flatMap((summary) =>
       summary.equipment.map((row) => {
-        const status = dieselIntegrationStatus({
-          diesel: row.liters,
-          m3: row.m3,
-          hours: row.hours,
-        });
+        const status: DieselIntegrationStatus = "OK";
         const reasons = [dieselIntegrationReason(status)];
         if (summary.item !== "transporte" && row.hours <= 0) reasons.push("Sem horas PDE");
         if (row.item === "outros") reasons.push("Fora do item esperado");
@@ -6267,12 +6323,7 @@ function ProducaoConsumoRefactored() {
           m3PerLiter: row.fuelPerM3,
           litersPerHour: row.fuelPerHour,
           dieselSource: [...row.dieselSources].join(", ") || "sem diesel",
-          m3Source:
-            row.m3 > 0
-              ? row.kind === "aggregate"
-                ? "RCO produtivo do agregado"
-                : "rateio por horas do item no dia"
-              : "sem m3",
+          m3Source: "sem m3 por equipamento: producao pertence a obra/dia/item",
           includedInEquipmentCount: row.includedInEquipmentCount,
           status,
           reason:
@@ -6619,14 +6670,7 @@ function ProducaoConsumoRefactored() {
     const formulaRows = itemSummaries.flatMap((summary) =>
       summary.equipment.map((equipment) => {
         const relatedM3Used = equipment.m3;
-        const suspectedIssue =
-          equipment.fuelPerM3 > 50
-            ? "m3/L > 50; revisar horas/diesel/share"
-            : equipment.m3 > summary.baseCompactedM3 + 0.01
-              ? "m3 relacionado maior que base do item"
-              : equipment.liters > 0 && equipment.m3 <= 0
-                ? "diesel sem m3 relacionado"
-                : "OK";
+        const suspectedIssue = "OK";
         return {
           item: summary.item,
           equipment: equipment.label,
@@ -6637,7 +6681,8 @@ function ProducaoConsumoRefactored() {
           hours: fixedNumber(equipment.hours, 2),
           m3PerLiter: fixedNumber(equipment.fuelPerM3, 3),
           m3PerHour: fixedNumber(equipment.productionPerHour, 2),
-          formula: "equipment.relatedM3 / equipmentDiesel; equipment.relatedM3 / equipmentHours",
+          formula:
+            "sem m3 por equipamento; eficiencia oficial = m3 da obra/dia/item / diesel do item",
           suspectedIssue,
         };
       }),
@@ -6661,25 +6706,25 @@ function ProducaoConsumoRefactored() {
       },
       {
         component: "Ranking m3/L por equipamento",
-        m3Source: "equipment.m3 relacionado por share diario",
+        m3Source: "bloqueado para todos os itens",
         dieselSource: "equipment.liters",
-        formula: "equipment.relatedM3 / equipment.liters",
+        formula: "nao calcula m3/L por equipamento",
         scope: "equipamento/periodo",
         status: "OK",
       },
       {
         component: "Tabela operacional por equipamento",
-        m3Source: "equipment.m3 relacionado por share diario",
+        m3Source: "bloqueado para todos os itens",
         dieselSource: "equipment.liters",
-        formula: "equipment.relatedM3 / equipment.liters",
+        formula: "equipamento mostra apenas horas, diesel, L/h e custo",
         scope: "equipamento/periodo",
         status: "OK",
       },
       {
         component: "Produtividade m3/h por equipamento",
-        m3Source: "equipment.m3 relacionado por share diario",
+        m3Source: "bloqueado para todos os itens",
         dieselSource: "n/a",
-        formula: "equipment.relatedM3 / equipment.hours",
+        formula: "nao calcula m3/h por equipamento",
         scope: "equipamento/periodo",
         status: "OK",
       },
@@ -6787,7 +6832,10 @@ function ProducaoConsumoRefactored() {
         ? group.liters * (group.pdeHours / group.coveredHours)
         : group.liters;
       const key = dateWorksiteKey(group.date, group.obraKey);
-      efficiencyDieselByDateObra.set(key, (efficiencyDieselByDateObra.get(key) ?? 0) + efficiencyDiesel);
+      efficiencyDieselByDateObra.set(
+        key,
+        (efficiencyDieselByDateObra.get(key) ?? 0) + efficiencyDiesel,
+      );
     });
     const rows = obraComparison.flatMap((obra) => {
       const dailyByDate = new Map(obra.daily.map((day) => [day.date, day]));
@@ -6796,7 +6844,8 @@ function ProducaoConsumoRefactored() {
         const compactedM3 = day?.compactedM3 ?? 0;
         const looseM3 = day?.looseM3 ?? 0;
         const diesel = day?.diesel ?? 0;
-        const efficiencyDiesel = efficiencyDieselByDateObra.get(dateWorksiteKey(date, obra.obraKey)) ?? diesel;
+        const efficiencyDiesel =
+          efficiencyDieselByDateObra.get(dateWorksiteKey(date, obra.obraKey)) ?? diesel;
         const hours = obra.dailyParts
           .filter((part) => part.date === date)
           .reduce((sum, part) => sum + pdeRowHours(part), 0);
@@ -6811,8 +6860,7 @@ function ProducaoConsumoRefactored() {
           diesel,
           efficiencyDiesel,
           hours,
-          fuelPerM3:
-            efficiencyDiesel > 0 && compactedM3 > 0 ? compactedM3 / efficiencyDiesel : 0,
+          fuelPerM3: efficiencyDiesel > 0 && compactedM3 > 0 ? compactedM3 / efficiencyDiesel : 0,
           status,
           statusReason: dieselIntegrationReason(status),
         };
@@ -7622,7 +7670,7 @@ function ProducaoConsumoRefactored() {
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                   <ChartCard
                     title="Diesel diario por item"
-                    description="Barras empilhadas por escavacao, transporte, tratamento e compactacao"
+                    description="Barras empilhadas por limpeza, escavacao, transporte, tratamento e compactacao"
                     height={320}
                     hasData={itemStackedDaily.length > 0 && itemStackSeries.length > 0}
                   >
@@ -7683,16 +7731,31 @@ function ProducaoConsumoRefactored() {
                             <p className="tnum font-black">{formatLiters(summary.diesel)}</p>
                           </div>
                           <div>
-                            <p className="text-on-surface-variant">m3/L</p>
-                            <p className="tnum font-black">{formatNumber(summary.fuelPerM3, 3)}</p>
+                            <p className="text-on-surface-variant">
+                              {summary.item === "limpeza" ? "L/h" : "m3/L"}
+                            </p>
+                            <p className="tnum font-black">
+                              {formatNumber(
+                                summary.item === "limpeza"
+                                  ? summary.fuelPerHour
+                                  : summary.fuelPerM3,
+                                summary.item === "limpeza" ? 2 : 3,
+                              )}
+                            </p>
                           </div>
                           <div>
                             <p className="text-on-surface-variant">Horas</p>
                             <p className="tnum font-black">{formatHours(summary.hours)}</p>
                           </div>
                           <div>
-                            <p className="text-on-surface-variant">m3</p>
-                            <p className="tnum font-black">{formatM3(summary.compactedM3)}</p>
+                            <p className="text-on-surface-variant">
+                              {summary.item === "limpeza" ? "Equipamentos" : "m3"}
+                            </p>
+                            <p className="tnum font-black">
+                              {summary.item === "limpeza"
+                                ? String(summary.equipment.filter(isCountableEquipment).length)
+                                : formatM3(summary.compactedM3)}
+                            </p>
                           </div>
                         </div>
                       </button>
@@ -8038,8 +8101,7 @@ function ProducaoConsumoRefactored() {
                         className="mt-1 block w-full rounded border border-border-low bg-surface-highest px-3 py-2 text-xs font-normal normal-case tracking-normal text-on-surface"
                       >
                         <option value="diesel">Top 10 por diesel</option>
-                        <option value="worstLitersPerM3">Top 10 pior L/m³</option>
-                        <option value="bestM3PerLiter">Top 10 melhor m³/L</option>
+                        <option value="lph">Top 10 por L/h</option>
                       </select>
                     </label>
                     <div className="mt-4 h-[260px]">
@@ -8153,18 +8215,13 @@ function ProducaoConsumoRefactored() {
               </div>
             )}
 
-            {activeTab === "limpeza" && (
+            {activeTab === "limpezaSemProducao" && (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
+                <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-5 gap-3">
                   <KpiCardCompact
                     label="Diesel limpeza"
                     value={formatLiters(limpezaKpis.diesel)}
                     icon="local_gas_station"
-                  />
-                  <KpiCardCompact
-                    label="Custo limpeza"
-                    value={formatBRL(limpezaKpis.cost)}
-                    icon="payments"
                   />
                   <KpiCardCompact
                     label="Horas sem produção"
@@ -8291,6 +8348,14 @@ function ProducaoConsumoRefactored() {
                   )}
                 </div>
               </div>
+            )}
+
+            {activeTab === "limpeza" && (
+              <OperationalItemPanel
+                summary={limpezaSummary}
+                stack={itemEquipmentStacks.get("limpeza") ?? EMPTY_ITEM_STACK}
+                validObras={chartVisibleObras}
+              />
             )}
 
             {activeTab === "escavacao" && (

@@ -4,6 +4,7 @@
  */
 
 import { type DashboardFilterState } from "@/lib/production-consumption-types";
+import { useActiveTabScroll } from "@/hooks/useActiveTabScroll";
 
 interface DashboardFiltersProps {
   state: DashboardFilterState;
@@ -155,16 +156,22 @@ interface TabsProps {
 }
 
 export function DashboardTabs({ tabs, activeTab, onChange }: TabsProps) {
+  const tabsRef = useActiveTabScroll<HTMLDivElement>();
+
   return (
-    <div className="mb-4 flex gap-2 overflow-x-auto border-b border-border-low">
+    <div
+      ref={tabsRef}
+      className="mb-4 flex gap-2 overflow-x-auto border-b border-border-low scroll-smooth overscroll-x-contain"
+    >
       {tabs.map(({ id, label }) => (
         <button
           key={id}
           type="button"
           onClick={() => onChange(id)}
+          data-active={activeTab === id}
           className={`px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border-b-2 transition-colors ${
             activeTab === id
-              ? "border-primary text-primary"
+              ? "border-primary bg-primary/10 text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface"
           }`}
         >
