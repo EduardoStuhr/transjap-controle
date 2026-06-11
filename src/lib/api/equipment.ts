@@ -142,7 +142,7 @@ export const updateEquipment = createServerFn({ method: "POST" })
         throw new Error(`A frota ${patch.id} já está cadastrada.`);
       }
       rows[index] = { ...rows[index], ...patch };
-      return { ok: true };
+      return rows[index];
     }
 
     const db = getDb(d1);
@@ -158,7 +158,13 @@ export const updateEquipment = createServerFn({ method: "POST" })
     }
 
     await db.update(equipmentTable).set(patch).where(eq(equipmentTable.id, data.id));
-    return { ok: true };
+    const updated = await db
+      .select()
+      .from(equipmentTable)
+      .where(eq(equipmentTable.id, patch.id ?? data.id))
+      .get();
+    if (!updated) throw new Error(`Equipamento ${data.id} nÃ£o encontrado.`);
+    return updated;
   });
 
 export const deleteEquipment = createServerFn({ method: "POST" })

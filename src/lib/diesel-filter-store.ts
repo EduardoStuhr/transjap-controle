@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   createDieselFilterChange,
   deleteDieselFilterChange,
@@ -28,6 +28,14 @@ export type DieselFilterSummary = {
 const QK = ["diesel-filter-changes"] as const;
 const ATTENTION_LIMIT_HOURS = 250;
 const CRITICAL_LIMIT_HOURS = 300;
+
+function getCachedDieselFilterChanges(queryClient: QueryClient) {
+  return queryClient.getQueryData<DieselFilterChangeWithHours[]>(QK) ?? [];
+}
+
+function setCachedDieselFilterChanges(queryClient: QueryClient, rows: DieselFilterChange[]) {
+  queryClient.setQueryData<DieselFilterChangeWithHours[]>(QK, enrichDieselFilterChanges(rows));
+}
 
 function roundHours(value: number) {
   return Math.round(value * 10) / 10;
@@ -159,26 +167,66 @@ export function useDieselFilterChanges(enabled = true) {
 
 export function useDieselFilterActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: QK });
 
   const createMutation = useMutation({
     mutationFn: (draft: DieselFilterChangeDraft) => createDieselFilterChange({ data: draft }),
-    onSuccess: invalidate,
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: DieselFilterChangePatch }) =>
       updateDieselFilterChange({ data: { id, patch } }),
-    onSuccess: invalidate,
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteDieselFilterChange({ data: id }),
-    onSuccess: invalidate,
   });
 
   return {
-    create: createMutation.mutateAsync,
-    update: updateMutation.mutateAsync,
-    remove: deleteMutation.mutateAsync,
+    async create(draft: DieselFilterChangeDraft) {
+      await queryClient.cancelQueries({ queryKey: QK });
+      const previous = getCachedDieselFilterChanges(queryClient);
+
+      try {
+        const saved = await createMutation.mutateAsync(draft);
+        setCachedDieselFilterChanges(queryClient, [
+          saved,
+          ...getCachedDieselFilterChanges(queryClient),
+        ]);
+        return saved;
+      } catch (error) {
+        queryClient.setQueryData(QK, previous);
+        throw error;
+      }
+    },
+    async update({ id, patch }: { id: string; patch: DieselFilterChangePatch }) {
+      await queryClient.cancelQueries({ queryKey: QK });
+      const previous = getCachedDieselFilterChanges(queryClient);
+
+      try {
+        const saved = await updateMutation.mutateAsync({ id, patch });
+        setCachedDieselFilterChanges(queryClient, [
+          saved,
+          ...getCachedDieselFilterChanges(queryClient).filter((row) => row.id !== id),
+        ]);
+        return saved;
+      } catch (error) {
+        queryClient.setQueryData(QK, previous);
+        throw error;
+      }
+    },
+    async remove(id: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
+      const previous = getCachedDieselFilterChanges(queryClient);
+      queryClient.setQueryData<DieselFilterChangeWithHours[]>(
+        QK,
+        previous.filter((row) => row.id !== id),
+      );
+
+      try {
+        return await deleteMutation.mutateAsync(id);
+      } catch (error) {
+        queryClient.setQueryData(QK, previous);
+        throw error;
+      }
+    },
     isSaving: createMutation.isPending || updateMutation.isPending || deleteMutation.isPending,
   };
 }

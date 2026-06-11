@@ -1,10 +1,12 @@
 import { useMemo } from "react";
 import { Icon } from "@/components/AppLayout";
+import type { Equipment, EquipmentStatus } from "@/lib/equipment-store";
 import type { MaintenanceRecord, MaintenanceStatus } from "@/lib/maintenance-store";
-import { formatFleetCode } from "@/lib/operational-options";
+import { formatEquipmentLabel, formatFleetCode, normalizeFleetId } from "@/lib/operational-options";
 
 type Props = {
   records: MaintenanceRecord[];
+  equipments: Equipment[];
   onRecordClick: (id: string) => void;
 };
 
@@ -37,6 +39,29 @@ function displayEquipmentReference(value: string): string {
   return isFleetCode ? formatFleetCode(trimmed) : value;
 }
 
+function findEquipmentForRecord(record: MaintenanceRecord, equipments: Equipment[]) {
+  const normalized = normalizeFleetId(record.equipment);
+  return (
+    equipments.find(
+      (equipment) =>
+        equipment.id === record.equipment ||
+        equipment.id === normalized ||
+        equipment.model === record.equipment ||
+        formatEquipmentLabel(equipment) === record.equipment,
+    ) ?? null
+  );
+}
+
+function equipmentStatusTone(status: EquipmentStatus) {
+  if (status === "Operação") {
+    return "bg-status-success/10 text-status-success border-status-success/30";
+  }
+  if (status === "Parado") {
+    return "bg-status-error/10 text-status-error border-status-error/30";
+  }
+  return "bg-status-warning/10 text-status-warning border-status-warning/30";
+}
+
 function toneForStatus(status: MaintenanceStatus, days: number) {
   if (status === "Atrasada" || days > 14) {
     return {
@@ -62,7 +87,7 @@ function toneForStatus(status: MaintenanceStatus, days: number) {
   };
 }
 
-export function EquipmentsInMaintenancePanel({ records, onRecordClick }: Props) {
+export function EquipmentsInMaintenancePanel({ records, equipments, onRecordClick }: Props) {
   const active = useMemo(
     () =>
       records
@@ -111,6 +136,7 @@ export function EquipmentsInMaintenancePanel({ records, onRecordClick }: Props) 
           const days = daysOpen(record.createdAt);
           const tone = toneForStatus(record.status, days);
           const supplier = record.costEntries[0]?.supplierName || record.supplierName;
+          const equipment = findEquipmentForRecord(record, equipments);
           return (
             <button
               key={record.id}
@@ -125,11 +151,20 @@ export function EquipmentsInMaintenancePanel({ records, onRecordClick }: Props) 
                     {displayEquipmentReference(record.equipment)}
                   </p>
                 </div>
-                <span
-                  className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded ${tone.badge}`}
-                >
-                  {tone.label}
-                </span>
+                <div className="flex flex-wrap justify-end gap-1">
+                  {equipment && (
+                    <span
+                      className={`rounded border px-2 py-1 text-[10px] font-black uppercase tracking-wider ${equipmentStatusTone(equipment.status)}`}
+                    >
+                      {equipment.status}
+                    </span>
+                  )}
+                  <span
+                    className={`text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded ${tone.badge}`}
+                  >
+                    {tone.label}
+                  </span>
+                </div>
               </div>
               <p className="text-xs text-on-surface-variant mb-1">
                 <strong className="text-on-surface">{record.type}</strong>

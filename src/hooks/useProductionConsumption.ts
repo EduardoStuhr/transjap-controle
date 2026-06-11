@@ -8,6 +8,7 @@ import type { DbProductionAnalysis, DbTrip, DbFueling, DbEquipmentDailyPart } fr
 import { normalizeFleet } from "@/lib/carcara-parser";
 import type { DashboardFilterState } from "@/lib/production-consumption-types";
 import {
+  extractDateKey,
   normalizeObraKey,
   normalizeObraName,
   uniqueNormalizedObras,
@@ -239,7 +240,7 @@ export function useFilteredData(
   dailyParts: DbEquipmentDailyPart[],
   filters: DashboardFilterState,
 ) {
-  const dateKey = (value: string) => (value ? value.slice(0, 10) : "");
+  const dateKey = extractDateKey;
   const equipmentKey = (row: { prefix?: string; vehicleId?: string; plate?: string }) =>
     row.prefix || row.vehicleId || row.plate || "";
   const selectedObraKey = filters.obra === "all" ? "" : normalizeObraKey(filters.obra);
@@ -318,8 +319,9 @@ export function useFilteredData(
 
   const filteredDailyParts = useMemo(() => {
     return dailyParts.filter((row) => {
-      if (filters.dateFrom && row.date < filters.dateFrom) return false;
-      if (filters.dateTo && row.date > filters.dateTo) return false;
+      const rowDate = dateKey(row.date);
+      if (filters.dateFrom && rowDate < filters.dateFrom) return false;
+      if (filters.dateTo && rowDate > filters.dateTo) return false;
       if (!matchesSelectedObra(row)) return false;
       if (
         filters.equipment !== "all" &&

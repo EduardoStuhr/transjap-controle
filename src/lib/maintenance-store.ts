@@ -358,6 +358,51 @@ function filterDeletedRecords(state: MaintenanceState): MaintenanceState {
   };
 }
 
+function timestampMs(value: string | undefined) {
+  if (!value) return 0;
+  if (value.includes("/")) {
+    const [d, m, y] = value.split("/").map(Number);
+    if (Number.isFinite(d) && Number.isFinite(m) && Number.isFinite(y)) {
+      return new Date(y, m - 1, d).getTime();
+    }
+  }
+
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function recordFreshness(record: MaintenanceRecord) {
+  return Math.max(
+    timestampMs(record.createdAt),
+    timestampMs(record.startedAt),
+    timestampMs(record.finishedAt),
+    ...record.timeline.map((event) => timestampMs(event.timestamp)),
+    ...record.costEntries.map((entry) => timestampMs(entry.createdAt)),
+    ...record.steps.flatMap((step) => [timestampMs(step.startedAt), timestampMs(step.completedAt)]),
+  );
+}
+
+function mergeMaintenanceStates(local: MaintenanceState, remote: MaintenanceState) {
+  const deletedIds = readDeletedRecordIds();
+  const byId = new Map<string, MaintenanceRecord>();
+
+  remote.records.forEach((record) => {
+    if (!deletedIds.has(record.id)) byId.set(record.id, record);
+  });
+
+  local.records.forEach((record) => {
+    if (deletedIds.has(record.id)) return;
+    const remoteRecord = byId.get(record.id);
+    if (!remoteRecord || recordFreshness(record) > recordFreshness(remoteRecord)) {
+      byId.set(record.id, record);
+    }
+  });
+
+  return {
+    records: Array.from(byId.values()).sort((a, b) => recordFreshness(b) - recordFreshness(a)),
+  };
+}
+
 function readStorage(): MaintenanceState {
   if (!isBrowser()) return EMPTY_STATE;
 
@@ -412,14 +457,14 @@ function useLocalMaintenanceMigration(remoteState: MaintenanceState | undefined,
     );
 
     if (records.length === 0) {
-      writeStorage(remoteState);
+      writeStorage(mergeMaintenanceStates(localState, remoteState));
       return;
     }
 
     localMigrationStarted = true;
     Promise.all(records.map((record) => createMaintenanceRecord({ data: record })))
       .then(() => {
-        writeStorage(remoteState);
+        writeStorage(mergeMaintenanceStates(readStorage(), remoteState));
         localMigrationStarted = false;
         return queryClient.refetchQueries({ queryKey: QK, type: "active" });
       })
@@ -451,7 +496,12 @@ export function getMaintenanceTotalCost(
 export function useMaintenanceStore<T>(selector: MaintenanceSelector<T>): T {
   const query = useQuery({
     queryKey: QK,
-    queryFn: async () => normalizeState(await listMaintenance()),
+    queryFn: async () => {
+      const remote = normalizeState(await listMaintenance());
+      const merged = mergeMaintenanceStates(readStorage(), remote);
+      writeStorage(merged);
+      return merged;
+    },
     staleTime: 0,
     retry: 1,
     placeholderData: () => readStorage(),
@@ -464,9 +514,6 @@ export function useMaintenanceStore<T>(selector: MaintenanceSelector<T>): T {
 
 export function useMaintenanceActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => {
-    void queryClient.refetchQueries({ queryKey: QK, type: "active" });
-  };
 
   const createMutation = useMutation({
     mutationFn: (record: MaintenanceRecord) => createMaintenanceRecord({ data: record }),
@@ -481,13 +528,16 @@ export function useMaintenanceActions() {
   });
 
   const updateRecord = async (record: MaintenanceRecord) => {
+    await queryClient.cancelQueries({ queryKey: QK });
     const previous = getCachedState(queryClient);
     setCachedState(queryClient, { records: upsertRecord(previous.records, record) });
 
     try {
-      await updateMutation.mutateAsync(record);
-      invalidate();
-      return record;
+      const saved = normalizeRecord(await updateMutation.mutateAsync(record));
+      setCachedState(queryClient, {
+        records: upsertRecord(getCachedState(queryClient).records, saved),
+      });
+      return saved;
     } catch (error) {
       setCachedState(queryClient, previous);
       throw error;
@@ -559,13 +609,16 @@ export function useMaintenanceActions() {
         waitingParts: [],
       };
 
+      await queryClient.cancelQueries({ queryKey: QK });
       const previous = getCachedState(queryClient);
       setCachedState(queryClient, { records: upsertRecord(previous.records, record) });
 
       try {
-        await createMutation.mutateAsync(record);
-        invalidate();
-        return record;
+        const saved = normalizeRecord(await createMutation.mutateAsync(record));
+        setCachedState(queryClient, {
+          records: upsertRecord(getCachedState(queryClient).records, saved),
+        });
+        return saved;
       } catch (error) {
         setCachedState(queryClient, previous);
         throw error;
@@ -764,11 +817,9 @@ export function useMaintenanceActions() {
         setCachedState(queryClient, {
           records: getCachedState(queryClient).records.filter((record) => record.id !== id),
         });
-        invalidate();
       } catch (error) {
         unmarkDeletedRecordId(id);
         setCachedState(queryClient, previous);
-        invalidate();
         throw error;
       }
     },

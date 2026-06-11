@@ -986,7 +986,16 @@ type ProductionAggregationAuditRow = {
 };
 
 function shortDateLabel(date: string) {
-  return date && date.length >= 10 ? `${date.slice(8, 10)}/${date.slice(5, 7)}` : date;
+  const key = extractDateKey(date);
+  return key && key.length >= 10 ? `${key.slice(8, 10)}/${key.slice(5, 7)}` : date;
+}
+
+function dateInFilterRange(date: string | Date | null | undefined, dateFrom = "", dateTo = "") {
+  const key = extractDateKey(date);
+  if (!key) return false;
+  if (dateFrom && key < dateFrom) return false;
+  if (dateTo && key > dateTo) return false;
+  return true;
 }
 
 function emptyItemSummary(item: OperationalItem): ItemSummary {
@@ -2404,9 +2413,7 @@ function ProducaoConsumoRefactored() {
   const visibleDateKeys = useMemo(
     () =>
       selectedAnalysisDateKeys.filter((date) => {
-        if (filters.dateFrom && date < filters.dateFrom) return false;
-        if (filters.dateTo && date > filters.dateTo) return false;
-        return true;
+        return dateInFilterRange(date, filters.dateFrom, filters.dateTo);
       }),
     [filters.dateFrom, filters.dateTo, selectedAnalysisDateKeys],
   );
@@ -2606,8 +2613,7 @@ function ProducaoConsumoRefactored() {
 
   const filteredFuelAllocations = useMemo(() => {
     return obraScopedFuelAllocationRows.filter((row) => {
-      if (filters.dateFrom && row.pdeDate < filters.dateFrom) return false;
-      if (filters.dateTo && row.pdeDate > filters.dateTo) return false;
+      if (!dateInFilterRange(row.pdeDate, filters.dateFrom, filters.dateTo)) return false;
       if (
         filters.obra !== "all" &&
         resolvedWorksiteKey(row as FuelAllocationSupportRow & ObraScopeAudit) !==
@@ -2636,8 +2642,7 @@ function ProducaoConsumoRefactored() {
 
   const filteredAttributions = useMemo(() => {
     return obraScopedFuelAttrRows.filter((row) => {
-      if (filters.dateFrom && row.date < filters.dateFrom) return false;
-      if (filters.dateTo && row.date > filters.dateTo) return false;
+      if (!dateInFilterRange(row.date, filters.dateFrom, filters.dateTo)) return false;
       if (
         filters.obra !== "all" &&
         resolvedWorksiteKey(row as DbFuelAttribution & ObraScopeAudit) !==
@@ -3075,8 +3080,7 @@ function ProducaoConsumoRefactored() {
       const blocked = allocatedSourceIds.has(fuel.id);
       const date = extractDateKey(fuel.datetime);
       const dateFiltered =
-        Boolean(filters.dateFrom && date < filters.dateFrom) ||
-        Boolean(filters.dateTo && date > filters.dateTo);
+        !dateInFilterRange(date, filters.dateFrom, filters.dateTo);
       const status = blocked ? "BLOCKED_SOURCE" : dateFiltered ? "NO_DATA" : worksite.status;
       return {
         source: "CMB",
@@ -3114,8 +3118,7 @@ function ProducaoConsumoRefactored() {
         Boolean(pdeWorksite.trim() && allocation.obra.trim()) &&
         normalizeObraKey(pdeWorksite) !== normalizeObraKey(allocation.obra);
       const dateFiltered =
-        Boolean(filters.dateFrom && allocation.pdeDate < filters.dateFrom) ||
-        Boolean(filters.dateTo && allocation.pdeDate > filters.dateTo);
+        !dateInFilterRange(allocation.pdeDate, filters.dateFrom, filters.dateTo);
       const status =
         rawDiffers || pdeDiffers ? "WRONG_WORKSITE" : dateFiltered ? "NO_DATA" : worksite.status;
       return {
@@ -3251,8 +3254,12 @@ function ProducaoConsumoRefactored() {
 
     const rawExclusionReason = (fuel: DbFueling, key: string) => {
       const date = extractDateKey(fuel.datetime);
-      if (filters.dateFrom && date < filters.dateFrom) return "fora da data inicial";
-      if (filters.dateTo && date > filters.dateTo) return "fora da data final";
+      if (filters.dateFrom && !dateInFilterRange(date, filters.dateFrom, "")) {
+        return "fora da data inicial";
+      }
+      if (filters.dateTo && !dateInFilterRange(date, "", filters.dateTo)) {
+        return "fora da data final";
+      }
       if (
         filters.obra !== "all" &&
         resolvedWorksiteKey(fuel as DbFueling & ObraScopeAudit) !== obraSelectionKey(filters.obra)
@@ -3272,9 +3279,10 @@ function ProducaoConsumoRefactored() {
     };
 
     const allocationExclusionReason = (row: FuelAllocationSupportRow) => {
-      if (filters.dateFrom && row.pdeDate < filters.dateFrom)
+      if (filters.dateFrom && !dateInFilterRange(row.pdeDate, filters.dateFrom, ""))
         return "pdeDate antes da data inicial";
-      if (filters.dateTo && row.pdeDate > filters.dateTo) return "pdeDate depois da data final";
+      if (filters.dateTo && !dateInFilterRange(row.pdeDate, "", filters.dateTo))
+        return "pdeDate depois da data final";
       if (
         filters.obra !== "all" &&
         resolvedWorksiteKey(row as FuelAllocationSupportRow & ObraScopeAudit) !==
@@ -3506,9 +3514,7 @@ function ProducaoConsumoRefactored() {
     const dates = new Set([...visibleDateKeys, ...dailyMetricsMap.keys()]);
     return [...dates]
       .filter((date) => {
-        if (filters.dateFrom && date < filters.dateFrom) return false;
-        if (filters.dateTo && date > filters.dateTo) return false;
-        return true;
+        return dateInFilterRange(date, filters.dateFrom, filters.dateTo);
       })
       .sort()
       .map((date) => {
@@ -3560,8 +3566,7 @@ function ProducaoConsumoRefactored() {
     if (!needsHours) return [];
     return hourlyAnalysisTrips.filter((trip) => {
       const date = parseRcoOperationalDateTime(trip.datetime)?.date ?? "";
-      if (filters.dateFrom && date < filters.dateFrom) return false;
-      if (filters.dateTo && date > filters.dateTo) return false;
+      if (!dateInFilterRange(date, filters.dateFrom, filters.dateTo)) return false;
       if (!isRcoProductiveTrip(trip)) return false;
       if (filters.material !== "all" && trip.material !== filters.material) return false;
       if (
@@ -3661,8 +3666,7 @@ function ProducaoConsumoRefactored() {
       ) {
         return false;
       }
-      if (filters.dateFrom && date < filters.dateFrom) return false;
-      if (filters.dateTo && date > filters.dateTo) return false;
+      if (!dateInFilterRange(date, filters.dateFrom, filters.dateTo)) return false;
       return true;
     });
   }, [
@@ -5183,8 +5187,8 @@ function ProducaoConsumoRefactored() {
   const dieselM3ProductionRows = useMemo(
     () =>
       dieselM3BaseData.dailyProductionByWorksite.filter((row) => {
-        if (dieselM3Filters.dateFrom && row.date < dieselM3Filters.dateFrom) return false;
-        if (dieselM3Filters.dateTo && row.date > dieselM3Filters.dateTo) return false;
+        if (!dateInFilterRange(row.date, dieselM3Filters.dateFrom, dieselM3Filters.dateTo))
+          return false;
         if (dieselM3SelectedObraKey !== "all" && row.obraKey !== dieselM3SelectedObraKey)
           return false;
         return true;
@@ -5196,8 +5200,8 @@ function ProducaoConsumoRefactored() {
     () =>
       dieselM3BaseData.dieselM3Rows.filter((row) => {
         if (!dieselM3RcoObraDomain.has(row.obraKey)) return false;
-        if (dieselM3Filters.dateFrom && row.date < dieselM3Filters.dateFrom) return false;
-        if (dieselM3Filters.dateTo && row.date > dieselM3Filters.dateTo) return false;
+        if (!dateInFilterRange(row.date, dieselM3Filters.dateFrom, dieselM3Filters.dateTo))
+          return false;
         if (dieselM3SelectedObraKey !== "all" && row.obraKey !== dieselM3SelectedObraKey)
           return false;
         if (dieselM3Filters.item !== "all" && row.item !== dieselM3Filters.item) return false;
@@ -5297,11 +5301,10 @@ function ProducaoConsumoRefactored() {
     ]);
     const calendarDates = [...unionDates]
       .filter((date) => {
-        if (filters.dateFrom && date < filters.dateFrom) return false;
-        if (filters.dateTo && date > filters.dateTo) return false;
-        if (dieselM3Filters.dateFrom && date < dieselM3Filters.dateFrom) return false;
-        if (dieselM3Filters.dateTo && date > dieselM3Filters.dateTo) return false;
-        return true;
+        return (
+          dateInFilterRange(date, filters.dateFrom, filters.dateTo) &&
+          dateInFilterRange(date, dieselM3Filters.dateFrom, dieselM3Filters.dateTo)
+        );
       })
       .sort();
     const ensure = (

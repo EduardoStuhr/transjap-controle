@@ -42,11 +42,18 @@ import {
   ASSIGNMENT_OPTIONS,
   MAINTENANCE_TYPE_OPTIONS,
   buildEquipmentOptions,
+  formatEquipmentLabel,
   formatEquipmentReference,
+  normalizeFleetId,
   type EquipmentOption,
 } from "@/lib/operational-options";
 import { daysSinceBrDate } from "@/lib/urgency";
-import { useEquipmentStore } from "@/lib/equipment-store";
+import {
+  useEquipmentActions,
+  useEquipmentStore,
+  type Equipment,
+  type EquipmentStatus,
+} from "@/lib/equipment-store";
 import { formatBrDate, formatBrDateTime } from "@/lib/utils";
 import { EquipmentsInMaintenancePanel } from "@/components/EquipmentsInMaintenancePanel";
 
@@ -103,6 +110,8 @@ const TYPE_META: Record<string, Omit<MaintenanceType, "name">> = {
   },
 };
 
+const EQUIPMENT_STATUS_OPTIONS: EquipmentStatus[] = ["Operação", "Manutenção", "Parado"];
+
 const TYPES: MaintenanceType[] = MAINTENANCE_TYPE_OPTIONS.map((name) => ({
   name,
   ...TYPE_META[name],
@@ -126,10 +135,39 @@ function getErrorMessage(error: unknown) {
   return "Tente novamente.";
 }
 
+function findEquipmentForMaintenance(
+  record: Pick<MaintenanceRecord, "equipment"> | null | undefined,
+  equipments: Equipment[],
+) {
+  if (!record?.equipment) return null;
+  const normalized = normalizeFleetId(record.equipment);
+
+  return (
+    equipments.find(
+      (equipment) =>
+        equipment.id === record.equipment ||
+        equipment.id === normalized ||
+        equipment.model === record.equipment ||
+        formatEquipmentLabel(equipment) === record.equipment,
+    ) ?? null
+  );
+}
+
+function equipmentStatusClass(status: EquipmentStatus) {
+  if (status === "Operação") {
+    return "border-status-success/30 bg-status-success/10 text-status-success";
+  }
+  if (status === "Parado") {
+    return "border-status-error/30 bg-status-error/10 text-status-error";
+  }
+  return "border-status-warning/30 bg-status-warning/10 text-status-warning";
+}
+
 function Manutencao() {
   const statusTabsRef = useActiveTabScroll<HTMLDivElement>();
   const inventoryActions = useInventoryActions();
   const maintenanceActions = useMaintenanceActions();
+  const equipmentActions = useEquipmentActions();
   const records = useMaintenanceStore((snapshot) => snapshot.records);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const inventoryItems = useInventoryStore((snapshot) => snapshot.items);
@@ -178,6 +216,7 @@ function Manutencao() {
   }`;
 
   const selectedRecord = records.find((record) => record.id === selectedRecordId) || null;
+  const selectedEquipment = findEquipmentForMaintenance(selectedRecord, equipments);
   const selectedInventoryItem = inventoryItems.find((item) => item.id === consumption.itemId);
   const selectedRecordMovements = selectedRecord
     ? movements.filter(
@@ -399,6 +438,7 @@ function Manutencao() {
 
       <EquipmentsInMaintenancePanel
         records={records}
+        equipments={equipments}
         onRecordClick={(id) => setSelectedRecordId(id)}
       />
 
@@ -704,9 +744,13 @@ function Manutencao() {
       <MaintenanceDetailsDialog
         record={selectedRecord}
         equipmentLabel={formatEquipment(selectedRecord?.equipment)}
+        equipment={selectedEquipment}
         movements={selectedRecordMovements}
         inventoryItems={inventoryItems}
         actions={maintenanceActions}
+        onEquipmentStatusChange={(equipmentId, status) =>
+          equipmentActions.update(equipmentId, { status })
+        }
         canDelete={canDeleteMaintenance}
         onRequestDelete={requestDeleteMaintenance}
         onOpenChange={(open) => {
@@ -1141,18 +1185,22 @@ function MaintenanceFormDialog({
 function MaintenanceDetailsDialog({
   record: incomingRecord,
   equipmentLabel,
+  equipment,
   movements,
   inventoryItems,
   actions,
+  onEquipmentStatusChange,
   canDelete,
   onRequestDelete,
   onOpenChange,
 }: {
   record: MaintenanceRecord | null;
   equipmentLabel: string;
+  equipment: Equipment | null;
   movements: StockMovement[];
   inventoryItems: InventoryItem[];
   actions: ReturnType<typeof useMaintenanceActions>;
+  onEquipmentStatusChange: (equipmentId: string, status: EquipmentStatus) => Promise<unknown>;
   canDelete: boolean;
   onRequestDelete: (record: MaintenanceRecord) => void;
   onOpenChange: (open: boolean) => void;
@@ -1176,11 +1224,17 @@ function MaintenanceDetailsDialog({
   const [removingCost, setRemovingCost] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
   const [completingRecord, setCompletingRecord] = useState(false);
+  const [savingEquipmentStatus, setSavingEquipmentStatus] = useState(false);
+  const [equipmentStatusDraft, setEquipmentStatusDraft] = useState<EquipmentStatus | "">("");
   const activeStepIndex = record ? getActiveStepIndex(record.steps) : -1;
 
   useEffect(() => {
     setRecord(incomingRecord);
   }, [incomingRecord]);
+
+  useEffect(() => {
+    setEquipmentStatusDraft(equipment?.status ?? "");
+  }, [equipment?.id]);
 
   useEffect(() => {
     setWaitingPart("");
@@ -1237,6 +1291,24 @@ function MaintenanceDetailsDialog({
       toast.error("Não foi possível concluir a manutenção.");
     } finally {
       setCompletingRecord(false);
+    }
+  };
+
+  const updateEquipmentStatus = async (status: EquipmentStatus) => {
+    setEquipmentStatusDraft(status);
+    if (!equipment || equipment.status === status) return;
+    setSavingEquipmentStatus(true);
+    try {
+      await onEquipmentStatusChange(equipment.id, status);
+      toast.success("Situação do equipamento atualizada.", {
+        description: `${equipmentLabel} · ${status}`,
+      });
+    } catch (error) {
+      console.error(error);
+      setEquipmentStatusDraft(equipment.status);
+      toast.error("Não foi possível atualizar a situação do equipamento.");
+    } finally {
+      setSavingEquipmentStatus(false);
     }
   };
 
@@ -1333,6 +1405,57 @@ function MaintenanceDetailsDialog({
                   })}
                   valueClassName="text-primary"
                 />
+              </div>
+              <div className="rounded-lg border border-border-low bg-surface-highest p-3 sm:p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                      Situação do equipamento
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {equipment ? (
+                        <>
+                          <span
+                            className={`rounded border px-3 py-1 text-xs font-black uppercase tracking-wider ${equipmentStatusClass(equipmentStatusDraft || equipment.status)}`}
+                          >
+                            {equipmentStatusDraft || equipment.status}
+                          </span>
+                          <span className="text-xs text-on-surface-variant">
+                            {equipment.model}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-xs font-bold text-on-surface-variant">
+                          Equipamento não encontrado no cadastro da frota
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-1 sm:w-56">
+                    <label
+                      htmlFor="equipment-status"
+                      className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant"
+                    >
+                      Alterar para
+                    </label>
+                    <select
+                      id="equipment-status"
+                      value={equipmentStatusDraft || equipment?.status || ""}
+                      disabled={!equipment || savingEquipmentStatus}
+                      onChange={(event) =>
+                        void updateEquipmentStatus(event.target.value as EquipmentStatus)
+                      }
+                      className="w-full rounded border border-border-low bg-surface-container px-3 py-2 text-sm font-bold text-on-surface outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {!equipment && <option value="">Sem equipamento</option>}
+                      {EQUIPMENT_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
               <div className="bg-surface-highest border border-border-low rounded-lg p-3 sm:p-4">
                 <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-on-surface-variant">

@@ -361,9 +361,6 @@ export function useInventoryStore<T>(selector: InventorySelector<T>): T {
 
 export function useInventoryActions() {
   const queryClient = useQueryClient();
-  const invalidate = () => {
-    void queryClient.refetchQueries({ queryKey: QK, type: "active" });
-  };
 
   const itemMutation = useMutation({
     mutationFn: ({ item, exists }: { item: InventoryItem; exists: boolean }) =>
@@ -400,6 +397,7 @@ export function useInventoryActions() {
     },
 
     async saveItem(draft: InventoryDraft, id?: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const current = getCachedState(queryClient);
       const existing = current.items.find((item) => item.id === id);
       const code =
@@ -435,9 +433,14 @@ export function useInventoryActions() {
       );
 
       try {
-        await itemMutation.mutateAsync({ item, exists: Boolean(existing) });
-        invalidate();
-        return item;
+        const saved = await itemMutation.mutateAsync({ item, exists: Boolean(existing) });
+        const latest = getCachedState(queryClient);
+        setCachedInventory(
+          queryClient,
+          { ...inventoryData(latest), items: upsertById(latest.items, saved) },
+          current.offlineQueue,
+        );
+        return saved;
       } catch (error) {
         restoreCachedInventory(queryClient, current);
         throw error;
@@ -445,6 +448,7 @@ export function useInventoryActions() {
     },
 
     async saveLocation(draft: LocationDraft, id?: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const current = getCachedState(queryClient);
       const existing = current.locations.find((location) => location.id === id);
       const code = draft.code.trim() || existing?.code || newId("LOC");
@@ -465,9 +469,16 @@ export function useInventoryActions() {
       );
 
       try {
-        await locationMutation.mutateAsync({ location, exists: Boolean(existing) });
-        invalidate();
-        return location;
+        const saved = await locationMutation.mutateAsync({ location, exists: Boolean(existing) });
+        setCachedInventory(
+          queryClient,
+          {
+            ...inventoryData(getCachedState(queryClient)),
+            locations: upsertById(getCachedState(queryClient).locations, saved),
+          },
+          current.offlineQueue,
+        );
+        return saved;
       } catch (error) {
         restoreCachedInventory(queryClient, current);
         throw error;
@@ -475,6 +486,7 @@ export function useInventoryActions() {
     },
 
     async applyMovement(draft: MovementDraft) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const current = getCachedState(queryClient);
       const item = current.items.find((currentItem) => currentItem.id === draft.itemId);
       if (!item) return null;
@@ -502,12 +514,21 @@ export function useInventoryActions() {
       );
 
       try {
-        await movementMutation.mutateAsync({
+        const saved = await movementMutation.mutateAsync({
           item: nextItem,
           movement: syncedMovement,
         });
-        invalidate();
-        return syncedMovement;
+        const latest = getCachedState(queryClient);
+        setCachedInventory(
+          queryClient,
+          {
+            ...inventoryData(latest),
+            items: upsertById(latest.items, nextItem),
+            movements: upsertById(latest.movements, saved),
+          },
+          current.offlineQueue,
+        );
+        return saved;
       } catch (error) {
         restoreCachedInventory(queryClient, current);
         throw error;
@@ -549,6 +570,7 @@ export function useInventoryActions() {
     },
 
     async removeItem(id: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const previous = getCachedState(queryClient);
       setCachedInventory(
         queryClient,
@@ -560,7 +582,6 @@ export function useInventoryActions() {
       );
       try {
         await deleteItemMutation.mutateAsync(id);
-        invalidate();
       } catch (error) {
         restoreCachedInventory(queryClient, previous);
         throw error;
@@ -568,6 +589,7 @@ export function useInventoryActions() {
     },
 
     async removeLocation(id: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const previous = getCachedState(queryClient);
       setCachedInventory(
         queryClient,
@@ -579,7 +601,6 @@ export function useInventoryActions() {
       );
       try {
         await deleteLocationMutation.mutateAsync(id);
-        invalidate();
       } catch (error) {
         restoreCachedInventory(queryClient, previous);
         throw error;
@@ -587,6 +608,7 @@ export function useInventoryActions() {
     },
 
     async removeMovement(id: string) {
+      await queryClient.cancelQueries({ queryKey: QK });
       const previous = getCachedState(queryClient);
       setCachedInventory(
         queryClient,
@@ -598,7 +620,6 @@ export function useInventoryActions() {
       );
       try {
         await deleteMovementMutation.mutateAsync(id);
-        invalidate();
       } catch (error) {
         restoreCachedInventory(queryClient, previous);
         throw error;

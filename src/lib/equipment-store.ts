@@ -187,9 +187,6 @@ export function useEquipmentStore<T>(selector: Selector<T>): T {
  */
 export function useEquipmentActions() {
   const qc = useQueryClient();
-  const invalidate = () => {
-    void qc.refetchQueries({ queryKey: QK, type: "active" });
-  };
 
   const addMut = useMutation({
     mutationFn: (draft: EquipmentDraft) =>
@@ -209,6 +206,7 @@ export function useEquipmentActions() {
 
   return {
     async add(draft: EquipmentDraft) {
+      await qc.cancelQueries({ queryKey: QK });
       const previous = getCachedEquipments(qc);
       const optimistic = draftToEquipment(draft);
       setCachedEquipments(qc, upsertEquipment(previous, optimistic));
@@ -216,7 +214,6 @@ export function useEquipmentActions() {
       try {
         const saved = (await addMut.mutateAsync(draft)) as unknown as Equipment;
         setCachedEquipments(qc, upsertEquipment(getCachedEquipments(qc), saved, optimistic.id));
-        invalidate();
         return saved;
       } catch (error) {
         setCachedEquipments(qc, previous);
@@ -224,6 +221,7 @@ export function useEquipmentActions() {
       }
     },
     async update(id: string, patch: Partial<EquipmentDraft>) {
+      await qc.cancelQueries({ queryKey: QK });
       const previous = getCachedEquipments(qc);
       const existing = previous.find((equipment) => equipment.id === id);
       const optimistic =
@@ -246,15 +244,16 @@ export function useEquipmentActions() {
       }
 
       try {
-        const result = await updateMut.mutateAsync({ id, patch });
-        invalidate();
-        return result;
+        const saved = (await updateMut.mutateAsync({ id, patch })) as unknown as Equipment;
+        setCachedEquipments(qc, upsertEquipment(getCachedEquipments(qc), saved, id));
+        return saved;
       } catch (error) {
         setCachedEquipments(qc, previous);
         throw error;
       }
     },
     async remove(id: string) {
+      await qc.cancelQueries({ queryKey: QK });
       const previous = getCachedEquipments(qc);
       setCachedEquipments(
         qc,
@@ -263,7 +262,6 @@ export function useEquipmentActions() {
 
       try {
         const result = await removeMut.mutateAsync(id);
-        invalidate();
         return result;
       } catch (error) {
         setCachedEquipments(qc, previous);
