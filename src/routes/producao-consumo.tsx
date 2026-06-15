@@ -20,6 +20,15 @@ import { toast } from "sonner";
 
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthStore } from "@/lib/auth-store";
 import { DEBUG_FLAG_LABELS, isDebugFlagEnabled, isDebugRuntimeEnabled } from "@/lib/debug-flags";
 import { integrationStatusLabel, type IntegrationStatus } from "@/lib/production-consumption-types";
@@ -690,6 +699,32 @@ type DieselM3ObraComparisonRow = {
   litersPerM3: number;
 };
 
+type PeriodComparisonRange = {
+  dateFrom: string;
+  dateTo: string;
+};
+
+type PeriodComparisonScope = {
+  obraKeys: string[];
+  item: string;
+  equipment: string;
+  aggregate: string;
+};
+
+type PeriodComparisonMetrics = {
+  compactedM3: number;
+  looseM3: number;
+  diesel: number;
+  trips: number;
+  m3PerLiter: number;
+  litersPerM3: number;
+  pdeHours: number;
+  m3PerHour: number;
+};
+
+type PeriodComparisonDiagnosis = "Melhorou" | "Manteve" | "Piorou";
+type PeriodComparisonDirection = "higher" | "lower";
+
 const DIESEL_M3_DEFAULT_FILTERS: DieselM3Filters = {
   dateFrom: "",
   dateTo: "",
@@ -703,6 +738,63 @@ const DIESEL_M3_DEFAULT_FILTERS: DieselM3Filters = {
   compareObraA: "",
   compareObraB: "",
 };
+
+const PERIOD_COMPARISON_TOLERANCE = 0.01;
+
+function periodComparisonMetrics(
+  baseData: DieselM3BaseData,
+  period: PeriodComparisonRange,
+  scope: PeriodComparisonScope,
+): PeriodComparisonMetrics {
+  const selectedObras = new Set(scope.obraKeys);
+  const productionRows = baseData.dailyProductionByWorksite.filter((row) => {
+    if (!dateInFilterRange(row.date, period.dateFrom, period.dateTo)) return false;
+    if (selectedObras.size > 0 && !selectedObras.has(row.obraKey)) return false;
+    return true;
+  });
+  const detailRows = baseData.dieselM3Rows.filter((row) => {
+    if (!dateInFilterRange(row.date, period.dateFrom, period.dateTo)) return false;
+    if (selectedObras.size > 0 && !selectedObras.has(row.obraKey)) return false;
+    if (scope.item !== "all" && row.item !== scope.item) return false;
+    if (scope.equipment !== "all" && row.equipmentKey !== scope.equipment) return false;
+    if (scope.aggregate !== "all" && row.equipmentKey !== scope.aggregate) return false;
+    return true;
+  });
+
+  const compactedM3 = productionRows.reduce((sum, row) => sum + row.compactedM3, 0);
+  const looseM3 = productionRows.reduce((sum, row) => sum + row.looseM3, 0);
+  const trips = productionRows.reduce((sum, row) => sum + row.trips, 0);
+  const diesel = detailRows.reduce((sum, row) => sum + row.diesel, 0);
+  const pdeHours = detailRows.reduce((sum, row) => sum + row.hours, 0);
+  const equipmentScope = scope.equipment !== "all" || scope.aggregate !== "all";
+  const relatedM3 = detailRows.reduce((sum, row) => sum + row.relatedM3, 0);
+  const efficiencyM3 = equipmentScope ? relatedM3 : compactedM3;
+
+  return {
+    compactedM3,
+    looseM3,
+    diesel,
+    trips,
+    m3PerLiter: divide(efficiencyM3, diesel),
+    litersPerM3: divide(diesel, efficiencyM3),
+    pdeHours,
+    m3PerHour: divide(efficiencyM3, pdeHours),
+  };
+}
+
+function comparisonDiagnosis(
+  periodA: number,
+  periodB: number,
+  direction: PeriodComparisonDirection,
+): PeriodComparisonDiagnosis {
+  if (periodA === 0 && periodB === 0) return "Manteve";
+  const reference = Math.abs(periodA);
+  const relativeDifference =
+    reference > 0 ? Math.abs(periodB - periodA) / reference : periodB === 0 ? 0 : Infinity;
+  if (relativeDifference <= PERIOD_COMPARISON_TOLERANCE) return "Manteve";
+  const improved = direction === "higher" ? periodB > periodA : periodB < periodA;
+  return improved ? "Melhorou" : "Piorou";
+}
 
 function dieselAuditSourceForFuel(fuel: DbFueling): AuditSource {
   if (fuel.analysisId === "allocated") return "fuelAllocation";
@@ -2252,6 +2344,7 @@ function ProducaoConsumoRefactored() {
   const [showTechnicalAudit, setShowTechnicalAudit] = useState(false);
   const [productionDate, setProductionDate] = useState("");
   const [hoursObraFilter, setHoursObraFilter] = useState<string>("all");
+  const [showPeriodComparison, setShowPeriodComparison] = useState(false);
   const [dieselM3Filters, setDieselM3Filters] =
     useState<DieselM3Filters>(DIESEL_M3_DEFAULT_FILTERS);
 
@@ -3079,8 +3172,7 @@ function ProducaoConsumoRefactored() {
       const worksite = worksiteFilterStatus(fuel.obra);
       const blocked = allocatedSourceIds.has(fuel.id);
       const date = extractDateKey(fuel.datetime);
-      const dateFiltered =
-        !dateInFilterRange(date, filters.dateFrom, filters.dateTo);
+      const dateFiltered = !dateInFilterRange(date, filters.dateFrom, filters.dateTo);
       const status = blocked ? "BLOCKED_SOURCE" : dateFiltered ? "NO_DATA" : worksite.status;
       return {
         source: "CMB",
@@ -3117,8 +3209,7 @@ function ProducaoConsumoRefactored() {
       const pdeDiffers =
         Boolean(pdeWorksite.trim() && allocation.obra.trim()) &&
         normalizeObraKey(pdeWorksite) !== normalizeObraKey(allocation.obra);
-      const dateFiltered =
-        !dateInFilterRange(allocation.pdeDate, filters.dateFrom, filters.dateTo);
+      const dateFiltered = !dateInFilterRange(allocation.pdeDate, filters.dateFrom, filters.dateTo);
       const status =
         rawDiffers || pdeDiffers ? "WRONG_WORKSITE" : dateFiltered ? "NO_DATA" : worksite.status;
       return {
@@ -7786,14 +7877,25 @@ function ProducaoConsumoRefactored() {
                         CB/agregado.
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs"
-                      onClick={() => setDieselM3Filters(DIESEL_M3_DEFAULT_FILTERS)}
-                    >
-                      Limpar filtros
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        onClick={() => setShowPeriodComparison(true)}
+                      >
+                        <Icon name="compare_arrows" className="text-base" />
+                        Comparar períodos
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        onClick={() => setDieselM3Filters(DIESEL_M3_DEFAULT_FILTERS)}
+                      >
+                        Limpar filtros
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
@@ -8069,12 +8171,14 @@ function ProducaoConsumoRefactored() {
                     title="m³/L por item"
                     description="Producao por litro de diesel"
                     height={320}
-                    hasData={dieselM3ItemRows.some((row) => row.m3PorLitroRelacionado > 0)}
+                    hasData={dieselM3ItemRows.some(
+                      (row) => row.item !== "limpeza" && row.m3PorLitroRelacionado > 0,
+                    )}
                   >
                     <ChartCompareBars
-                      data={[...dieselM3ItemRows].sort(
-                        (a, b) => b.m3PorLitroRelacionado - a.m3PorLitroRelacionado,
-                      )}
+                      data={dieselM3ItemRows
+                        .filter((row) => row.item !== "limpeza")
+                        .sort((a, b) => b.m3PorLitroRelacionado - a.m3PorLitroRelacionado)}
                       dataKey="m3PorLitroRelacionado"
                       nameKey="id"
                       unit="m³/L"
@@ -9396,7 +9500,430 @@ function ProducaoConsumoRefactored() {
           onDelete={handleDeleteAnalysis}
         />
       )}
+
+      {showPeriodComparison && (
+        <PeriodComparisonDialog
+          open={showPeriodComparison}
+          onOpenChange={setShowPeriodComparison}
+          baseData={dieselM3BaseData}
+          obraOptions={dieselM3ObraOptions}
+          equipmentOptions={dieselM3EquipmentOptions.filter(([key]) => !key.startsWith("CB:"))}
+          aggregateOptions={dieselM3AggregateOptions}
+          initialScope={{
+            obraKeys: dieselM3SelectedObraKey === "all" ? [] : [dieselM3SelectedObraKey],
+            item: dieselM3Filters.item,
+            equipment: dieselM3Filters.equipment,
+            aggregate: dieselM3Filters.aggregate,
+          }}
+          initialDateFrom={dieselM3Filters.dateFrom}
+          initialDateTo={dieselM3Filters.dateTo}
+        />
+      )}
     </AppLayout>
+  );
+}
+
+function PeriodComparisonDialog({
+  open,
+  onOpenChange,
+  baseData,
+  obraOptions,
+  equipmentOptions,
+  aggregateOptions,
+  initialScope,
+  initialDateFrom,
+  initialDateTo,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  baseData: DieselM3BaseData;
+  obraOptions: Array<[string, string]>;
+  equipmentOptions: Array<[string, string]>;
+  aggregateOptions: Array<[string, string]>;
+  initialScope: PeriodComparisonScope;
+  initialDateFrom: string;
+  initialDateTo: string;
+}) {
+  const initialPeriods = useMemo(() => {
+    const allDates = [
+      ...new Set(baseData.dailyProductionByWorksite.map((row) => row.date).filter(Boolean)),
+    ].sort();
+    const scopedDates = allDates.filter((date) =>
+      dateInFilterRange(date, initialDateFrom, initialDateTo),
+    );
+    const dates = scopedDates.length > 0 ? scopedDates : allDates;
+    if (dates.length === 0) {
+      return {
+        periodA: { dateFrom: initialDateFrom, dateTo: initialDateTo },
+        periodB: { dateFrom: initialDateFrom, dateTo: initialDateTo },
+      };
+    }
+    if (dates.length === 1) {
+      return {
+        periodA: { dateFrom: dates[0], dateTo: dates[0] },
+        periodB: { dateFrom: dates[0], dateTo: dates[0] },
+      };
+    }
+    const splitIndex = Math.floor(dates.length / 2);
+    return {
+      periodA: { dateFrom: dates[0], dateTo: dates[splitIndex - 1] },
+      periodB: { dateFrom: dates[splitIndex], dateTo: dates[dates.length - 1] },
+    };
+  }, [baseData.dailyProductionByWorksite, initialDateFrom, initialDateTo]);
+
+  const [periodA, setPeriodA] = useState<PeriodComparisonRange>(initialPeriods.periodA);
+  const [periodB, setPeriodB] = useState<PeriodComparisonRange>(initialPeriods.periodB);
+  const [scope, setScope] = useState<PeriodComparisonScope>(() => ({
+    ...initialScope,
+    equipment: initialScope.equipment.startsWith("CB:") ? "all" : initialScope.equipment,
+    aggregate:
+      initialScope.aggregate !== "all"
+        ? initialScope.aggregate
+        : initialScope.equipment.startsWith("CB:")
+          ? initialScope.equipment
+          : "all",
+  }));
+
+  const metricsA = useMemo(
+    () => periodComparisonMetrics(baseData, periodA, scope),
+    [baseData, periodA, scope],
+  );
+  const metricsB = useMemo(
+    () => periodComparisonMetrics(baseData, periodB, scope),
+    [baseData, periodB, scope],
+  );
+  const invalidPeriodA = Boolean(
+    periodA.dateFrom && periodA.dateTo && periodA.dateFrom > periodA.dateTo,
+  );
+  const invalidPeriodB = Boolean(
+    periodB.dateFrom && periodB.dateTo && periodB.dateFrom > periodB.dateTo,
+  );
+
+  const metricDefinitions: Array<{
+    key: keyof PeriodComparisonMetrics;
+    label: string;
+    direction: PeriodComparisonDirection;
+    format: (value: number) => string;
+  }> = [
+    { key: "compactedM3", label: "Produção m³ compactado", direction: "higher", format: formatM3 },
+    { key: "looseM3", label: "Produção m³ solto", direction: "higher", format: formatM3 },
+    { key: "diesel", label: "Diesel total", direction: "lower", format: formatLiters },
+    {
+      key: "trips",
+      label: "Viagens",
+      direction: "higher",
+      format: (value) => formatNumber(value, 0),
+    },
+    {
+      key: "m3PerLiter",
+      label: "m³/L",
+      direction: "higher",
+      format: (value) => `${formatNumber(value, 3)} m³/L`,
+    },
+    {
+      key: "litersPerM3",
+      label: "L/m³",
+      direction: "lower",
+      format: (value) => `${formatNumber(value, 3)} L/m³`,
+    },
+    { key: "pdeHours", label: "Horas PDE", direction: "lower", format: formatHours },
+    {
+      key: "m3PerHour",
+      label: "m³/h",
+      direction: "higher",
+      format: (value) => `${formatNumber(value, 2)} m³/h`,
+    },
+  ];
+
+  const rows = metricDefinitions.map((metric) => {
+    const valueA = metricsA[metric.key];
+    const valueB = metricsB[metric.key];
+    const delta = valueB - valueA;
+    const percentage = valueA !== 0 ? (delta / Math.abs(valueA)) * 100 : null;
+    const diagnosis = comparisonDiagnosis(valueA, valueB, metric.direction);
+    const better =
+      diagnosis === "Manteve"
+        ? "Empate"
+        : metric.direction === "higher"
+          ? valueB > valueA
+            ? "Período B"
+            : "Período A"
+          : valueB < valueA
+            ? "Período B"
+            : "Período A";
+    return { ...metric, valueA, valueB, delta, percentage, diagnosis, better };
+  });
+
+  const updatePeriod = (
+    setter: React.Dispatch<React.SetStateAction<PeriodComparisonRange>>,
+    key: keyof PeriodComparisonRange,
+    value: string,
+  ) => setter((current) => ({ ...current, [key]: value }));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-6xl max-h-[92vh] overflow-y-auto border-border-low bg-surface-container">
+        <DialogHeader>
+          <DialogTitle className="text-lg font-black uppercase tracking-widest">
+            Comparar períodos
+          </DialogTitle>
+          <DialogDescription>
+            Compara dados já carregados nas análises. As diferenças consideram o Período B em
+            relação ao Período A.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {[
+            { title: "Período A", period: periodA, setter: setPeriodA, invalid: invalidPeriodA },
+            { title: "Período B", period: periodB, setter: setPeriodB, invalid: invalidPeriodB },
+          ].map(({ title, period, setter, invalid }) => (
+            <div key={title} className="rounded border border-border-low bg-surface-highest p-4">
+              <h3 className="text-xs font-black uppercase tracking-widest">{title}</h3>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <ComparisonField label="Data inicial">
+                  <input
+                    type="date"
+                    value={period.dateFrom}
+                    onChange={(event) => updatePeriod(setter, "dateFrom", event.target.value)}
+                    className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                  />
+                </ComparisonField>
+                <ComparisonField label="Data final">
+                  <input
+                    type="date"
+                    value={period.dateTo}
+                    onChange={(event) => updatePeriod(setter, "dateTo", event.target.value)}
+                    className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                  />
+                </ComparisonField>
+              </div>
+              {invalid && (
+                <p className="mt-2 text-xs font-bold text-status-error">
+                  A data final deve ser igual ou posterior à data inicial.
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded border border-border-low bg-surface-highest p-4">
+          <h3 className="text-xs font-black uppercase tracking-widest">Filtros da comparação</h3>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+              Obra
+              <WorksiteMultiSelect
+                options={obraOptions}
+                selectedKeys={scope.obraKeys}
+                onChange={(obraKeys) => setScope((current) => ({ ...current, obraKeys }))}
+              />
+            </div>
+            <ComparisonField label="Item">
+              <select
+                value={scope.item}
+                onChange={(event) =>
+                  setScope((current) => ({ ...current, item: event.target.value }))
+                }
+                className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+              >
+                <option value="all">Todos</option>
+                {OPERATIONAL_ITEM_ORDER.map((item) => (
+                  <option key={item} value={item}>
+                    {operationalItemLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </ComparisonField>
+            <ComparisonField label="Equipamento">
+              <select
+                value={scope.equipment}
+                onChange={(event) =>
+                  setScope((current) => ({
+                    ...current,
+                    equipment: event.target.value,
+                    aggregate: event.target.value === "all" ? current.aggregate : "all",
+                  }))
+                }
+                className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+              >
+                <option value="all">Todos</option>
+                {equipmentOptions.map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </ComparisonField>
+            <ComparisonField label="Agregado">
+              <select
+                value={scope.aggregate}
+                onChange={(event) =>
+                  setScope((current) => ({
+                    ...current,
+                    aggregate: event.target.value,
+                    equipment: event.target.value === "all" ? current.equipment : "all",
+                  }))
+                }
+                className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+              >
+                <option value="all">Todos</option>
+                {aggregateOptions.map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </ComparisonField>
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded border border-border-low">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[920px] text-left text-xs">
+              <thead className="bg-surface-highest text-[10px] uppercase tracking-widest text-on-surface-variant">
+                <tr>
+                  <th className="px-3 py-3">Indicador</th>
+                  <th className="px-3 py-3 text-right">Período A</th>
+                  <th className="px-3 py-3 text-right">Período B</th>
+                  <th className="px-3 py-3 text-right">Diferença absoluta</th>
+                  <th className="px-3 py-3 text-right">Diferença percentual</th>
+                  <th className="px-3 py-3">Melhor</th>
+                  <th className="px-3 py-3">Diagnóstico</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-low">
+                {rows.map((row) => {
+                  const rowTone =
+                    row.diagnosis === "Melhorou"
+                      ? "text-status-success"
+                      : row.diagnosis === "Piorou"
+                        ? "text-status-error"
+                        : "text-on-surface-variant";
+                  return (
+                    <tr key={row.key} className="bg-surface-container">
+                      <td className="px-3 py-3 font-bold">{row.label}</td>
+                      <td className="px-3 py-3 text-right tnum">{row.format(row.valueA)}</td>
+                      <td className="px-3 py-3 text-right tnum">{row.format(row.valueB)}</td>
+                      <td className="px-3 py-3 text-right tnum">
+                        {row.format(Math.abs(row.delta))}
+                      </td>
+                      <td className="px-3 py-3 text-right tnum">
+                        {row.percentage === null
+                          ? "—"
+                          : `${row.percentage > 0 ? "+" : ""}${formatNumber(row.percentage, 1)}%`}
+                      </td>
+                      <td className="px-3 py-3 font-bold">{row.better}</td>
+                      <td className={`px-3 py-3 font-black ${rowTone}`}>{row.diagnosis}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WorksiteMultiSelect({
+  options,
+  selectedKeys,
+  onChange,
+}: {
+  options: Array<[string, string]>;
+  selectedKeys: string[];
+  onChange: (selectedKeys: string[]) => void;
+}) {
+  const selectedSet = new Set(selectedKeys);
+  const selectionLabel =
+    selectedKeys.length === 0
+      ? "Todas as obras"
+      : selectedKeys.length === 1
+        ? "1 obra selecionada"
+        : `${selectedKeys.length} obras selecionadas`;
+
+  const toggleWorksite = (key: string) => {
+    if (selectedSet.has(key)) {
+      onChange(selectedKeys.filter((selectedKey) => selectedKey !== key));
+      return;
+    }
+    onChange([...selectedKeys, key]);
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="mt-1 flex min-h-9 w-full items-center justify-between gap-3 rounded border border-border-low bg-surface-container px-3 py-2 text-left text-xs font-normal normal-case tracking-normal text-on-surface"
+          aria-label={`Selecionar obras. ${selectionLabel}`}
+        >
+          <span className="truncate">{selectionLabel}</span>
+          <Icon name="expand_more" className="shrink-0 text-base text-on-surface-variant" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        side="bottom"
+        collisionPadding={16}
+        className="z-[70] w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0"
+      >
+        <div className="max-h-[50vh] overflow-y-auto overscroll-contain p-2">
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="flex min-h-11 w-full items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
+            aria-pressed={selectedKeys.length === 0}
+          >
+            <Checkbox
+              checked={selectedKeys.length === 0}
+              tabIndex={-1}
+              className="pointer-events-none"
+            />
+            <span className="font-semibold">Todas as obras</span>
+          </button>
+          {options.map(([key, label]) => {
+            const checked = selectedSet.has(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => toggleWorksite(key)}
+                className="flex min-h-11 w-full items-start gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
+                aria-pressed={checked}
+              >
+                <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none mt-0.5" />
+                <span className="min-w-0 whitespace-normal break-words">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-border-low p-2">
+          <span className="px-2 text-[10px] font-bold text-on-surface-variant">
+            {selectionLabel}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={selectedKeys.length === 0}
+            onClick={() => onChange([])}
+          >
+            Limpar seleção
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ComparisonField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+      {label}
+      {children}
+    </label>
   );
 }
 
