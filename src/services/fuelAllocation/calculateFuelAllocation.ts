@@ -3,6 +3,7 @@ import {
   findMatchingPDEs,
   findPDEsWithoutAllocationData,
 } from "./findMatchingPDEs";
+import { displayObraAliasLabel } from "@/lib/production-consumption-utils";
 import {
   invalidIntervalAudit,
   multiplePdeMatchesAudit,
@@ -60,7 +61,7 @@ function allocateResult(
     equipmentId: fuel.equipmentId,
     fleet: fuel.fleet || fuel.equipmentId,
     pdeDate: pde.date,
-    obra: pde.obra ?? "",
+    obra: pde.obra ? displayObraAliasLabel(pde.obra) : "",
     hourmeterStart: start,
     hourmeterEnd: end,
     allocatedHours,

@@ -1,6 +1,11 @@
 import { normalizeDateKey, normalizeFleet } from "@/lib/carcara-parser";
 import type { DbEquipmentDailyPart, DbFueling, DbProductionAnalysis, DbTrip } from "@/db/schema";
-import { calculateCompactedM3 } from "@/lib/production-consumption-utils";
+import {
+  calculateCompactedM3,
+  displayObraAliasLabel,
+  normalizeObraAlias,
+  normalizeObraKey,
+} from "@/lib/production-consumption-utils";
 import { resolveEquipmentOperationalClass } from "@/lib/production-consumption-items";
 
 export const AGGREGATE_TRIP_PRICE = 1.65;
@@ -316,7 +321,13 @@ function rowMatchesFilters(
   const key = normalizeDateKey(row.datetime ?? row.date);
   if (filters.dateFrom && key && key < filters.dateFrom) return false;
   if (filters.dateTo && key && key > filters.dateTo) return false;
-  if (filters.obra && filters.obra !== "all" && row.obra !== filters.obra) return false;
+  if (
+    filters.obra &&
+    filters.obra !== "all" &&
+    normalizeObraKey(row.obra) !== normalizeObraKey(filters.obra)
+  ) {
+    return false;
+  }
   if (filters.material && filters.material !== "all" && row.material !== filters.material) {
     return false;
   }
@@ -342,8 +353,7 @@ function rowMatchesFilters(
 }
 
 function normalizeObra(obra: string | null | undefined): string {
-  if (!obra) return "";
-  return obra.trim().toUpperCase().replace(/\s+/g, " ");
+  return normalizeObraAlias(obra);
 }
 
 export { normalizeObra };
@@ -528,7 +538,7 @@ function productionByDateObra(trips: DbTrip[]) {
   const map = new Map<string, { compactedM3: number; trips: number }>();
   trips.forEach((row) => {
     const date = normalizeDateKey(row.datetime);
-    const key = `${date}|${row.obra || "Sem obra"}`;
+    const key = `${date}|${normalizeObraKey(row.obra)}`;
     const current = map.get(key) ?? { compactedM3: 0, trips: 0 };
     current.compactedM3 += compacted(row);
     current.trips += 1;
@@ -542,7 +552,7 @@ function dailyHoursByDateObra(dailyParts: DbEquipmentDailyPart[]) {
   dailyParts
     .filter((row) => row.usedInAnalysis)
     .forEach((row) => {
-      const key = `${row.date}|${row.obra || "Sem obra"}`;
+      const key = `${row.date}|${normalizeObraKey(row.obra)}`;
       map.set(key, (map.get(key) ?? 0) + row.hours);
     });
   return map;
@@ -754,8 +764,8 @@ export function buildAccumulatedMetrics({
   return {
     analysisCount: new Set(analyses.map((row) => row.id)).size,
     obraCount: new Set([
-      ...analyses.map((row) => row.obra).filter(Boolean),
-      ...trips.map((row) => row.obra).filter(Boolean),
+      ...analyses.map((row) => normalizeObraKey(row.obra)).filter(Boolean),
+      ...trips.map((row) => normalizeObraKey(row.obra)).filter(Boolean),
     ]).size,
     materialCount: new Set([
       ...analyses.map((row) => row.material).filter(Boolean),
@@ -791,11 +801,11 @@ function buildObraRanking(
 ): ObraRankingRow[] {
   const map = new Map<string, ObraRankingRow>();
   const ensure = (obra: string) => {
-    const key = obra || "Sem obra";
+    const key = normalizeObraKey(obra);
     const current =
       map.get(key) ??
       ({
-        obra: key,
+        obra: displayObraAliasLabel(obra),
         compactedM3: 0,
         looseM3: 0,
         liters: 0,
@@ -1244,7 +1254,13 @@ export function buildProductionAnalytics({
     },
     context: {
       scopes: ["daily", "weekly", "monthly", "worksite", "global"],
-      obras: [...new Set(filteredTrips.map((row) => row.obra).filter(Boolean))].sort(),
+      obras: [
+        ...new Map(
+          filteredTrips
+            .filter((row) => row.obra)
+            .map((row) => [normalizeObraKey(row.obra), displayObraAliasLabel(row.obra)]),
+        ).values(),
+      ].sort(),
       materials: [
         ...new Set(
           [
@@ -1332,7 +1348,7 @@ export function buildDailyDieselByObra(fueling: { date: string; liters: number; 
   const byDate = new Map<string, Record<string, number>>();
   for (const row of fueling) {
     if (!row.date || !row.liters) continue;
-    const obra = row.obra || "Sem obra";
+    const obra = displayObraAliasLabel(row.obra);
     obras.add(obra);
     if (!byDate.has(row.date)) byDate.set(row.date, {});
     const day = byDate.get(row.date)!;
@@ -1368,12 +1384,15 @@ export function detectRisingCostAlerts(
   daily: { date: string; obra: string; costPerM3: number }[],
 ): { obra: string; days: string[]; deltaPct: number }[] {
   const byObra = new Map<string, { date: string; costPerM3: number }[]>();
+  const labels = new Map<string, string>();
   for (const row of daily) {
-    if (!byObra.has(row.obra)) byObra.set(row.obra, []);
-    byObra.get(row.obra)!.push({ date: row.date, costPerM3: row.costPerM3 });
+    const key = normalizeObraKey(row.obra);
+    if (!byObra.has(key)) byObra.set(key, []);
+    if (!labels.has(key)) labels.set(key, displayObraAliasLabel(row.obra));
+    byObra.get(key)!.push({ date: row.date, costPerM3: row.costPerM3 });
   }
   const alerts: { obra: string; days: string[]; deltaPct: number }[] = [];
-  for (const [obra, rows] of byObra) {
+  for (const [obraKey, rows] of byObra) {
     rows.sort((a, b) => a.date.localeCompare(b.date));
     if (rows.length < 3) continue;
     const last3 = rows.slice(-3);
@@ -1381,7 +1400,7 @@ export function detectRisingCostAlerts(
       last3[0].costPerM3 < last3[1].costPerM3 && last3[1].costPerM3 < last3[2].costPerM3;
     if (allRising && last3[0].costPerM3 > 0) {
       const deltaPct = ((last3[2].costPerM3 - last3[0].costPerM3) / last3[0].costPerM3) * 100;
-      alerts.push({ obra, days: last3.map((d) => d.date), deltaPct });
+      alerts.push({ obra: labels.get(obraKey) ?? obraKey, days: last3.map((d) => d.date), deltaPct });
     }
   }
   return alerts.sort((a, b) => b.deltaPct - a.deltaPct);
@@ -1402,7 +1421,7 @@ export function buildTopConsumersByM3(opts: {
   const hoursByObraDate = new Map<string, number>();
   const hoursByFleetObraDate = new Map<string, Map<string, number>>();
   for (const p of opts.dailyParts) {
-    const k = `${p.obra}|${p.date}`;
+    const k = `${normalizeObraKey(p.obra)}|${p.date}`;
     hoursByObraDate.set(k, (hoursByObraDate.get(k) ?? 0) + p.hours);
     if (!hoursByFleetObraDate.has(p.fleet)) hoursByFleetObraDate.set(p.fleet, new Map());
     const fleetMap = hoursByFleetObraDate.get(p.fleet)!;
@@ -1410,7 +1429,7 @@ export function buildTopConsumersByM3(opts: {
   }
   const m3ByObraDate = new Map<string, number>();
   for (const t of opts.trips) {
-    const k = `${t.obra}|${t.date}`;
+    const k = `${normalizeObraKey(t.obra)}|${t.date}`;
     m3ByObraDate.set(k, (m3ByObraDate.get(k) ?? 0) + t.cubicMCompacted);
   }
   const result = new Map<string, { fleetLabel: string; liters: number; m3Attributed: number }>();

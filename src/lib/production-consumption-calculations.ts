@@ -9,8 +9,10 @@ import {
   calculateCompactedM3,
   calculateEfficiencyIndex,
   calculateProductivityIndex,
+  displayObraAliasLabel,
   extractDateKey,
   getWeekdayIndex,
+  normalizeObraKey,
 } from "@/lib/production-consumption-utils";
 import { AGGREGATE_TRIP_PRICE } from "@/lib/production-analytics";
 import type { DailyMetrics, OperationalKPIs } from "@/lib/production-consumption-types";
@@ -299,16 +301,16 @@ export function calculateEquipmentMetrics(
  * Calcula distribuição de produção por obra
  */
 export function calculateObraDistribution(trips: DbTrip[]) {
-  const map = new Map<string, number>();
+  const map = new Map<string, { name: string; value: number }>();
 
   trips.forEach((trip) => {
-    const obra = trip.obra || "Sem obra";
-    map.set(obra, (map.get(obra) ?? 0) + compactedTripVolume(trip));
+    const key = normalizeObraKey(trip.obra);
+    const current = map.get(key) ?? { name: displayObraAliasLabel(trip.obra), value: 0 };
+    current.value += compactedTripVolume(trip);
+    map.set(key, current);
   });
 
-  const sorted = Array.from(map.entries())
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
+  const sorted = Array.from(map.values()).sort((a, b) => b.value - a.value);
 
   const top = sorted.slice(0, 5);
   const other = sorted.slice(5).reduce((sum, row) => sum + row.value, 0);

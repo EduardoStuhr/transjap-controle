@@ -9,7 +9,7 @@ import { buildAnalysisSnapshot } from "@/lib/production-analytics";
 import { recalculateFuelAttribution } from "@/lib/fuel-attribution";
 import {
   calculateCompactedM3,
-  displayObraName,
+  displayObraAliasLabel,
   normalizeObraKey,
 } from "@/lib/production-consumption-utils";
 import type { ParsedDailyPart, ParsedFueling, ParsedTrip } from "@/lib/carcara-parser";
@@ -287,9 +287,9 @@ function normalizeLinkedFleet(row: {
 function collectRcoObras(data: CreateAnalysisInput) {
   const names = new Map<string, string>();
   const add = (obra: string | null | undefined) => {
-    const label = displayObraName(obra);
+    const label = displayObraAliasLabel(obra);
     if (!label || label === "Sem obra") return;
-    const key = normalizeObraKey(label);
+    const key = normalizeObraKey(obra);
     if (!names.has(key)) names.set(key, label);
   };
   data.tripsRows.forEach((row) => add(row.obra));
@@ -430,7 +430,8 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
       isMultiObra,
       obras: rcoObras,
       obraMode: isMultiObra ? "multiobra" : "single",
-      obraLabel: data.obra.trim(),
+      obraOriginal: data.obra.trim(),
+      obraLabel: displayObraAliasLabel(data.obra),
       obraSource: "rco",
     },
     createdAt: now,
@@ -520,7 +521,8 @@ function buildAnalysisFromImports(data: CreateAnalysisInput, id: string, now: st
       obras: rcoObras,
       isMultiObra,
       obraMode: isMultiObra ? "multiobra" : "single",
-      obraLabel: data.obra.trim(),
+      obraOriginal: data.obra.trim(),
+      obraLabel: displayObraAliasLabel(data.obra),
       obraSource: "rco",
     },
   };
@@ -613,7 +615,9 @@ export const listAnalyses = createServerFn({ method: "POST" })
     if (!d1) {
       return localAnalyses
         .filter((analysis) => {
-          if (data.obra && analysis.obra !== data.obra) return false;
+          if (data.obra && normalizeObraKey(analysis.obra) !== normalizeObraKey(data.obra)) {
+            return false;
+          }
           if (data.material && analysis.material !== data.material) return false;
           if (data.dateFrom && analysis.dateEnd < data.dateFrom) return false;
           if (data.dateTo && analysis.dateStart > data.dateTo) return false;
@@ -624,7 +628,6 @@ export const listAnalyses = createServerFn({ method: "POST" })
 
     const db = getDb(d1);
     const conditions = [];
-    if (data.obra) conditions.push(eq(productionAnalyses.obra, data.obra));
     if (data.material) conditions.push(eq(productionAnalyses.material, data.material));
     if (data.dateFrom) conditions.push(gte(productionAnalyses.dateEnd, data.dateFrom));
     if (data.dateTo) conditions.push(lte(productionAnalyses.dateStart, data.dateTo));
@@ -640,7 +643,9 @@ export const listAnalyses = createServerFn({ method: "POST" })
           .from(productionAnalyses)
           .orderBy(desc(productionAnalyses.createdAt))
           .all();
-    return rows;
+    return data.obra
+      ? rows.filter((analysis) => normalizeObraKey(analysis.obra) === normalizeObraKey(data.obra))
+      : rows;
   });
 
 export const getAnalysis = createServerFn({ method: "POST" })
@@ -739,8 +744,9 @@ export const upsertSwellFactor = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const now = new Date().toISOString();
+    const obra = displayObraAliasLabel(data.obra);
     const row: DbSwellFactor = {
-      obra: data.obra,
+      obra,
       material: data.material,
       factor: data.factor,
       updatedAt: now,
@@ -749,7 +755,7 @@ export const upsertSwellFactor = createServerFn({ method: "POST" })
     const d1 = getOptionalD1();
     if (!d1) {
       const idx = localSwellFactors.findIndex(
-        (sf) => sf.obra === data.obra && sf.material === data.material,
+        (sf) => normalizeObraKey(sf.obra) === normalizeObraKey(obra) && sf.material === data.material,
       );
       if (idx >= 0) localSwellFactors[idx] = row;
       else localSwellFactors.push(row);
@@ -979,12 +985,12 @@ export const importTrips = createServerFn({ method: "POST" })
 
     if (!d1) {
       const sfMap = new Map(
-        localSwellFactors.map((sf) => [`${sf.obra}|${sf.material}`, sf.factor]),
+        localSwellFactors.map((sf) => [`${normalizeObraKey(sf.obra)}|${sf.material}`, sf.factor]),
       );
       let inserted = 0;
       let updated = 0;
       for (const row of data.rows) {
-        const factor = sfMap.get(`${row.obra}|${row.material}`) ?? 0.3;
+        const factor = sfMap.get(`${normalizeObraKey(row.obra)}|${row.material}`) ?? 0.3;
         const tripRow = makeTripRow(row, analysisId, data.batchId, now, factor);
         const idx = localTrips.findIndex((t) => t.id === tripRow.id);
         if (idx >= 0) {
@@ -1000,14 +1006,14 @@ export const importTrips = createServerFn({ method: "POST" })
 
     const db = getDb(d1);
     const allSf = await db.select().from(swellFactors).all();
-    const sfMap = new Map(allSf.map((sf) => [`${sf.obra}|${sf.material}`, sf.factor]));
+    const sfMap = new Map(allSf.map((sf) => [`${normalizeObraKey(sf.obra)}|${sf.material}`, sf.factor]));
     const tripRows = data.rows.map((row) =>
       makeTripRow(
         row,
         analysisId,
         data.batchId,
         now,
-        sfMap.get(`${row.obra}|${row.material}`) ?? 0.3,
+        sfMap.get(`${normalizeObraKey(row.obra)}|${row.material}`) ?? 0.3,
       ),
     );
 

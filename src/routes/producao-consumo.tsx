@@ -22,6 +22,7 @@ import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -73,6 +74,7 @@ import {
   isPipaLike,
   type OperationalItem,
 } from "@/lib/production-consumption-items";
+import { excludedFuelFromProductionRule } from "@/lib/non-productive-fuel-rules";
 
 import {
   DashboardFilters,
@@ -616,6 +618,7 @@ type ClassifiedFuelUsageRow = {
   obraKey: string;
   date: string;
   fleet: string;
+  equipmentKey: string;
   equipment: string;
   liters: number;
   cost: number;
@@ -625,6 +628,8 @@ type ClassifiedFuelUsageRow = {
   bucket: FuelUsageBucket;
   reason: string;
   item: OperationalItem;
+  excludedFromProductiveCalculation: boolean;
+  productiveExclusionReason?: string;
   fuel: DbFueling & IntegrationAuditMetadata;
 };
 type DieselM3OriginFilter = "all" | DieselM3Source;
@@ -722,9 +727,6 @@ type PeriodComparisonMetrics = {
   m3PerHour: number;
 };
 
-type PeriodComparisonDiagnosis = "Melhorou" | "Manteve" | "Piorou";
-type PeriodComparisonDirection = "higher" | "lower";
-
 const DIESEL_M3_DEFAULT_FILTERS: DieselM3Filters = {
   dateFrom: "",
   dateTo: "",
@@ -738,8 +740,6 @@ const DIESEL_M3_DEFAULT_FILTERS: DieselM3Filters = {
   compareObraA: "",
   compareObraB: "",
 };
-
-const PERIOD_COMPARISON_TOLERANCE = 0.01;
 
 function periodComparisonMetrics(
   baseData: DieselM3BaseData,
@@ -780,20 +780,6 @@ function periodComparisonMetrics(
     pdeHours,
     m3PerHour: divide(efficiencyM3, pdeHours),
   };
-}
-
-function comparisonDiagnosis(
-  periodA: number,
-  periodB: number,
-  direction: PeriodComparisonDirection,
-): PeriodComparisonDiagnosis {
-  if (periodA === 0 && periodB === 0) return "Manteve";
-  const reference = Math.abs(periodA);
-  const relativeDifference =
-    reference > 0 ? Math.abs(periodB - periodA) / reference : periodB === 0 ? 0 : Infinity;
-  if (relativeDifference <= PERIOD_COMPARISON_TOLERANCE) return "Manteve";
-  const improved = direction === "higher" ? periodB > periodA : periodB < periodA;
-  return improved ? "Melhorou" : "Piorou";
 }
 
 function dieselAuditSourceForFuel(fuel: DbFueling): AuditSource {
@@ -1061,6 +1047,15 @@ type AbsentWorksiteAuditRow = {
   liters: number;
   hours: number;
   reason: DieselIntegrationStatus;
+};
+
+type NonProductiveFuelAuditRow = {
+  obra: string;
+  date: string;
+  equipment: string;
+  item: string;
+  liters: number;
+  reason: string;
 };
 
 type ProductionAggregationAuditRow = {
@@ -3025,12 +3020,24 @@ function ProducaoConsumoRefactored() {
         aggregateKeys,
       );
       const bucket: FuelUsageBucket = hasProduction ? "producao" : "limpeza";
+      const productiveExclusion = excludedFuelFromProductionRule({
+        obra,
+        obraKey,
+        date,
+        item: classification.operationalItem,
+        equipmentKey: classification.equipment,
+        equipmentLabel: classification.resolvedLabel,
+        rawEquipment: fuel.prefix || fuel.vehicleId || fuel.plate,
+        vehicleType: fuel.vehicleType,
+        description: `${fuel.owner} ${fuel.operator} ${fuel.status ?? ""}`,
+      });
       return {
         id: fuel.id,
         obra,
         obraKey,
         date,
         fleet: fuel.prefix || fuel.vehicleId || fuel.plate || classification.equipment,
+        equipmentKey: classification.equipment,
         equipment: classification.resolvedLabel,
         liters: fuel.liters || 0,
         cost: fuel.total || 0,
@@ -3040,6 +3047,8 @@ function ProducaoConsumoRefactored() {
         bucket,
         reason: hasProduction ? "Produção RCO encontrada na obra/data" : "Sem produção associada",
         item: classification.operationalItem,
+        excludedFromProductiveCalculation: Boolean(productiveExclusion),
+        productiveExclusionReason: productiveExclusion?.reason,
         fuel,
       };
     });
@@ -3048,8 +3057,33 @@ function ProducaoConsumoRefactored() {
   const productionFueling = useMemo(
     () =>
       classifiedFuelUsageRows
-        .filter((row) => row.bucket === "producao" || row.item === "limpeza")
+        .filter(
+          (row) =>
+            !row.excludedFromProductiveCalculation &&
+            (row.bucket === "producao" || row.item === "limpeza"),
+        )
         .map((row) => row.fuel),
+    [classifiedFuelUsageRows],
+  );
+
+  const nonProductiveFuelAuditRows = useMemo<NonProductiveFuelAuditRow[]>(
+    () =>
+      classifiedFuelUsageRows
+        .filter((row) => row.excludedFromProductiveCalculation && row.liters > 0)
+        .map((row) => ({
+          obra: row.obra,
+          date: row.date,
+          equipment: row.equipment,
+          item: operationalItemLabel(row.item),
+          liters: row.liters,
+          reason: row.productiveExclusionReason || row.reason,
+        }))
+        .sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            a.obra.localeCompare(b.obra, "pt-BR") ||
+            a.equipment.localeCompare(b.equipment, "pt-BR"),
+        ),
     [classifiedFuelUsageRows],
   );
 
@@ -6453,6 +6487,7 @@ function ProducaoConsumoRefactored() {
     const dashboard = new Map<string, number>();
     const stacked = new Map<string, number>();
     const blockedRawFueling = new Map<string, number>();
+    const excludedProductiveFueling = new Map<string, number>();
 
     filteredFueling.forEach((fuel) => {
       const context = fuelingEquipmentContext(fuel);
@@ -6506,6 +6541,11 @@ function ProducaoConsumoRefactored() {
         });
       });
     });
+    classifiedFuelUsageRows
+      .filter((row) => row.excludedFromProductiveCalculation)
+      .forEach((row) => {
+        add(excludedProductiveFueling, row.equipmentKey, row.equipment, row.liters);
+      });
 
     const keys = new Set([
       ...rawFueling.keys(),
@@ -6513,6 +6553,7 @@ function ProducaoConsumoRefactored() {
       ...attributed.keys(),
       ...dashboard.keys(),
       ...stacked.keys(),
+      ...excludedProductiveFueling.keys(),
     ]);
     return [...keys]
       .map((key) => {
@@ -6522,17 +6563,20 @@ function ProducaoConsumoRefactored() {
         const itemSummaryLiters = dashboard.get(key) ?? 0;
         const stackedChartLiters = stacked.get(key) ?? 0;
         const blockedRawLiters = blockedRawFueling.get(key) ?? 0;
+        const excludedProductiveLiters = excludedProductiveFueling.get(key) ?? 0;
+        const productiveExpectedLiters =
+          (hasOfficialFuelAllocations ? allocatedLiters : attributedLiters) -
+          excludedProductiveLiters;
         const auditTypes: string[] = [];
+        if (excludedProductiveLiters > 0) {
+          auditTypes.push("Diesel excluido do calculo produtivo");
+        }
         if (fuelingLiters > 0 && allocatedLiters <= 0 && hasOfficialFuelAllocations) {
           auditTypes.push(
             blockedRawLiters > 0 ? "CMB bloqueado: já alocado oficialmente" : "Sem allocation",
           );
         }
-        if (
-          Math.abs(
-            (hasOfficialFuelAllocations ? allocatedLiters : attributedLiters) - itemSummaryLiters,
-          ) > 0.01
-        ) {
+        if (Math.abs(productiveExpectedLiters - itemSummaryLiters) > 0.01) {
           auditTypes.push("Divergencia de soma");
         }
         if (itemSummaryLiters > 0 && stackedChartLiters <= 0)
@@ -6546,8 +6590,7 @@ function ProducaoConsumoRefactored() {
           itemSummaryLiters,
           stackedChartLiters,
           diffFuelingToAllocation: fuelingLiters - allocatedLiters,
-          diffAllocationToDashboard:
-            (hasOfficialFuelAllocations ? allocatedLiters : attributedLiters) - itemSummaryLiters,
+          diffAllocationToDashboard: productiveExpectedLiters - itemSummaryLiters,
           auditTypes: auditTypes.join(", ") || "OK",
         };
       })
@@ -6559,6 +6602,7 @@ function ProducaoConsumoRefactored() {
   }, [
     allocatedSourceIds,
     attributedFueling,
+    classifiedFuelUsageRows,
     filteredFuelAllocations,
     filteredFueling,
     filteredDailyParts,
@@ -9177,6 +9221,48 @@ function ProducaoConsumoRefactored() {
                     </div>
                   </div>
                 )}
+                {nonProductiveFuelAuditRows.length > 0 && (
+                  <div className="mb-5 rounded border border-status-warning/30 bg-surface-container overflow-hidden">
+                    <div className="p-3 border-b border-border-low">
+                      <h3 className="text-xs font-black uppercase tracking-widest">
+                        Diesel excluído do cálculo produtivo ({nonProductiveFuelAuditRows.length})
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-border-low bg-surface-low">
+                            <th className="px-3 py-2 text-left font-black uppercase">Obra</th>
+                            <th className="px-3 py-2 text-left font-black uppercase">Data</th>
+                            <th className="px-3 py-2 text-left font-black uppercase">
+                              Equipamento
+                            </th>
+                            <th className="px-3 py-2 text-left font-black uppercase">Item</th>
+                            <th className="px-3 py-2 text-right font-black uppercase">Litros</th>
+                            <th className="px-3 py-2 text-left font-black uppercase">Motivo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {nonProductiveFuelAuditRows.slice(0, 120).map((row, index) => (
+                            <tr
+                              key={`${row.obra}:${row.date}:${row.equipment}:${index}`}
+                              className="border-b border-border-low/40"
+                            >
+                              <td className="px-3 py-2">{row.obra}</td>
+                              <td className="px-3 py-2 tnum">{formatDate(row.date)}</td>
+                              <td className="px-3 py-2 font-semibold">{row.equipment}</td>
+                              <td className="px-3 py-2">{row.item}</td>
+                              <td className="px-3 py-2 text-right tnum">
+                                {formatNumber(row.liters, 2)} L
+                              </td>
+                              <td className="px-3 py-2 text-status-warning">{row.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
                 <div className="rounded border border-border-low bg-surface-container overflow-hidden">
                   <div className="p-3 border-b border-border-low">
                     <h3 className="text-xs font-black uppercase tracking-widest">
@@ -9602,35 +9688,30 @@ function PeriodComparisonDialog({
   const metricDefinitions: Array<{
     key: keyof PeriodComparisonMetrics;
     label: string;
-    direction: PeriodComparisonDirection;
     format: (value: number) => string;
   }> = [
-    { key: "compactedM3", label: "Produção m³ compactado", direction: "higher", format: formatM3 },
-    { key: "looseM3", label: "Produção m³ solto", direction: "higher", format: formatM3 },
-    { key: "diesel", label: "Diesel total", direction: "lower", format: formatLiters },
+    { key: "compactedM3", label: "Produção m³ compactado", format: formatM3 },
+    { key: "looseM3", label: "Produção m³ solto", format: formatM3 },
+    { key: "diesel", label: "Diesel total", format: formatLiters },
     {
       key: "trips",
       label: "Viagens",
-      direction: "higher",
       format: (value) => formatNumber(value, 0),
     },
     {
       key: "m3PerLiter",
       label: "m³/L",
-      direction: "higher",
       format: (value) => `${formatNumber(value, 3)} m³/L`,
     },
     {
       key: "litersPerM3",
       label: "L/m³",
-      direction: "lower",
       format: (value) => `${formatNumber(value, 3)} L/m³`,
     },
-    { key: "pdeHours", label: "Horas PDE", direction: "lower", format: formatHours },
+    { key: "pdeHours", label: "Horas PDE", format: formatHours },
     {
       key: "m3PerHour",
       label: "m³/h",
-      direction: "higher",
       format: (value) => `${formatNumber(value, 2)} m³/h`,
     },
   ];
@@ -9640,18 +9721,7 @@ function PeriodComparisonDialog({
     const valueB = metricsB[metric.key];
     const delta = valueB - valueA;
     const percentage = valueA !== 0 ? (delta / Math.abs(valueA)) * 100 : null;
-    const diagnosis = comparisonDiagnosis(valueA, valueB, metric.direction);
-    const better =
-      diagnosis === "Manteve"
-        ? "Empate"
-        : metric.direction === "higher"
-          ? valueB > valueA
-            ? "Período B"
-            : "Período A"
-          : valueB < valueA
-            ? "Período B"
-            : "Período A";
-    return { ...metric, valueA, valueB, delta, percentage, diagnosis, better };
+    return { ...metric, valueA, valueB, delta, percentage };
   });
 
   const updatePeriod = (
@@ -9662,8 +9732,26 @@ function PeriodComparisonDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-1rem)] max-w-6xl max-h-[92vh] overflow-y-auto border-border-low bg-surface-container">
-        <DialogHeader>
+      <DialogContent
+        className="period-comparison-dialog !h-[calc(100dvh-1rem)] !max-h-[calc(100dvh-1rem)] !w-[calc(100vw-1rem)] !max-w-none overflow-hidden border-border-low bg-surface-container p-3 sm:p-4 lg:p-5 [&>.app-dialog-close]:hidden"
+        style={{
+          width: "calc(100vw - 1rem)",
+          maxWidth: "none",
+          height: "calc(100dvh - 1rem)",
+        }}
+      >
+        <DialogClose asChild>
+          <button
+            type="button"
+            aria-label="Fechar comparação"
+            className="absolute right-3 top-3 z-[70] flex h-9 w-9 items-center justify-center rounded-full border border-border-low bg-surface-highest text-on-surface shadow-industrial transition-industrial hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          >
+            <Icon name="close" className="text-lg" />
+          </button>
+        </DialogClose>
+        <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden lg:gap-4">
+          <div className="shrink-0 space-y-3 lg:space-y-4">
+        <DialogHeader className="pr-11">
           <DialogTitle className="text-lg font-black uppercase tracking-widest">
             Comparar períodos
           </DialogTitle>
@@ -9673,12 +9761,12 @@ function PeriodComparisonDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:gap-4">
           {[
             { title: "Período A", period: periodA, setter: setPeriodA, invalid: invalidPeriodA },
             { title: "Período B", period: periodB, setter: setPeriodB, invalid: invalidPeriodB },
           ].map(({ title, period, setter, invalid }) => (
-            <div key={title} className="rounded border border-border-low bg-surface-highest p-4">
+            <div key={title} className="rounded border border-border-low bg-surface-highest p-3 lg:p-4">
               <h3 className="text-xs font-black uppercase tracking-widest">{title}</h3>
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <ComparisonField label="Data inicial">
@@ -9686,7 +9774,7 @@ function PeriodComparisonDialog({
                     type="date"
                     value={period.dateFrom}
                     onChange={(event) => updatePeriod(setter, "dateFrom", event.target.value)}
-                    className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                    className="mt-1 block w-full min-w-0 rounded border border-border-low bg-surface-container px-3 py-2 text-xs whitespace-nowrap text-on-surface"
                   />
                 </ComparisonField>
                 <ComparisonField label="Data final">
@@ -9694,7 +9782,7 @@ function PeriodComparisonDialog({
                     type="date"
                     value={period.dateTo}
                     onChange={(event) => updatePeriod(setter, "dateTo", event.target.value)}
-                    className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                    className="mt-1 block w-full min-w-0 rounded border border-border-low bg-surface-container px-3 py-2 text-xs whitespace-nowrap text-on-surface"
                   />
                 </ComparisonField>
               </div>
@@ -9707,10 +9795,10 @@ function PeriodComparisonDialog({
           ))}
         </div>
 
-        <div className="rounded border border-border-low bg-surface-highest p-4">
+        <div className="rounded border border-border-low bg-surface-highest p-3 lg:p-4">
           <h3 className="text-xs font-black uppercase tracking-widest">Filtros da comparação</h3>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(280px,1.4fr)_minmax(140px,1fr)_minmax(170px,1fr)_minmax(150px,1fr)]">
+            <div className="min-w-0 text-[10px] font-black uppercase tracking-widest text-on-surface-variant sm:col-span-2 xl:col-span-1">
               Obra
               <WorksiteMultiSelect
                 options={obraOptions}
@@ -9724,7 +9812,7 @@ function PeriodComparisonDialog({
                 onChange={(event) =>
                   setScope((current) => ({ ...current, item: event.target.value }))
                 }
-                className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                className="mt-1 block w-full min-w-0 rounded border border-border-low bg-surface-container px-3 py-2 text-xs whitespace-nowrap text-on-surface"
               >
                 <option value="all">Todos</option>
                 {OPERATIONAL_ITEM_ORDER.map((item) => (
@@ -9744,7 +9832,7 @@ function PeriodComparisonDialog({
                     aggregate: event.target.value === "all" ? current.aggregate : "all",
                   }))
                 }
-                className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                className="mt-1 block w-full min-w-0 rounded border border-border-low bg-surface-container px-3 py-2 text-xs whitespace-nowrap text-on-surface"
               >
                 <option value="all">Todos</option>
                 {equipmentOptions.map(([key, label]) => (
@@ -9764,7 +9852,7 @@ function PeriodComparisonDialog({
                     equipment: event.target.value === "all" ? current.equipment : "all",
                   }))
                 }
-                className="mt-1 block w-full rounded border border-border-low bg-surface-container px-3 py-2 text-xs text-on-surface"
+                className="mt-1 block w-full min-w-0 rounded border border-border-low bg-surface-container px-3 py-2 text-xs whitespace-nowrap text-on-surface"
               >
                 <option value="all">Todos</option>
                 {aggregateOptions.map(([key, label]) => (
@@ -9777,49 +9865,51 @@ function PeriodComparisonDialog({
           </div>
         </div>
 
-        <div className="overflow-hidden rounded border border-border-low">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] text-left text-xs">
-              <thead className="bg-surface-highest text-[10px] uppercase tracking-widest text-on-surface-variant">
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-hidden rounded border border-border-low">
+          <div className="h-full overflow-auto">
+            <table className="min-w-[760px] w-full table-fixed text-left text-[11px] lg:text-xs">
+              <colgroup>
+                <col className="w-[28%]" />
+                <col className="w-[17%]" />
+                <col className="w-[17%]" />
+                <col className="w-[19%]" />
+                <col className="w-[19%]" />
+              </colgroup>
+              <thead className="sticky top-0 z-10 border-b border-border-low bg-surface-highest text-[10px] uppercase tracking-widest text-on-surface-variant">
                 <tr>
-                  <th className="px-3 py-3">Indicador</th>
+                  <th className="px-2 py-3 lg:px-3">Indicador</th>
                   <th className="px-3 py-3 text-right">Período A</th>
                   <th className="px-3 py-3 text-right">Período B</th>
                   <th className="px-3 py-3 text-right">Diferença absoluta</th>
                   <th className="px-3 py-3 text-right">Diferença percentual</th>
-                  <th className="px-3 py-3">Melhor</th>
-                  <th className="px-3 py-3">Diagnóstico</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-low">
-                {rows.map((row) => {
-                  const rowTone =
-                    row.diagnosis === "Melhorou"
-                      ? "text-status-success"
-                      : row.diagnosis === "Piorou"
-                        ? "text-status-error"
-                        : "text-on-surface-variant";
-                  return (
+                {rows.map((row) => (
                     <tr key={row.key} className="bg-surface-container">
-                      <td className="px-3 py-3 font-bold">{row.label}</td>
-                      <td className="px-3 py-3 text-right tnum">{row.format(row.valueA)}</td>
-                      <td className="px-3 py-3 text-right tnum">{row.format(row.valueB)}</td>
-                      <td className="px-3 py-3 text-right tnum">
+                      <td className="px-2 py-3 font-bold lg:px-3">{row.label}</td>
+                      <td className="px-2 py-3 text-right tnum whitespace-nowrap lg:px-3">
+                        {row.format(row.valueA)}
+                      </td>
+                      <td className="px-2 py-3 text-right tnum whitespace-nowrap lg:px-3">
+                        {row.format(row.valueB)}
+                      </td>
+                      <td className="px-2 py-3 text-right tnum whitespace-nowrap lg:px-3">
                         {row.format(Math.abs(row.delta))}
                       </td>
-                      <td className="px-3 py-3 text-right tnum">
+                      <td className="px-2 py-3 text-right tnum whitespace-nowrap lg:px-3">
                         {row.percentage === null
                           ? "—"
                           : `${row.percentage > 0 ? "+" : ""}${formatNumber(row.percentage, 1)}%`}
                       </td>
-                      <td className="px-3 py-3 font-bold">{row.better}</td>
-                      <td className={`px-3 py-3 font-black ${rowTone}`}>{row.diagnosis}</td>
                     </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
+        </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -9835,6 +9925,7 @@ function WorksiteMultiSelect({
   selectedKeys: string[];
   onChange: (selectedKeys: string[]) => void;
 }) {
+  const [search, setSearch] = useState("");
   const selectedSet = new Set(selectedKeys);
   const selectionLabel =
     selectedKeys.length === 0
@@ -9842,6 +9933,25 @@ function WorksiteMultiSelect({
       : selectedKeys.length === 1
         ? "1 obra selecionada"
         : `${selectedKeys.length} obras selecionadas`;
+  const selectedBadge =
+    selectedKeys.length === 0
+      ? "Todas"
+      : selectedKeys.length === 1
+        ? "1 obra selecionada"
+        : `${selectedKeys.length} obras selecionadas`;
+  const normalizedSearch = search
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .trim();
+  const filteredOptions = options.filter(([, label]) => {
+    if (!normalizedSearch) return true;
+    return label
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .includes(normalizedSearch);
+  });
 
   const toggleWorksite = (key: string) => {
     if (selectedSet.has(key)) {
@@ -9853,54 +9963,81 @@ function WorksiteMultiSelect({
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="mt-1 flex min-h-9 w-full items-center justify-between gap-3 rounded border border-border-low bg-surface-container px-3 py-2 text-left text-xs font-normal normal-case tracking-normal text-on-surface"
-          aria-label={`Selecionar obras. ${selectionLabel}`}
-        >
-          <span className="truncate">{selectionLabel}</span>
-          <Icon name="expand_more" className="shrink-0 text-base text-on-surface-variant" />
-        </button>
-      </PopoverTrigger>
+      <div className="mt-1 min-w-[280px]">
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="flex min-h-9 w-full min-w-[280px] items-center justify-between gap-3 rounded border border-border-low bg-surface-container px-3 py-2 text-left text-xs font-normal normal-case tracking-normal text-on-surface"
+            aria-label={`Selecionar obras. ${selectionLabel}`}
+          >
+            <span className="min-w-0 flex-1 truncate whitespace-nowrap">Obras</span>
+            <span className="shrink-0 whitespace-nowrap rounded border border-border-low bg-surface-highest px-2 py-0.5 text-[10px] font-black uppercase tracking-normal text-on-surface-variant">
+              {selectedBadge}
+            </span>
+            <Icon name="expand_more" className="shrink-0 text-base text-on-surface-variant" />
+          </button>
+        </PopoverTrigger>
+      </div>
       <PopoverContent
         align="start"
         side="bottom"
         collisionPadding={16}
-        className="z-[70] w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0"
+        className="z-[70] max-w-[calc(100vw-2rem)] min-w-[280px] p-0"
+        style={{ width: "max(280px, var(--radix-popover-trigger-width))" }}
       >
-        <div className="max-h-[50vh] overflow-y-auto overscroll-contain p-2">
+        <div className="border-b border-border-low p-2">
+          <label className="sr-only" htmlFor="period-worksite-search">
+            Buscar obra
+          </label>
+          <div className="flex min-h-9 items-center gap-2 rounded border border-border-low bg-surface-container px-3">
+            <Icon name="search" className="shrink-0 text-base text-on-surface-variant" />
+            <input
+              id="period-worksite-search"
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar obra"
+              className="min-w-0 flex-1 bg-transparent py-2 text-sm font-normal normal-case tracking-normal text-on-surface outline-none placeholder:text-on-surface-variant"
+            />
+          </div>
+        </div>
+        <div className="max-h-[50vh] overflow-auto overscroll-contain p-2">
           <button
             type="button"
             onClick={() => onChange([])}
-            className="flex min-h-11 w-full items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
+            className="flex min-h-11 w-full min-w-max items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
             aria-pressed={selectedKeys.length === 0}
           >
             <Checkbox
               checked={selectedKeys.length === 0}
               tabIndex={-1}
-              className="pointer-events-none"
+              className="pointer-events-none shrink-0"
             />
-            <span className="font-semibold">Todas as obras</span>
+            <span className="whitespace-nowrap font-semibold">Todas as obras</span>
           </button>
-          {options.map(([key, label]) => {
+          {filteredOptions.map(([key, label]) => {
             const checked = selectedSet.has(key);
             return (
               <button
                 key={key}
                 type="button"
                 onClick={() => toggleWorksite(key)}
-                className="flex min-h-11 w-full items-start gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
+                className="flex min-h-11 w-full min-w-max items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
                 aria-pressed={checked}
               >
-                <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none mt-0.5" />
-                <span className="min-w-0 whitespace-normal break-words">{label}</span>
+                <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none shrink-0" />
+                <span className="whitespace-nowrap">{label}</span>
               </button>
             );
           })}
+          {filteredOptions.length === 0 && (
+            <div className="px-3 py-4 text-sm font-normal normal-case tracking-normal text-on-surface-variant">
+              Nenhuma obra encontrada.
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border-low p-2">
-          <span className="px-2 text-[10px] font-bold text-on-surface-variant">
+          <span className="whitespace-nowrap px-2 text-[10px] font-bold text-on-surface-variant">
             {selectionLabel}
           </span>
           <Button
@@ -9920,7 +10057,7 @@ function WorksiteMultiSelect({
 
 function ComparisonField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+    <label className="block min-w-0 text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
       {label}
       {children}
     </label>

@@ -139,21 +139,65 @@ export function displayObraName(value: string | null | undefined): string {
   return value?.trim().replace(/\s+/g, " ") || "Sem obra";
 }
 
-export function normalizeObraName(value: string | null | undefined): string {
+export const WORKSITE_ALIASES = {
+  FLECHA: [
+    "FLECHA",
+    "RDG FLECHA",
+    "RDG-FLECHA",
+    "RDG_FLECHA",
+    "RDG FLECHA LTDA",
+    "FLECHA TRANSPORTES",
+    "RDG VIANA",
+    "RDG-VIANA",
+    "RDG_VIANA",
+    "VIANA",
+    "RDG VIANA LTDA",
+  ],
+  CAMPO_LOG_05: ["CAMPO LOG 05", "CAMPO LOG05", "CAMPO LOG 5", "CPL5", "CPL 5"],
+  ROAMA: ["ROAMA", "ROAMA LTDA"],
+} as const;
+
+const WORKSITE_ALIAS_LABELS: Record<keyof typeof WORKSITE_ALIASES, string> = {
+  FLECHA: "FLECHA",
+  CAMPO_LOG_05: "CAMPO LOG 05",
+  ROAMA: "ROAMA",
+};
+
+function normalizeWorksiteText(value: string | null | undefined): string {
   return displayObraName(value)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
-    .replace(/\b\d+\b/g, (token) => String(Number(token)))
-    .replace(/\s+/g, "");
+    .replace(/[_-]+/g, " ")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\b\d+\b/g, (token) => String(Number(token)).padStart(token.length, "0"))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const WORKSITE_ALIAS_LOOKUP = new Map<string, keyof typeof WORKSITE_ALIASES>();
+Object.entries(WORKSITE_ALIASES).forEach(([key, aliases]) => {
+  aliases.forEach((alias) => {
+    WORKSITE_ALIAS_LOOKUP.set(normalizeWorksiteText(alias), key as keyof typeof WORKSITE_ALIASES);
+  });
+});
+
+export function normalizeObraAlias(value: string | null | undefined): string {
+  const normalized = normalizeWorksiteText(value);
+  return WORKSITE_ALIAS_LOOKUP.get(normalized) ?? normalized;
+}
+
+export function displayObraAliasLabel(value: string | null | undefined): string {
+  const alias = normalizeObraAlias(value);
+  return WORKSITE_ALIAS_LABELS[alias as keyof typeof WORKSITE_ALIAS_LABELS] ?? displayObraName(value);
+}
+
+export function normalizeObraName(value: string | null | undefined): string {
+  return normalizeObraAlias(value).replace(/[^A-Z0-9]+/g, "");
 }
 
 export function normalizeObraKey(value: string | null | undefined): string {
-  return displayObraName(value)
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("pt-BR")
-    .replace(/\b\d+\b/g, (token) => String(Number(token)));
+  return normalizeObraAlias(value);
 }
 
 export function obraMatches(
@@ -168,7 +212,7 @@ export function uniqueNormalizedObras(values: (string | null | undefined)[]): st
   values.forEach((value) => {
     const label = displayObraName(value);
     const key = normalizeObraKey(label);
-    if (!names.has(key)) names.set(key, label);
+    if (!names.has(key)) names.set(key, displayObraAliasLabel(label));
   });
   return Array.from(names.values()).sort((left, right) => left.localeCompare(right, "pt-BR"));
 }

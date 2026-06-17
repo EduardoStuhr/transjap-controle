@@ -6,6 +6,7 @@ import {
   normalizeEquipmentKey,
   type EquipmentContext,
 } from "@/lib/equipment-normalization";
+import { normalizeObraAlias } from "@/lib/production-consumption-utils";
 
 export type OperationalItem =
   | "limpeza"
@@ -147,7 +148,7 @@ function hasFleet(input: OperationalItemInput, fleet: string): boolean {
 }
 
 function normalizeWorksite(value: string | null | undefined) {
-  return normalizeText(value).replace(/\b0+([0-9]+)\b/g, "$1");
+  return normalizeObraAlias(value);
 }
 
 export function isFixedCleaningFleet(input: OperationalItemInput): boolean {

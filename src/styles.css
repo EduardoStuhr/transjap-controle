@@ -466,6 +466,43 @@
     max-height: calc(var(--app-viewport-height) - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 4.75rem) !important;
   }
 
+  .period-comparison-dialog {
+    width: calc(100vw - var(--safe-area-inset-left) - var(--safe-area-inset-right) - 1rem);
+    max-width: none !important;
+    height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 1rem);
+    max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 1rem) !important;
+    overflow: hidden;
+  }
+
+  .period-comparison-dialog .app-dialog-close {
+    top: 0.75rem;
+    right: 0.75rem;
+    width: 2.25rem;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .period-comparison-dialog .app-dialog-close svg {
+    display: block;
+  }
+
+  .period-comparison-dialog .app-dialog-close span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  :root.capacitor-android .period-comparison-dialog {
+    height: calc(var(--app-viewport-height) - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 1rem);
+    max-height: calc(var(--app-viewport-height) - var(--safe-area-inset-top) - var(--safe-area-inset-bottom) - 1rem) !important;
+  }
+
   .app-sheet-content {
     max-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom)) !important;
   }

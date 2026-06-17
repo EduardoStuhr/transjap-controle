@@ -3,6 +3,7 @@ import type { Db } from "@/db/client";
 import { equipmentDailyParts, fuelAttribution, fueling } from "@/db/schema";
 import type { DbEquipmentDailyPart, DbFueling, DbFuelAttributionInsert } from "@/db/schema";
 import { normalizeFleet as parseFleetNumber } from "@/lib/carcara-parser";
+import { displayObraAliasLabel, normalizeObraKey } from "@/lib/production-consumption-utils";
 
 const WINDOW_DAYS_MAX = 14;
 
@@ -99,12 +100,13 @@ export async function recalculateFuelAttribution(
       const fleetLabel = f.prefix || fleet;
 
       if (totalHours <= 0) {
+        const obra = f.obra ? displayObraAliasLabel(f.obra) : "_sem_pde";
         attributions.push({
           id: `${fleet}-${currentDate}-_sem_pde-${f.id}`.slice(0, 200),
           fleet,
           fleetLabel,
           date: currentDate,
-          obra: f.obra || "_sem_pde",
+          obra,
           hoursWorked: 0,
           litersAttributed: liters,
           costAttributed: cost,
@@ -115,14 +117,18 @@ export async function recalculateFuelAttribution(
         const litersPerHour = liters / totalHours;
         const costPerLiter = liters > 0 ? cost / liters : 0;
         for (const p of usableParts) {
+          const obra = p.obra ? displayObraAliasLabel(p.obra) : "";
           const partLiters = (p.hours || 0) * litersPerHour;
           const partCost = partLiters * costPerLiter;
           attributions.push({
-            id: `${fleet}-${p.date}-${p.obra || "_no_obra"}-${f.id}`.slice(0, 200),
+            id: `${fleet}-${p.date}-${normalizeObraKey(p.obra) || "_no_obra"}-${f.id}`.slice(
+              0,
+              200,
+            ),
             fleet,
             fleetLabel,
             date: p.date,
-            obra: p.obra || "",
+            obra,
             hoursWorked: p.hours || 0,
             litersAttributed: partLiters,
             costAttributed: partCost,

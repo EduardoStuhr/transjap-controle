@@ -6,6 +6,7 @@ import { getOptionalD1 } from "@/lib/cf-env";
 import { fuelAttribution } from "@/db/schema";
 import type { DbFuelAttribution } from "@/db/schema";
 import { recalculateFuelAttribution } from "@/lib/fuel-attribution";
+import { normalizeObraKey } from "@/lib/production-consumption-utils";
 
 type FuelAttributionFilters = {
   dateFrom?: string;
@@ -91,7 +92,9 @@ export const listFuelAttributionFn = createServerFn({ method: "POST" })
     if (analysisIds.size > 0) {
       rows = rows.filter((row) => sourceBelongsToAnalyses(row.sourceFuelingId, analysisIds));
     }
-    if (data?.obra) rows = rows.filter((r) => r.obra === data.obra);
+    if (data?.obra) {
+      rows = rows.filter((r) => normalizeObraKey(r.obra) === normalizeObraKey(data.obra));
+    }
     if (data?.fleet) rows = rows.filter((r) => r.fleet === data.fleet);
     return rows;
   });

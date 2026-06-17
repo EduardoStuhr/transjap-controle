@@ -10,6 +10,7 @@ import {
 import { getOptionalD1 } from "@/lib/cf-env";
 import { normalizeFleet } from "@/lib/carcara-parser";
 import { normalizeEquipmentKey } from "@/lib/equipment-normalization";
+import { displayObraAliasLabel, normalizeObraKey } from "@/lib/production-consumption-utils";
 import { calculateFuelAllocation } from "@/services/fuelAllocation/calculateFuelAllocation";
 import type {
   FuelAllocationAuditResult,
@@ -354,7 +355,7 @@ function calculateFromExistingData(
       equipmentId: fleet,
       fleet,
       date: row.date,
-      obra: row.obra,
+      obra: displayObraAliasLabel(row.obra),
       startHourmeter: row.horimInicial > 0 ? row.horimInicial : undefined,
       endHourmeter: row.horimFinal > 0 ? row.horimFinal : undefined,
       workedHours: row.hours,
@@ -420,10 +421,6 @@ function buildFilterQuery(
     where.push(sourceFilter.sql);
     params.push(...sourceFilter.params);
   }
-  if (filters.obra && table === "fuel_allocations") {
-    where.push("obra = ?");
-    params.push(filters.obra);
-  }
   return {
     sql: where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "",
     params,
@@ -474,7 +471,9 @@ export const listFuelAllocationsSupportFn = createServerFn({ method: "POST" })
       )
       .bind(...filter.params)
       .all<FuelAllocationSupportRow>();
-    return result.results;
+    return data?.obra
+      ? result.results.filter((row) => normalizeObraKey(row.obra) === normalizeObraKey(data.obra))
+      : result.results;
   });
 
 export const listFuelAllocationAuditSupportFn = createServerFn({ method: "POST" })

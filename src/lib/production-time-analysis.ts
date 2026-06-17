@@ -1,5 +1,6 @@
 import type { DbTrip } from "@/db/schema";
 import {
+  displayObraAliasLabel,
   displayObraName,
   normalizeObraName,
 } from "@/lib/production-consumption-utils";
@@ -289,7 +290,7 @@ export function buildWorksiteTimeSummaries(trips: DbTrip[], date: string): Works
   trips
     .filter((trip) => parseRcoOperationalDateTime(trip.datetime)?.date === date)
     .forEach((trip) => {
-      const obra = displayObraName(trip.obra);
+      const obra = displayObraAliasLabel(trip.obra);
       const key = normalizeObraName(obra);
       const current = rowsByObra.get(key) ?? { obra, rows: [] };
       current.rows.push(trip);
