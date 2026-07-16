@@ -9,6 +9,11 @@ const CHANNEL_ID = "transjap_tasks";
 const TOKEN_STORAGE_KEY = "transjap:native-push-token:v1";
 
 type NativePushStatus = "unsupported" | "blocked" | "inactive" | "active";
+type NativePushPlatform = NativePushSubscriptionInput["platform"];
+type NativePushModules = {
+  PushNotifications: typeof import("@capacitor/push-notifications").PushNotifications;
+  platform: NativePushPlatform;
+};
 
 function readStoredToken() {
   if (typeof window === "undefined") return "";
@@ -37,7 +42,7 @@ function clearStoredToken() {
   }
 }
 
-async function getNativePushModules() {
+async function getNativePushModules(): Promise<NativePushModules | null> {
   if (typeof window === "undefined") return null;
 
   const [{ Capacitor }, { PushNotifications }] = await Promise.all([
@@ -49,7 +54,7 @@ async function getNativePushModules() {
   const platform = Capacitor.getPlatform();
   if (platform !== "android" && platform !== "ios") return null;
 
-  return { Capacitor, PushNotifications, platform };
+  return { PushNotifications, platform: platform as NativePushPlatform };
 }
 
 function payloadUrl(data: unknown) {
@@ -64,7 +69,7 @@ function payloadTaskId(data: unknown) {
   return typeof value === "string" && value ? value : "";
 }
 
-async function createDefaultChannel(PushNotifications: Awaited<ReturnType<typeof getNativePushModules>>["PushNotifications"]) {
+async function createDefaultChannel(PushNotifications: NativePushModules["PushNotifications"]) {
   await PushNotifications.createChannel({
     id: CHANNEL_ID,
     name: "Tarefas Transjap",

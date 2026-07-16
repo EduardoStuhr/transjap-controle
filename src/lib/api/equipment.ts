@@ -4,12 +4,18 @@ import { getDb } from "@/db/client";
 import { equipment as equipmentTable } from "@/db/schema";
 import { SEED_EQUIPMENT_ROWS, seedEquipmentIfEmpty } from "@/db/seed";
 import { getOptionalD1 } from "@/lib/cf-env";
+import { INITIAL_FLEET_LOCATIONS, INITIAL_FLEET_MODELS } from "@/lib/fleet-location-defaults";
 import { normalizeFleetId } from "@/lib/operational-options";
 import type { DbEquipmentInsert } from "@/db/schema";
 
 type EquipmentPatch = Partial<Omit<DbEquipmentInsert, "createdAt" | "updatedAt">>;
 type EquipmentCreate = Pick<DbEquipmentInsert, "id" | "model" | "location"> &
   Partial<Omit<DbEquipmentInsert, "id" | "model" | "location" | "createdAt" | "updatedAt">>;
+type FleetLocationPatch = {
+  id: string;
+  obraAtual: string;
+  status: DbEquipmentInsert["status"];
+};
 
 const DEFAULT_ICON = "construction";
 const STATUS_TONE = {
@@ -17,6 +23,8 @@ const STATUS_TONE = {
   Manutenção: "warning",
   Parado: "error",
 } as const;
+
+const EQUIPMENT_STATUS = new Set(Object.keys(STATUS_TONE));
 
 let localEquipmentRows: DbEquipmentInsert[] | undefined;
 
@@ -43,12 +51,28 @@ function getLocalEquipmentRows() {
     }));
   }
 
+  const now = new Date().toISOString();
+  localEquipmentRows.forEach((row) => {
+    const location = INITIAL_FLEET_LOCATIONS[row.id];
+    const model = INITIAL_FLEET_MODELS[row.id];
+    if (!location && !model) return;
+    if (location && !row.location.trim()) row.location = location;
+    if (model) row.model = model;
+    row.updatedAt = now;
+  });
+
   return localEquipmentRows;
 }
 
 function assertFleetId(id: string) {
   if (!id) {
     throw new Error("Informe a frota do equipamento.");
+  }
+}
+
+function assertEquipmentStatus(status: string): asserts status is DbEquipmentInsert["status"] {
+  if (!EQUIPMENT_STATUS.has(status)) {
+    throw new Error("Status de frota invalido.");
   }
 }
 
@@ -81,6 +105,38 @@ function buildEquipmentPatch(data: EquipmentPatch): EquipmentPatch & { updatedAt
     ...(data.tone || !data.status ? {} : { tone: getTone(data.status) }),
     updatedAt: new Date().toISOString(),
   };
+}
+
+export async function saveFleetLocation(data: FleetLocationPatch) {
+  const d1 = getEquipmentD1();
+  const id = normalizeFleetId(data.id);
+  const location = data.obraAtual.trim();
+  assertFleetId(id);
+  assertEquipmentStatus(data.status);
+  if (!location) {
+    throw new Error("Informe a obra atual da frota.");
+  }
+
+  const patch = {
+    location,
+    status: data.status,
+    tone: getTone(data.status),
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (!d1) {
+    const rows = getLocalEquipmentRows();
+    const index = rows.findIndex((row) => row.id === id);
+    if (index === -1) throw new Error(`Equipamento ${id} nÃ£o encontrado.`);
+    rows[index] = { ...rows[index], ...patch };
+    return rows[index];
+  }
+
+  const db = getDb(d1);
+  await db.update(equipmentTable).set(patch).where(eq(equipmentTable.id, id));
+  const updated = await db.select().from(equipmentTable).where(eq(equipmentTable.id, id)).get();
+  if (!updated) throw new Error(`Equipamento ${id} nÃ£o encontrado.`);
+  return updated;
 }
 
 export const listEquipment = createServerFn({ method: "GET" }).handler(async () => {
@@ -166,6 +222,10 @@ export const updateEquipment = createServerFn({ method: "POST" })
     if (!updated) throw new Error(`Equipamento ${data.id} nÃ£o encontrado.`);
     return updated;
   });
+
+export const updateFleetLocation = createServerFn({ method: "POST" })
+  .inputValidator((args: FleetLocationPatch) => args)
+  .handler(async ({ data }) => saveFleetLocation(data));
 
 export const deleteEquipment = createServerFn({ method: "POST" })
   .inputValidator((id: string) => id)

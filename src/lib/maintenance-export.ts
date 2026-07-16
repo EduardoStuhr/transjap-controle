@@ -1,5 +1,10 @@
 import { getMaintenanceExternalCost, type MaintenanceRecord } from "@/lib/maintenance-store";
+import type { Equipment } from "@/lib/equipment-store";
 import type { StockMovement } from "@/lib/inventory-types";
+import {
+  findEquipmentForMaintenanceRecord,
+  getStoppedMaintenanceRecords,
+} from "@/lib/maintenance-stopped";
 import {
   buildPdfDocument,
   escapeHtml,
@@ -37,12 +42,13 @@ function formatTimestamp(value: string) {
 type MaintenanceReportOptions = {
   formatEquipment?: (equipment: string) => string;
   filterDescription?: string;
+  equipments?: Equipment[];
 };
 
 type MaintenanceReportRow = {
   id: string;
   equipment: string;
-  type: string;
+  operationalStatus: string;
   item: string;
   serviceDescription: string;
   submittedBy: string;
@@ -89,7 +95,10 @@ function prepareOpenMaintenanceRows(
     .map((record) => ({
       id: record.id,
       equipment: options.formatEquipment?.(record.equipment) || record.equipment || "—",
-      type: record.type || "—",
+      operationalStatus:
+        (options.equipments
+          ? findEquipmentForMaintenanceRecord(record, options.equipments)?.status
+          : null) || "—",
       item: record.item || "—",
       serviceDescription: record.serviceDescription || "—",
       submittedBy: record.submittedBy || "—",
@@ -100,27 +109,41 @@ function prepareOpenMaintenanceRows(
     .sort((a, b) => b.daysStopped - a.daysStopped || a.equipment.localeCompare(b.equipment));
 }
 
-function summarizeOpenMaintenance(rows: MaintenanceReportRow[]) {
-  const equipmentCount = new Set(
-    rows.map((row) => row.equipment.trim().toLocaleLowerCase("pt-BR")).filter(Boolean),
-  ).size;
+function summarizeOpenMaintenance(
+  rows: MaintenanceReportRow[],
+  stoppedRows: MaintenanceReportRow[],
+) {
+  const equipmentCount = stoppedRows.length;
   const statusCounts = rows.reduce<Record<string, number>>((counts, row) => {
     counts[row.status] = (counts[row.status] ?? 0) + 1;
     return counts;
   }, {});
-  const typeCounts = rows.reduce<Record<string, number>>((counts, row) => {
-    counts[row.type] = (counts[row.type] ?? 0) + 1;
+  const operationalStatusCounts = rows.reduce<Record<string, number>>((counts, row) => {
+    counts[row.operationalStatus] = (counts[row.operationalStatus] ?? 0) + 1;
     return counts;
   }, {});
-  const totalDays = rows.reduce((sum, row) => sum + row.daysStopped, 0);
+  const totalStoppedDays = stoppedRows.reduce((sum, row) => sum + row.daysStopped, 0);
 
   return {
     equipmentCount,
     statusCounts,
-    typeCounts,
-    averageDays: rows.length > 0 ? totalDays / rows.length : 0,
-    maximumDays: rows.reduce((maximum, row) => Math.max(maximum, row.daysStopped), 0),
+    operationalStatusCounts,
+    averageDays: stoppedRows.length > 0 ? totalStoppedDays / stoppedRows.length : 0,
+    maximumDays: stoppedRows.reduce((maximum, row) => Math.max(maximum, row.daysStopped), 0),
   };
+}
+
+function prepareStoppedMaintenanceRows(
+  records: MaintenanceRecord[],
+  rows: MaintenanceReportRow[],
+  options: MaintenanceReportOptions,
+) {
+  if (!options.equipments) return rows;
+
+  const stoppedRecordIds = new Set(
+    getStoppedMaintenanceRecords(records, options.equipments).map((record) => record.id),
+  );
+  return rows.filter((row) => stoppedRecordIds.has(row.id));
 }
 
 function maintenanceReportFilename(extension: "pdf" | "xlsx") {
@@ -233,7 +256,8 @@ export function exportOpenMaintenanceAsPdf(
   if (typeof window === "undefined") return;
 
   const rows = prepareOpenMaintenanceRows(records, options);
-  const summary = summarizeOpenMaintenance(rows);
+  const stoppedRows = prepareStoppedMaintenanceRows(records, rows, options);
+  const summary = summarizeOpenMaintenance(rows, stoppedRows);
   const generatedAt = new Date().toLocaleString("pt-BR");
   const filterDescription = options.filterDescription || "Todos os tipos";
   const statusSummaryRows = Object.entries(summary.statusCounts)
@@ -243,20 +267,20 @@ export function exportOpenMaintenanceAsPdf(
         `<tr><td>Status: ${escapeHtml(status)}</td><td class="numeric">${count}</td></tr>`,
     )
     .join("");
-  const typeSummaryRows = Object.entries(summary.typeCounts)
+  const operationalStatusSummaryRows = Object.entries(summary.operationalStatusCounts)
     .sort(([left], [right]) => left.localeCompare(right, "pt-BR"))
     .map(
-      ([type, count]) =>
-        `<tr><td>Tipo: ${escapeHtml(type)}</td><td class="numeric">${count}</td></tr>`,
+      ([status, count]) =>
+        `<tr><td>Situação: ${escapeHtml(status)}</td><td class="numeric">${count}</td></tr>`,
     )
     .join("");
   const maintenanceRows = rows
     .map(
       (row) => `<tr>
-        <td>${escapeHtml(row.id)}</td>
         <td><strong>${escapeHtml(row.equipment)}</strong></td>
-        <td>${escapeHtml(row.type)}</td>
+        <td>${escapeHtml(row.operationalStatus)}</td>
         <td>${escapeHtml(row.item)}</td>
+        <td class="description-cell">${escapeHtml(row.serviceDescription)}</td>
         <td>${escapeHtml(row.submittedBy)}</td>
         <td><span class="status-pill">${escapeHtml(row.status)}</span></td>
         <td>${escapeHtml(row.createdAt)}</td>
@@ -277,6 +301,7 @@ export function exportOpenMaintenanceAsPdf(
       .report-kpi strong { display: block; margin-top: 5px; font-size: 21px; color: #171717; }
       .maintenance-report { font-size: 9px; }
       .maintenance-report th, .maintenance-report td { padding: 6px 7px; }
+      .maintenance-report .description-cell { min-width: 180px; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
       .maintenance-report th { background: #202020; color: #ffd700; }
       .maintenance-report tbody tr:nth-child(even) { background: #fafafa; }
       .status-pill { display: inline-block; border-radius: 999px; padding: 2px 7px;
@@ -302,8 +327,8 @@ export function exportOpenMaintenanceAsPdf(
       rows.length > 0
         ? `<table class="maintenance-report">
             <thead><tr>
-              <th>ID</th><th>Equipamento</th><th>Tipo</th><th>Item</th>
-              <th>Aberto por</th><th>Status</th><th>Abertura</th><th>Dias parados</th>
+              <th>Equipamento</th><th>Situação</th><th>Item</th><th>Descrição</th>
+              <th>Aberto por</th><th>Status</th><th>Abertura</th><th>Dias do registro</th>
             </tr></thead>
             <tbody>${maintenanceRows}</tbody>
           </table>`
@@ -317,14 +342,14 @@ export function exportOpenMaintenanceAsPdf(
         <tr><td>Total de equipamentos parados</td><td class="numeric">${summary.equipmentCount}</td></tr>
         <tr><td>Total de manutenções abertas</td><td class="numeric">${rows.length}</td></tr>
         ${statusSummaryRows}
-        ${typeSummaryRows}
+        ${operationalStatusSummaryRows}
       </tbody>
     </table>
   `;
 
   openPdfWindow(
     buildPdfDocument({
-      title: "Manutenções abertas - TransJap",
+      title: "Manutenções abertas - Transjap",
       docType: "Relatório de Manutenção",
       headline: "Manutenções Abertas",
       recordId: maintenanceReportFilename("pdf").replace(".pdf", ""),
@@ -342,25 +367,24 @@ export async function exportOpenMaintenanceAsExcel(
 
   const { strToU8, zipSync } = await import("fflate");
   const rows = prepareOpenMaintenanceRows(records, options);
-  const summary = summarizeOpenMaintenance(rows);
+  const stoppedRows = prepareStoppedMaintenanceRows(records, rows, options);
+  const summary = summarizeOpenMaintenance(rows, stoppedRows);
   const generatedAt = new Date();
   const filterDescription = options.filterDescription || "Todos os tipos";
   const maintenanceRows: XlsxCellValue[][] = [
     [
-      "ID",
       "Equipamento",
-      "Tipo",
+      "Situação",
       "Item / Componente",
-      "Serviço",
+      "Descrição",
       "Aberto por",
       "Status",
       "Data de abertura",
-      "Dias parados",
+      "Dias do registro",
     ],
     ...rows.map((row) => [
-      row.id,
       row.equipment,
-      row.type,
+      row.operationalStatus,
       row.item,
       row.serviceDescription,
       row.submittedBy,
@@ -375,14 +399,14 @@ export async function exportOpenMaintenanceAsExcel(
     ["Filtros aplicados", filterDescription],
     ["Total de equipamentos parados", summary.equipmentCount],
     ["Total de manutenções abertas", rows.length],
-    ["Média de dias parados", Number(summary.averageDays.toFixed(1))],
-    ["Maior quantidade de dias parados", summary.maximumDays],
+    ["Média de dias do registro", Number(summary.averageDays.toFixed(1))],
+    ["Maior quantidade de dias do registro", summary.maximumDays],
     ...Object.entries(summary.statusCounts)
       .sort(([left], [right]) => left.localeCompare(right, "pt-BR"))
       .map(([status, count]): XlsxCellValue[] => [`Status: ${status}`, count]),
-    ...Object.entries(summary.typeCounts)
+    ...Object.entries(summary.operationalStatusCounts)
       .sort(([left], [right]) => left.localeCompare(right, "pt-BR"))
-      .map(([type, count]): XlsxCellValue[] => [`Tipo: ${type}`, count]),
+      .map(([status, count]): XlsxCellValue[] => [`Situação: ${status}`, count]),
   ];
 
   const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -463,8 +487,10 @@ export async function exportOpenMaintenanceAsExcel(
     },
     { level: 6 },
   );
+  const archiveBytes = new Uint8Array(archive.length);
+  archiveBytes.set(archive);
   triggerBlobDownload(
-    new Blob([archive], {
+    new Blob([archiveBytes], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }),
     maintenanceReportFilename("xlsx"),
@@ -623,7 +649,7 @@ export function exportMaintenanceAsCsv(record: MaintenanceRecord, movements: Sto
   ]);
 
   const rows: string[][] = [
-    ["TransJap — Manutenção", ""],
+    ["Transjap — Manutenção", ""],
     ["ID", record.id],
     ["Equipamento", record.equipment],
     ["Tipo", record.type],

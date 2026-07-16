@@ -91,9 +91,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "Transjap Sistema - Sistema Operacional" },
       {
         name: "description",
-        content: "Sistema operacional e controle de manutenção da frota TransJap.",
+        content: "Sistema operacional e controle de manutenção da frota Transjap.",
       },
-      { name: "author", content: "TransJap" },
+      { name: "author", content: "Transjap" },
       { property: "og:title", content: "Transjap Sistema" },
       { property: "og:description", content: "Sistema operacional e controle de manutenção." },
       { property: "og:type", content: "website" },

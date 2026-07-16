@@ -155,12 +155,29 @@ export const WORKSITE_ALIASES = {
   ],
   CAMPO_LOG_05: ["CAMPO LOG 05", "CAMPO LOG05", "CAMPO LOG 5", "CPL5", "CPL 5"],
   ROAMA: ["ROAMA", "ROAMA LTDA"],
+  ULIHORTE: [
+    "ULIHORTE",
+    "ULI HORTE",
+    "ULI-HORTE",
+    "ULI_HORTE",
+    "ULIHORT",
+    "ULI HORT",
+    "ULI-HORT",
+    "ULI_HORT",
+    "ULIHORTE OBRA",
+    "ULI HORTE OBRA",
+    "ULIHORT OBRA",
+    "OBRA ULIHORTE",
+    "OBRA ULI HORTE",
+    "OBRA ULIHORT",
+  ],
 } as const;
 
 const WORKSITE_ALIAS_LABELS: Record<keyof typeof WORKSITE_ALIASES, string> = {
   FLECHA: "FLECHA",
   CAMPO_LOG_05: "CAMPO LOG 05",
   ROAMA: "ROAMA",
+  ULIHORTE: "Ulihorte",
 };
 
 function normalizeWorksiteText(value: string | null | undefined): string {
@@ -182,9 +199,16 @@ Object.entries(WORKSITE_ALIASES).forEach(([key, aliases]) => {
   });
 });
 
+function matchesUlihorteVariant(normalized: string): boolean {
+  return /\bULI\s*HORT(?:E)?\b/.test(normalized);
+}
+
 export function normalizeObraAlias(value: string | null | undefined): string {
   const normalized = normalizeWorksiteText(value);
-  return WORKSITE_ALIAS_LOOKUP.get(normalized) ?? normalized;
+  const alias = WORKSITE_ALIAS_LOOKUP.get(normalized);
+  if (alias) return alias;
+  if (matchesUlihorteVariant(normalized)) return "ULIHORTE";
+  return normalized;
 }
 
 export function displayObraAliasLabel(value: string | null | undefined): string {

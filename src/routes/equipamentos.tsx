@@ -33,6 +33,7 @@ import {
   formatFleetCode,
   normalizeFleetId,
 } from "@/lib/operational-options";
+import { INITIAL_FLEET_LOCATION_OPTIONS } from "@/lib/fleet-location-defaults";
 
 export const Route = createFileRoute("/equipamentos")({ component: Equipamentos });
 
@@ -44,6 +45,7 @@ const toneBg: Record<string, string> = {
 
 const STATUS_OPTIONS: EquipmentStatus[] = ["Operação", "Manutenção", "Parado"];
 const DEFAULT_ICON = "construction";
+const EMPTY_LOCATION_FILTER = "__empty";
 
 const STATUS_TONE: Record<EquipmentStatus, EquipmentTone> = {
   Operação: "success",
@@ -108,6 +110,7 @@ function Equipamentos() {
   const [selectedEquipment, setSelectedEquipment] = useState<EquipmentDetail | null>(null);
   const [showDetailsPanel, setShowDetailsPanel] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [locationFilter, setLocationFilter] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -130,15 +133,31 @@ function Equipamentos() {
 
   const filtered = useMemo(
     () =>
-      equipments.filter(
-        (e) =>
-          e.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          e.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          formatFleetCode(e.id).toLowerCase().includes(searchTerm.toLowerCase()) ||
-          e.location.toLowerCase().includes(searchTerm.toLowerCase()),
-      ),
-    [equipments, searchTerm],
+      equipments.filter((e) => {
+        const location = e.location.trim();
+        const locationMatches =
+          !locationFilter ||
+          (locationFilter === EMPTY_LOCATION_FILTER ? !location : location === locationFilter);
+        const search = searchTerm.toLowerCase();
+        const searchMatches =
+          e.model.toLowerCase().includes(search) ||
+          e.id.toLowerCase().includes(search) ||
+          formatFleetCode(e.id).toLowerCase().includes(search) ||
+          e.location.toLowerCase().includes(search);
+
+        return locationMatches && searchMatches;
+      }),
+    [equipments, locationFilter, searchTerm],
   );
+
+  const locationOptions = useMemo(() => {
+    const values = new Set<string>(INITIAL_FLEET_LOCATION_OPTIONS);
+    equipments.forEach((equipment) => {
+      const location = equipment.location.trim();
+      if (location) values.add(location);
+    });
+    return Array.from(values).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [equipments]);
 
   const statusCounts = useMemo(
     () => ({
@@ -248,19 +267,52 @@ function Equipamentos() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative mb-8">
-        <Icon
-          name="search"
-          className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
-        />
-        <input
-          type="text"
-          placeholder="Buscar por frota, modelo ou localização..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-12 pr-4 py-3 bg-surface-container border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial placeholder:text-on-surface-variant/50"
-        />
+      {/* Filters */}
+      <div className="mb-8 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,320px)_auto] lg:items-end">
+        <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
+          Buscar
+          <div className="relative mt-2">
+            <Icon
+              name="search"
+              className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+            />
+            <input
+              type="text"
+              placeholder="Frota, modelo ou localização"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 bg-surface-container border border-border-low rounded-lg text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-industrial placeholder:text-on-surface-variant/50"
+            />
+          </div>
+        </label>
+
+        <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant">
+          Obra
+          <select
+            value={locationFilter}
+            onChange={(e) => setLocationFilter(e.target.value)}
+            className="mt-2 w-full rounded-lg border border-border-low bg-surface-container px-3 py-3 text-sm font-medium text-on-surface outline-none focus:ring-2 focus:ring-primary"
+          >
+            <option value="">Todas</option>
+            {locationOptions.map((location) => (
+              <option key={location} value={location}>
+                {location}
+              </option>
+            ))}
+            <option value={EMPTY_LOCATION_FILTER}>Sem localização</option>
+          </select>
+        </label>
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            setSearchTerm("");
+            setLocationFilter("");
+          }}
+        >
+          Limpar filtros
+        </Button>
       </div>
 
       {/* Equipment Grid */}
@@ -397,9 +449,15 @@ function Equipamentos() {
                 <input
                   value={form.location}
                   onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))}
+                  list="equipment-location-options"
                   required
                   className="px-3 py-2 bg-surface-highest border border-border-low rounded-md text-on-surface text-sm font-medium outline-none focus:ring-2 focus:ring-primary"
                 />
+                <datalist id="equipment-location-options">
+                  {locationOptions.map((location) => (
+                    <option key={location} value={location} />
+                  ))}
+                </datalist>
               </label>
 
               <label className="flex flex-col gap-1 text-xs font-bold uppercase tracking-widest text-on-surface-variant">

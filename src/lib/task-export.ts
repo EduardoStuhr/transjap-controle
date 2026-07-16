@@ -50,7 +50,7 @@ export function exportTaskAsCsv(task: TaskRecord) {
   ]);
 
   const rows: string[][] = [
-    ["TransJap — Tarefa", ""],
+    ["Transjap — Tarefa", ""],
     ["ID", task.id],
     ["Título", task.title],
     ["Status", task.status],

@@ -3,9 +3,11 @@ import {
   listEquipment,
   createEquipment,
   updateEquipment,
+  updateFleetLocation,
   deleteEquipment,
 } from "@/lib/api/equipment";
 import { FLEET_EQUIPMENT_CATALOG } from "@/lib/fleet-equipment-catalog";
+import { INITIAL_FLEET_LOCATIONS, INITIAL_FLEET_MODELS } from "@/lib/fleet-location-defaults";
 
 // ─── Public types (unchanged) ────────────────────────────────────────────────
 
@@ -98,12 +100,12 @@ export const SEED_EQUIPMENTS: Equipment[] = [
   },
   ...FLEET_EQUIPMENT_CATALOG.map(({ id, model }) => ({
     id,
-    model,
+    model: INITIAL_FLEET_MODELS[id] ?? model,
     icon: "construction",
     hours: 0,
     status: "Operação" as EquipmentStatus,
     tone: "success" as EquipmentTone,
-    location: "",
+    location: INITIAL_FLEET_LOCATIONS[id] ?? "",
     lastMaintenance: "",
     seriesNumber: "",
     acquisitionDate: "",
@@ -200,6 +202,18 @@ export function useEquipmentActions() {
       }),
   });
 
+  const updateLocationMut = useMutation({
+    mutationFn: ({
+      id,
+      obraAtual,
+      status,
+    }: {
+      id: string;
+      obraAtual: string;
+      status: EquipmentStatus;
+    }) => updateFleetLocation({ data: { id, obraAtual, status } }),
+  });
+
   const removeMut = useMutation({
     mutationFn: (id: string) => deleteEquipment({ data: id }),
   });
@@ -245,6 +259,39 @@ export function useEquipmentActions() {
 
       try {
         const saved = (await updateMut.mutateAsync({ id, patch })) as unknown as Equipment;
+        setCachedEquipments(qc, upsertEquipment(getCachedEquipments(qc), saved, id));
+        return saved;
+      } catch (error) {
+        setCachedEquipments(qc, previous);
+        throw error;
+      }
+    },
+    async updateLocation(id: string, obraAtual: string, status: EquipmentStatus) {
+      await qc.cancelQueries({ queryKey: QK });
+      const previous = getCachedEquipments(qc);
+      const existing = previous.find((equipment) => equipment.id === id);
+      const optimistic =
+        existing &&
+        draftToEquipment(
+          {
+            ...existing,
+            location: obraAtual,
+            status,
+            tone: statusTone(status),
+          },
+          existing,
+        );
+
+      if (optimistic) {
+        setCachedEquipments(qc, upsertEquipment(previous, optimistic, id));
+      }
+
+      try {
+        const saved = (await updateLocationMut.mutateAsync({
+          id,
+          obraAtual,
+          status,
+        })) as unknown as Equipment;
         setCachedEquipments(qc, upsertEquipment(getCachedEquipments(qc), saved, id));
         return saved;
       } catch (error) {

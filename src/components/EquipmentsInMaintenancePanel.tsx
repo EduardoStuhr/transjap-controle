@@ -2,15 +2,19 @@ import { useMemo } from "react";
 import { Icon } from "@/components/AppLayout";
 import type { Equipment, EquipmentStatus } from "@/lib/equipment-store";
 import type { MaintenanceRecord, MaintenanceStatus } from "@/lib/maintenance-store";
-import { formatEquipmentLabel, formatFleetCode, normalizeFleetId } from "@/lib/operational-options";
+import {
+  findEquipmentForMaintenanceRecord,
+  getStoppedMaintenanceRecords,
+  isActiveMaintenanceRecord,
+  sortActiveMaintenanceRecords,
+} from "@/lib/maintenance-stopped";
+import { formatFleetCode } from "@/lib/operational-options";
 
 type Props = {
   records: MaintenanceRecord[];
   equipments: Equipment[];
   onRecordClick: (id: string) => void;
 };
-
-const ACTIVE_STATUSES: MaintenanceStatus[] = ["Aberta", "Em andamento", "Atrasada"];
 
 function parseCreatedAt(createdAt: string): number {
   if (!createdAt) return 0;
@@ -37,19 +41,6 @@ function displayEquipmentReference(value: string): string {
   const isFleetCode =
     /^(?:(?:FROTA[-\s]*)?FR[-\s]*|FROTA[-\s]*)[A-Z0-9]+$/i.test(trimmed) || /^\d+$/.test(trimmed);
   return isFleetCode ? formatFleetCode(trimmed) : value;
-}
-
-function findEquipmentForRecord(record: MaintenanceRecord, equipments: Equipment[]) {
-  const normalized = normalizeFleetId(record.equipment);
-  return (
-    equipments.find(
-      (equipment) =>
-        equipment.id === record.equipment ||
-        equipment.id === normalized ||
-        equipment.model === record.equipment ||
-        formatEquipmentLabel(equipment) === record.equipment,
-    ) ?? null
-  );
 }
 
 function equipmentStatusTone(status: EquipmentStatus) {
@@ -89,15 +80,12 @@ function toneForStatus(status: MaintenanceStatus, days: number) {
 
 export function EquipmentsInMaintenancePanel({ records, equipments, onRecordClick }: Props) {
   const active = useMemo(
-    () =>
-      records
-        .filter((r) => ACTIVE_STATUSES.includes(r.status))
-        .sort((a, b) => {
-          if (a.status === "Atrasada" && b.status !== "Atrasada") return -1;
-          if (b.status === "Atrasada" && a.status !== "Atrasada") return 1;
-          return parseCreatedAt(a.createdAt) - parseCreatedAt(b.createdAt);
-        }),
+    () => sortActiveMaintenanceRecords(records.filter(isActiveMaintenanceRecord)),
     [records],
+  );
+  const stoppedEquipmentCount = useMemo(
+    () => getStoppedMaintenanceRecords(records, equipments).length,
+    [records, equipments],
   );
 
   if (active.length === 0) {
@@ -124,7 +112,7 @@ export function EquipmentsInMaintenancePanel({ records, equipments, onRecordClic
         <h2 className="text-lg font-black uppercase tracking-wider text-on-surface flex items-center gap-2">
           <Icon name="warning" className="text-status-warning" />
           Equipamentos parados
-          <span className="text-2xl text-status-warning">{active.length}</span>
+          <span className="text-2xl text-status-warning">{stoppedEquipmentCount}</span>
         </h2>
         <p className="text-xs text-on-surface-variant">
           Frotas fora de operação · clique no card para detalhes
@@ -136,7 +124,7 @@ export function EquipmentsInMaintenancePanel({ records, equipments, onRecordClic
           const days = daysOpen(record.createdAt);
           const tone = toneForStatus(record.status, days);
           const supplier = record.costEntries[0]?.supplierName || record.supplierName;
-          const equipment = findEquipmentForRecord(record, equipments);
+          const equipment = findEquipmentForMaintenanceRecord(record, equipments);
           return (
             <button
               key={record.id}

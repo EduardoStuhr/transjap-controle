@@ -4,7 +4,7 @@ export type FleetEquipmentCatalogItem = {
 };
 
 /**
- * Frota operacional importada da relacao fornecida pela TransJap.
+ * Frota operacional importada da relacao fornecida pela Transjap.
  * A identificacao (placa/serie) nao e exibida nos cards atuais e, portanto,
  * nao integra este cadastro resumido de frota e maquina.
  */
@@ -49,14 +49,21 @@ export const FLEET_EQUIPMENT_CATALOG: readonly FleetEquipmentCatalogItem[] = [
   { id: "FR-130", model: "Trator de esteiras - D5E" },
   { id: "FR-136", model: "Compressor de Ar" },
   { id: "FR-142", model: "Caminhão Pipa - Volvo VM 330" },
+  { id: "FR-156", model: "Mercedes Benz AXOR" },
   { id: "FR-160", model: "Escavadeira Hidráulica - 336 DL" },
+  { id: "FR-164", model: "Hillux CD 4X4 STD" },
   { id: "FR-168", model: "Gerador Stemac" },
+  { id: "FR-182", model: "Volvo VM 330" },
   { id: "FR-192", model: "Comboio - Mercedes Benz Accelo 1016" },
   { id: "FR-194", model: "Escavadeira Hidráulica - 336 DL" },
   { id: "FR-196", model: "Escavadeira Hidráulica - 336 DL" },
   { id: "FR-198", model: "Escavadeira Hidráulica - 336 DL" },
+  { id: "FR-200", model: "Mercedes Benz AXOR 2644" },
+  { id: "FR-204", model: "Micro Ônibus" },
   { id: "FR-206", model: "Trator de Esteiras - D6T" },
+  { id: "FR-212", model: "Saveiro" },
   { id: "FR-214", model: "Caminhão Pipa - Volvo VM 330" },
+  { id: "FR-218", model: "Prisma" },
   { id: "FR-220", model: "Gerador Caterpillar GEP 50-7" },
   { id: "FR-222", model: "Carreta Prancha - Carrega Tudo 3 eixos" },
   { id: "FR-224", model: "Acabadora EAR-800" },
@@ -71,11 +78,13 @@ export const FLEET_EQUIPMENT_CATALOG: readonly FleetEquipmentCatalogItem[] = [
   { id: "FR-242", model: "Motoniveladora 140GC" },
   { id: "FR-244", model: "Escavadeira Hidráulica - 345 GC" },
   { id: "FR-246", model: "Rolo Compactador Müller - TI 18" },
+  { id: "FR-248", model: "Saveiro 1.6" },
   { id: "FR-250", model: "Rolo Compactador Hamm" },
   { id: "FR-252", model: "Grade Aradora - 16 discos" },
   { id: "FR-254", model: "Rolo Dynapac DYN 7433 CA 25 D" },
   { id: "FR-256", model: "Rolo Dynapac DYN 7201 CA 30" },
   { id: "FR-258", model: "Trator John Deere" },
+  { id: "FR-260", model: "Gol branco" },
   { id: "FR-262", model: "Caminhão Comboio - Mercedes Benz Atego 1418" },
   { id: "FR-264", model: "Motoniveladora New Holland" },
   { id: "FR-266", model: "Caminhão Pipa - Mercedes Benz Actros 4844 2011" },
@@ -83,6 +92,7 @@ export const FLEET_EQUIPMENT_CATALOG: readonly FleetEquipmentCatalogItem[] = [
   { id: "FR-270", model: "Moto Bomba" },
   { id: "FR-274", model: "Rolo Compactador Hamm" },
   { id: "FR-278", model: "Moto Bomba" },
+  { id: "FR-280", model: "Kia Bongo" },
   { id: "FR-282", model: "Trator Valtra BM135 4x4 Cabinado" },
   { id: "FR-284", model: "Trator Valtra BM135 4x4" },
   { id: "FR-286", model: "Grade do girico 16 discos" },
@@ -90,4 +100,5 @@ export const FLEET_EQUIPMENT_CATALOG: readonly FleetEquipmentCatalogItem[] = [
   { id: "FR-290", model: "Moto Niveladora 140" },
   { id: "FR-292", model: "Automóvel - Fiat Fiorino Endurance" },
   { id: "FR-294", model: "Automóvel - CHEV ONIX 10TAT HB" },
+  { id: "FR-296", model: "Moto Bomba" },
 ];

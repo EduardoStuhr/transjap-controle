@@ -14,6 +14,13 @@ const PDF_STYLES = `
   * { box-sizing: border-box; }
   body { font-family: Inter, system-ui, sans-serif; color: #1a1a1a; padding: 32px 40px;
     max-width: 820px; margin: 0 auto; background: #fff; }
+  .pdf-actions { position: sticky; top: 0; z-index: 20; display: flex; justify-content: flex-end;
+    gap: 8px; margin: -16px 0 18px; padding: 10px 0; background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(8px); }
+  .pdf-action-button { border: 0; border-radius: 6px; background: #ffd700; color: #161616;
+    cursor: pointer; font: 800 12px Inter, system-ui, sans-serif; letter-spacing: 0.04em;
+    padding: 10px 14px; text-transform: uppercase; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14); }
+  .pdf-action-button:hover { background: #ffcf00; }
   .pdf-header { display: flex; align-items: center; gap: 16px; padding-bottom: 16px;
     border-bottom: 3px solid #ffd700; margin-bottom: 24px; }
   .pdf-header img { height: 56px; width: auto; object-fit: contain; }
@@ -36,7 +43,7 @@ const PDF_STYLES = `
   p { font-size: 13px; line-height: 1.55; margin: 6px 0; }
   .pdf-footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e5e5;
     font-size: 10px; color: #888; text-align: center; letter-spacing: 0.05em; }
-  @media print { body { padding: 20px 28px; } @page { margin: 16mm; } }
+  @media print { body { padding: 20px 28px; } .pdf-actions { display: none; } @page { margin: 16mm; } }
 `;
 
 export function buildPdfDocument(opts: {
@@ -53,18 +60,20 @@ export function buildPdfDocument(opts: {
 <html lang="pt-BR"><head><meta charset="utf-8"/>
 <title>${escapeHtml(opts.title)}</title>
 <style>${PDF_STYLES}</style></head><body>
+<div class="pdf-actions">
+  <button class="pdf-action-button" type="button" onclick="window.print()">Salvar PDF</button>
+</div>
 <header class="pdf-header">
-  <img src="/logo.png" alt="TransJap" onerror="this.style.display='none'"/>
+  <img src="/logo.png" alt="Transjap" onerror="this.style.display='none'"/>
   <div class="doc-info"><strong>${escapeHtml(opts.docType)}</strong>
     Documento gerado em ${escapeHtml(now)}</div>
 </header>
 <h1>${escapeHtml(opts.headline)}</h1>
 <p class="pdf-meta">#${escapeHtml(opts.recordId)} · Criado em ${escapeHtml(opts.createdAt)}</p>
 ${opts.bodyHtml}
-<footer class="pdf-footer">TransJap Fleet & Ops Management ·
+<footer class="pdf-footer">Transjap Fleet & Ops Management ·
   Gerado por ${escapeHtml(user?.name || "Sistema")} (${escapeHtml(user?.role || "—")}) em ${escapeHtml(now)}
 </footer>
-<script>window.addEventListener("load",()=>setTimeout(()=>window.print(),200));</script>
 </body></html>`;
 }
 

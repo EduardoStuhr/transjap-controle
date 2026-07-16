@@ -3,6 +3,7 @@ import "./lib/error-capture";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 import { runWithCfEnv } from "./lib/cf-env";
+import { saveFleetLocation } from "./lib/api/equipment";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -24,6 +25,45 @@ function brandedErrorResponse(): Response {
     status: 500,
     headers: { "content-type": "text/html; charset=utf-8" },
   });
+}
+
+function jsonResponse(data: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(data), {
+    ...init,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...(init?.headers ?? {}),
+    },
+  });
+}
+
+async function handleFleetLocationPatch(request: Request): Promise<Response | null> {
+  if (request.method !== "PATCH") return null;
+
+  const url = new URL(request.url);
+  const match = url.pathname.match(/^\/api\/frotas\/([^/]+)\/localizacao$/);
+  if (!match) return null;
+
+  let body: { obraAtual?: string; status?: "Operação" | "Manutenção" | "Parado" };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return jsonResponse({ error: "Body JSON invalido." }, { status: 400 });
+  }
+
+  try {
+    const equipment = await saveFleetLocation({
+      id: decodeURIComponent(match[1]),
+      obraAtual: body.obraAtual ?? "",
+      status: body.status ?? "Operação",
+    });
+    return jsonResponse(equipment);
+  } catch (error) {
+    return jsonResponse(
+      { error: error instanceof Error ? error.message : "Nao foi possivel atualizar." },
+      { status: 400 },
+    );
+  }
 }
 
 function isCatastrophicSsrErrorBody(body: string, responseStatus: number): boolean {
@@ -71,6 +111,9 @@ export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     return runWithCfEnv(env, async () => {
       try {
+        const apiResponse = await handleFleetLocationPatch(request);
+        if (apiResponse) return apiResponse;
+
         const handler = await getServerEntry();
         const response = await handler.fetch(request, env, ctx);
         return await normalizeCatastrophicSsrResponse(response);

@@ -434,7 +434,7 @@ type CarcaraPdeLayout = {
 };
 
 /**
- * Detecta o layout específico da PDE Carcará (TransJap).
+ * Detecta o layout específico da PDE Carcará (Transjap).
  * Assinatura única: linha contendo "DIA" na coluna A e "DATA" na coluna B.
  */
 function detectCarcaraPdeLayout(aoa: unknown[][], sheetName: string): CarcaraPdeLayout | null {

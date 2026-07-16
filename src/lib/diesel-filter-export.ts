@@ -123,7 +123,7 @@ export function exportDieselFilterChangesAsPdf({
 
   openPdfWindow(
     buildPdfDocument({
-      title: "Troca de Filtros Diesel - TransJap",
+      title: "Troca de Filtros Diesel - Transjap",
       docType: "Relatorio de Trocas Diesel",
       headline: "Troca de Filtros Diesel",
       recordId: filename("pdf").replace(".pdf", ""),

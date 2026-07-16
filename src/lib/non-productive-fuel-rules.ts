@@ -19,7 +19,7 @@ export const nonProductiveFuelRules: readonly NonProductiveFuelRule[] = [
     equipmentCategory: "escavadeira",
     dateEnd: "2026-05-07",
     dateStartProductive: "2026-05-08",
-    reason: "Diesel de escavadeira anterior à produção TransJap; custo/serviço de outra empresa.",
+    reason: "Diesel de escavadeira anterior à produção Transjap; custo/serviço de outra empresa.",
   },
 ];
 

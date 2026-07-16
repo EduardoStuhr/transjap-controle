@@ -21,6 +21,8 @@ import { getUnreadActivity, hasUnread } from "@/lib/task-unread";
 import { filterNotifiableTasks, filterVisibleTasks } from "@/lib/task-visibility";
 import { sortTasksStable } from "@/lib/task-sort";
 import { useMaintenanceStore } from "@/lib/maintenance-store";
+import { useEquipmentStore } from "@/lib/equipment-store";
+import { formatFleetCode } from "@/lib/operational-options";
 
 const NAV = [
   { to: "/", label: "Painel", icon: "dashboard" },
@@ -28,6 +30,7 @@ const NAV = [
   { to: "/calendario", label: "Calendário", icon: "calendar_today" },
   { to: "/manutencao", label: "Manutenção", icon: "build" },
   { to: "/equipamentos", label: "Equipamentos", icon: "construction" },
+  { to: "/localizacao-frotas", label: "Localização de Frotas", icon: "location_on" },
   { to: "/producao-consumo", label: "Produção × Consumo", icon: "query_stats" },
   {
     to: "/troca-filtros-diesel",
@@ -110,10 +113,7 @@ function logAgendaChromeMetrics() {
       androidSafeAreaTop: readRootCssVar(rootStyles, "--android-safe-area-top"),
       androidSafeAreaBottom: readRootCssVar(rootStyles, "--android-safe-area-bottom"),
       capacitorStatusBarHeight: readRootCssVar(rootStyles, "--capacitor-status-bar-height"),
-      capacitorNavigationBarHeight: readRootCssVar(
-        rootStyles,
-        "--capacitor-navigation-bar-height",
-      ),
+      capacitorNavigationBarHeight: readRootCssVar(rootStyles, "--capacitor-navigation-bar-height"),
       bottomNavRealHeight: bottomNavRect ? Math.round(bottomNavRect.height) : null,
       bottomNavCssMinHeight: bottomNav ? window.getComputedStyle(bottomNav).minHeight : null,
       mainPaddingTop: appMain ? window.getComputedStyle(appMain).paddingTop : null,
@@ -158,6 +158,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
 
   const tasks = useTaskStore((s) => s.tasks);
   const maintenances = useMaintenanceStore((s) => s.records);
+  const equipments = useEquipmentStore((s) => s.equipments);
   const inventoryItems = useInventoryStore((s) => s.items);
   const inventoryOfflineQueue = useInventoryStore((s) => s.offlineQueue);
   const stockAlerts = useMemo(
@@ -181,7 +182,10 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
     [tasks, user],
   );
   const unreadTasks = useMemo(
-    () => sortTasksStable(filterVisibleTasks(tasks, user).filter((task) => hasUnread(task, user?.name))),
+    () =>
+      sortTasksStable(
+        filterVisibleTasks(tasks, user).filter((task) => hasUnread(task, user?.name)),
+      ),
     [tasks, user],
   );
   const unreadTaskCount = unreadTasks.length;
@@ -228,8 +232,22 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
           label: m.equipment,
           to: "/manutencao" as const,
         })),
+      ...equipments
+        .filter(
+          (equipment) =>
+            equipment.location.toLowerCase().includes(needle) ||
+            equipment.id.toLowerCase().includes(needle) ||
+            formatFleetCode(equipment.id).toLowerCase().includes(needle),
+        )
+        .slice(0, 3)
+        .map((equipment) => ({
+          key: `fleet-location-${equipment.id}`,
+          type: "Localização",
+          label: `${formatFleetCode(equipment.id)} - ${equipment.location || "Sem localização"}`,
+          to: "/localizacao-frotas" as const,
+        })),
     ];
-  }, [maintenances, query, tasks, user]);
+  }, [equipments, maintenances, query, tasks, user]);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   useEffect(() => {
@@ -364,7 +382,7 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
             </div>
             <img
               src="/logo.png"
-              alt="TransJap"
+              alt="Transjap"
               className="md:hidden h-7 w-auto max-w-[118px] shrink object-contain"
             />
           </div>
@@ -426,12 +444,12 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                             k === "new"
                               ? "Nova tarefa"
                               : k === "response"
-                              ? "Nova resposta"
-                              : k === "comment"
-                                ? "Novo comentário"
-                                : k === "update"
-                                  ? "Tarefa atualizada"
-                                  : "Status alterado",
+                                ? "Nova resposta"
+                                : k === "comment"
+                                  ? "Novo comentário"
+                                  : k === "update"
+                                    ? "Tarefa atualizada"
+                                    : "Status alterado",
                           )
                           .join(" · ");
                         return (
@@ -469,7 +487,8 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                             }}
                             className="w-full text-left px-4 py-2 hover:bg-surface-highest transition-colors text-[10px] font-bold text-on-surface-variant uppercase tracking-widest"
                           >
-                            + {unreadTaskCount - 5} novidade{unreadTaskCount - 5 !== 1 ? "s" : ""} em tarefas
+                            + {unreadTaskCount - 5} novidade{unreadTaskCount - 5 !== 1 ? "s" : ""}{" "}
+                            em tarefas
                           </button>
                         </li>
                       )}
@@ -487,7 +506,10 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
                               }}
                               className="w-full text-left px-4 py-3 hover:bg-surface-highest transition-colors flex items-start gap-3"
                             >
-                              <Icon name="report" className="text-status-error text-base mt-0.5 flex-shrink-0" />
+                              <Icon
+                                name="report"
+                                className="text-status-error text-base mt-0.5 flex-shrink-0"
+                              />
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-bold text-on-surface truncate">
                                   {task.title}
@@ -683,7 +705,7 @@ function SidebarInner({
       <div className="p-6 flex items-center justify-center">
         <img
           src="/logo.png"
-          alt="TransJap — Terraplenagem e Construções"
+          alt="Transjap — Terraplenagem e Construções"
           className="w-full max-w-[180px] h-auto object-contain"
         />
       </div>
@@ -733,7 +755,7 @@ function SidebarInner({
             <span className="text-xs font-black uppercase tracking-widest">Sair do Sistema</span>
           </Button>
           <p className="mt-6 text-[9px] font-black text-on-surface-variant/40 uppercase tracking-[0.2em] text-center">
-            v1.0 · TransJap © 2026
+            v1.0 · Transjap © 2026
           </p>
         </div>
       </nav>

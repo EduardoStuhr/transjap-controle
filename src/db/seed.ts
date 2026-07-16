@@ -1,7 +1,9 @@
 import { getDb } from "./client";
 import { equipment } from "./schema";
 import type { DbEquipmentInsert } from "./schema";
+import { and, eq, sql } from "drizzle-orm";
 import { FLEET_EQUIPMENT_CATALOG } from "@/lib/fleet-equipment-catalog";
+import { INITIAL_FLEET_LOCATIONS, INITIAL_FLEET_MODELS } from "@/lib/fleet-location-defaults";
 
 export const SEED_EQUIPMENT_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updatedAt">[] = [
   {
@@ -71,12 +73,12 @@ export const SEED_EQUIPMENT_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updated
   },
   ...FLEET_EQUIPMENT_CATALOG.map(({ id, model }) => ({
     id,
-    model,
+    model: INITIAL_FLEET_MODELS[id] ?? model,
     icon: "construction",
     hours: 0,
     status: "Operação" as const,
     tone: "success" as const,
-    location: "",
+    location: INITIAL_FLEET_LOCATIONS[id] ?? "",
     lastMaintenance: "",
     seriesNumber: "",
     acquisitionDate: "",
@@ -86,11 +88,19 @@ export const SEED_EQUIPMENT_ROWS: Omit<DbEquipmentInsert, "createdAt" | "updated
 
 export async function seedEquipmentIfEmpty(d1: D1Database): Promise<void> {
   const db = getDb(d1);
-  const existing = await db.select().from(equipment).limit(1).all();
-  if (existing.length > 0) return;
+  const existing = await db.select({ id: equipment.id }).from(equipment).all();
+  const existingIds = new Set(existing.map((row) => row.id));
 
   const now = new Date().toISOString();
   for (const row of SEED_EQUIPMENT_ROWS) {
+    if (existingIds.has(row.id)) continue;
     await db.insert(equipment).values({ ...row, createdAt: now, updatedAt: now });
+  }
+
+  for (const [id, location] of Object.entries(INITIAL_FLEET_LOCATIONS)) {
+    await db
+      .update(equipment)
+      .set({ location, updatedAt: now })
+      .where(and(eq(equipment.id, id), sql`trim(coalesce(${equipment.location}, '')) = ''`));
   }
 }

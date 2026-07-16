@@ -15,6 +15,7 @@ import { Route as ProducaoConsumoRouteImport } from './routes/producao-consumo'
 import { Route as PerfilRouteImport } from './routes/perfil'
 import { Route as ManutencaoRouteImport } from './routes/manutencao'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as LocalizacaoFrotasRouteImport } from './routes/localizacao-frotas'
 import { Route as EstoqueRouteImport } from './routes/estoque'
 import { Route as EquipamentosRouteImport } from './routes/equipamentos'
 import { Route as CalendarioRouteImport } from './routes/calendario'
@@ -51,6 +52,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LocalizacaoFrotasRoute = LocalizacaoFrotasRouteImport.update({
+  id: '/localizacao-frotas',
+  path: '/localizacao-frotas',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const EstoqueRoute = EstoqueRouteImport.update({
   id: '/estoque',
   path: '/estoque',
@@ -83,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/calendario': typeof CalendarioRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/localizacao-frotas': typeof LocalizacaoFrotasRoute
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
@@ -96,6 +103,7 @@ export interface FileRoutesByTo {
   '/calendario': typeof CalendarioRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/localizacao-frotas': typeof LocalizacaoFrotasRoute
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
@@ -110,6 +118,7 @@ export interface FileRoutesById {
   '/calendario': typeof CalendarioRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/localizacao-frotas': typeof LocalizacaoFrotasRoute
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
   '/perfil': typeof PerfilRoute
@@ -125,6 +134,7 @@ export interface FileRouteTypes {
     | '/calendario'
     | '/equipamentos'
     | '/estoque'
+    | '/localizacao-frotas'
     | '/login'
     | '/manutencao'
     | '/perfil'
@@ -138,6 +148,7 @@ export interface FileRouteTypes {
     | '/calendario'
     | '/equipamentos'
     | '/estoque'
+    | '/localizacao-frotas'
     | '/login'
     | '/manutencao'
     | '/perfil'
@@ -151,6 +162,7 @@ export interface FileRouteTypes {
     | '/calendario'
     | '/equipamentos'
     | '/estoque'
+    | '/localizacao-frotas'
     | '/login'
     | '/manutencao'
     | '/perfil'
@@ -165,6 +177,7 @@ export interface RootRouteChildren {
   CalendarioRoute: typeof CalendarioRoute
   EquipamentosRoute: typeof EquipamentosRoute
   EstoqueRoute: typeof EstoqueRoute
+  LocalizacaoFrotasRoute: typeof LocalizacaoFrotasRoute
   LoginRoute: typeof LoginRoute
   ManutencaoRoute: typeof ManutencaoRoute
   PerfilRoute: typeof PerfilRoute
@@ -217,6 +230,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/localizacao-frotas': {
+      id: '/localizacao-frotas'
+      path: '/localizacao-frotas'
+      fullPath: '/localizacao-frotas'
+      preLoaderRoute: typeof LocalizacaoFrotasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/estoque': {
       id: '/estoque'
       path: '/estoque'
@@ -261,6 +281,7 @@ const rootRouteChildren: RootRouteChildren = {
   CalendarioRoute: CalendarioRoute,
   EquipamentosRoute: EquipamentosRoute,
   EstoqueRoute: EstoqueRoute,
+  LocalizacaoFrotasRoute: LocalizacaoFrotasRoute,
   LoginRoute: LoginRoute,
   ManutencaoRoute: ManutencaoRoute,
   PerfilRoute: PerfilRoute,

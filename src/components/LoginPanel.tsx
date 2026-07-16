@@ -37,7 +37,7 @@ export function LoginPanel({ onSuccess }: LoginPanelProps) {
         <div className="flex flex-col items-center gap-4 mb-8">
           <img
             src="/logo.png"
-            alt="TransJap — Terraplenagem e Construções"
+            alt="Transjap — Terraplenagem e Construções"
             className="w-full max-w-[240px] h-auto object-contain"
           />
           <p className="text-xs text-on-surface-variant font-bold uppercase tracking-widest">

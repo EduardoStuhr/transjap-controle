@@ -244,6 +244,7 @@ function Manutencao() {
   const exportReportOptions = {
     formatEquipment,
     filterDescription: exportFilterDescription,
+    equipments,
   };
 
   const exportOpenMaintenancePdf = () => {
