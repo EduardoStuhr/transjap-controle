@@ -33,13 +33,27 @@ const DEFAULT_FILTERS: DashboardFilterState = {
   dateTo: "",
   obra: "all",
   material: "all",
-  equipment: "all",
+  equipment: [],
   aggregate: "all",
   analysisType: "all",
 };
 
 function defaultFilters(): DashboardFilterState {
-  return { ...DEFAULT_FILTERS };
+  return { ...DEFAULT_FILTERS, equipment: [] };
+}
+
+function normalizeEquipmentFilter(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return Array.from(
+    new Set(
+      values.filter(
+        (equipment): equipment is string =>
+          typeof equipment === "string" &&
+          equipment.trim().length > 0 &&
+          equipment.toLowerCase() !== "all",
+      ),
+    ),
+  );
 }
 
 function readStoredFilters(storageKey: string): DashboardFilterState {
@@ -49,7 +63,13 @@ function readStoredFilters(storageKey: string): DashboardFilterState {
   try {
     const parsed = JSON.parse(stored);
     return parsed && typeof parsed === "object"
-      ? { ...DEFAULT_FILTERS, ...(parsed as Partial<DashboardFilterState>) }
+      ? {
+          ...DEFAULT_FILTERS,
+          ...(parsed as Partial<DashboardFilterState>),
+          equipment: normalizeEquipmentFilter(
+            (parsed as Partial<DashboardFilterState> & { equipment?: unknown }).equipment,
+          ),
+        }
       : defaultFilters();
   } catch {
     localStorage.removeItem(storageKey);
@@ -148,7 +168,14 @@ export function useDashboardFilters(storageKey = "dashboard_filters") {
   const updateFilters = useCallback(
     (updates: Partial<DashboardFilterState>) => {
       setFilters((current) => {
-        const next = { ...current, ...updates };
+        const next = {
+          ...current,
+          ...updates,
+          equipment:
+            updates.equipment === undefined
+              ? current.equipment
+              : normalizeEquipmentFilter(updates.equipment),
+        };
         if (typeof window !== "undefined") {
           localStorage.setItem(storageKey, JSON.stringify(next));
         }
@@ -306,7 +333,10 @@ export function useFilteredData(
       if (filters.dateTo && dateKey(row.datetime) > filters.dateTo) return false;
       if (!matchesSelectedObra(row)) return false;
       const key = equipmentKeyByPdeRule(equipmentKey(row), pdeFleetKeys, fuelingContext(row));
-      if (filters.equipment !== "all" && !pdeRuleEquipmentMatches(key, filters.equipment)) {
+      if (
+        filters.equipment.length > 0 &&
+        !filters.equipment.some((selected) => pdeRuleEquipmentMatches(key, selected))
+      ) {
         return false;
       }
       if (filters.aggregate !== "all" && !pdeRuleEquipmentMatches(key, filters.aggregate)) {
@@ -324,9 +354,12 @@ export function useFilteredData(
       if (filters.dateTo && rowDate > filters.dateTo) return false;
       if (!matchesSelectedObra(row)) return false;
       if (
-        filters.equipment !== "all" &&
-        !equipmentMatches(row.fleet, filters.equipment, "dailyPart") &&
-        !equipmentMatches(row.fleetLabel, filters.equipment, "dailyPart")
+        filters.equipment.length > 0 &&
+        !filters.equipment.some(
+          (selected) =>
+            equipmentMatches(row.fleet, selected, "dailyPart") ||
+            equipmentMatches(row.fleetLabel, selected, "dailyPart"),
+        )
       ) {
         return false;
       }

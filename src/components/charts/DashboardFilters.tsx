@@ -3,6 +3,9 @@
  * Suporta filtros por data, obra, material, equipamento e agregado
  */
 
+import { useId, useState } from "react";
+import { Icon } from "@/components/AppLayout";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { type DashboardFilterState } from "@/lib/production-consumption-types";
 import { useActiveTabScroll } from "@/hooks/useActiveTabScroll";
 
@@ -22,6 +25,130 @@ function optionKey(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_");
+}
+
+function EquipmentMultiSelect({
+  options,
+  selectedValues,
+  onChange,
+}: {
+  options: string[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const searchId = useId();
+  const [search, setSearch] = useState("");
+  const selectedSet = new Set(selectedValues);
+  const normalizedSearch = optionKey(search);
+  const filteredOptions = normalizedSearch
+    ? options.filter((option) => optionKey(option).includes(normalizedSearch))
+    : options;
+  const summary =
+    selectedValues.length === 0
+      ? "Todos equipamentos"
+      : selectedValues.length === 1
+        ? selectedValues[0]
+        : `${selectedValues.length} equipamentos`;
+
+  const toggle = (value: string) => {
+    onChange(
+      selectedSet.has(value)
+        ? selectedValues.filter((selected) => selected !== value)
+        : [...selectedValues, value],
+    );
+  };
+
+  const selectionMark = (checked: boolean) => (
+    <span
+      aria-hidden="true"
+      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+        checked ? "border-primary bg-primary text-on-primary" : "border-border-low"
+      }`}
+    >
+      {checked && <Icon name="check" className="text-xs" />}
+    </span>
+  );
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex min-h-9 min-w-[190px] max-w-full items-center justify-between gap-2 rounded border border-border-low bg-surface-highest px-3 py-2 text-left text-xs"
+          title="Filtrar por um ou mais equipamentos"
+          aria-label={`Filtrar por equipamento. ${summary}`}
+        >
+          <span className="min-w-0 flex-1 truncate">{summary}</span>
+          <Icon name="expand_more" className="shrink-0 text-base text-on-surface-variant" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        collisionPadding={16}
+        className="z-[70] max-w-[calc(100vw-2rem)] min-w-[260px] p-0"
+        style={{ width: "max(260px, var(--radix-popover-trigger-width))" }}
+      >
+        <div className="border-b border-border-low p-2">
+          <label className="sr-only" htmlFor={searchId}>
+            Buscar equipamento
+          </label>
+          <div className="flex min-h-9 items-center gap-2 rounded border border-border-low bg-surface-container px-3">
+            <Icon name="search" className="shrink-0 text-base text-on-surface-variant" />
+            <input
+              id={searchId}
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar equipamento"
+              className="min-w-0 flex-1 bg-transparent py-2 text-sm text-on-surface outline-none placeholder:text-on-surface-variant"
+            />
+          </div>
+        </div>
+        <div className="max-h-[50vh] overflow-auto overscroll-contain p-2">
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="flex min-h-11 w-full items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
+            aria-pressed={selectedValues.length === 0}
+          >
+            {selectionMark(selectedValues.length === 0)}
+            <span className="font-semibold">Todos equipamentos</span>
+          </button>
+          {filteredOptions.map((value) => {
+            const checked = selectedSet.has(value);
+            return (
+              <button
+                key={optionKey(value)}
+                type="button"
+                onClick={() => toggle(value)}
+                className="flex min-h-11 w-full items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-accent"
+                aria-pressed={checked}
+              >
+                {selectionMark(checked)}
+                <span>{value}</span>
+              </button>
+            );
+          })}
+          {filteredOptions.length === 0 && (
+            <p className="px-3 py-4 text-sm text-on-surface-variant">
+              Nenhum equipamento encontrado.
+            </p>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-border-low p-2">
+          <span className="px-2 text-[10px] font-bold text-on-surface-variant">{summary}</span>
+          <button
+            type="button"
+            disabled={selectedValues.length === 0}
+            onClick={() => onChange([])}
+            className="rounded px-3 py-2 text-xs font-semibold hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Limpar seleção
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 export function DashboardFilters({
@@ -78,19 +205,11 @@ export function DashboardFilters({
         ))}
       </select>
 
-      <select
-        value={state.equipment}
-        onChange={(e) => onChange({ equipment: e.target.value })}
-        className="rounded border border-border-low bg-surface-highest px-3 py-2 text-xs"
-        title="Filtrar por equipamento"
-      >
-        <option value="all">Todos equipamentos</option>
-        {equipment.map((value) => (
-          <option key={optionKey(value)} value={value}>
-            {value}
-          </option>
-        ))}
-      </select>
+      <EquipmentMultiSelect
+        options={equipment}
+        selectedValues={state.equipment}
+        onChange={(values) => onChange({ equipment: values })}
+      />
 
       <select
         value={state.aggregate}
@@ -132,7 +251,7 @@ export function DashboardFilters({
             dateTo: "",
             obra: "all",
             material: "all",
-            equipment: "all",
+            equipment: [],
             aggregate: "all",
             analysisType: "all",
           })

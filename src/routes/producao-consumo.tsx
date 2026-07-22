@@ -54,6 +54,12 @@ import type { AggregateRankingPoint, StackedBarSeries } from "@/components/chart
 import { EmptyChartState } from "@/components/charts/ProductionConsumptionCharts";
 import { LegendDot } from "@/components/charts/LegendDot";
 import { CHART_SERIES_COLORS } from "@/lib/chart-theme";
+import {
+  exportDashboardTabAsExcel,
+  exportDashboardTabAsPdf,
+  type DashboardExportCell,
+  type DashboardExportSheet,
+} from "@/lib/dashboard-tab-export";
 import { normalizeFleet } from "@/lib/carcara-parser";
 import {
   displayEquipmentLabel,
@@ -196,6 +202,28 @@ function debugPerformanceEnabled() {
 
 function timeEnd(label: string, enabled: boolean) {
   if (enabled) console.timeEnd(label);
+}
+
+function dashboardExportCell(value: unknown): DashboardExportCell {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (value instanceof Date) return value.toISOString();
+  return JSON.stringify(value);
+}
+
+function dashboardExportRows<T extends object>(rows: T[]) {
+  return rows.map((row) =>
+    Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [key, dashboardExportCell(value)]),
+    ),
+  );
 }
 
 function isOperationalTab(tab: string): tab is Exclude<OperationalItem, "outros"> {
@@ -2340,6 +2368,8 @@ function ProducaoConsumoRefactored() {
   const [productionDate, setProductionDate] = useState("");
   const [hoursObraFilter, setHoursObraFilter] = useState<string>("all");
   const [showPeriodComparison, setShowPeriodComparison] = useState(false);
+  const [exportingTab, setExportingTab] = useState<"pdf" | "excel" | null>(null);
+  const activeTabExportRef = useRef<HTMLDivElement>(null);
   const [dieselM3Filters, setDieselM3Filters] =
     useState<DieselM3Filters>(DIESEL_M3_DEFAULT_FILTERS);
 
@@ -2573,18 +2603,21 @@ function ProducaoConsumoRefactored() {
   const itemScopeFilters = useMemo(
     () => ({
       ...filters,
-      equipment: "all",
+      equipment: [],
       aggregate: "all",
     }),
     [filters],
   );
-  const { filteredTrips: itemScopeTrips, filteredDailyParts: itemScopeDailyParts } =
-    useFilteredData(
-      obraScopedTripRows,
-      obraScopedFuelRows,
-      obraScopedDailyPartRows,
-      itemScopeFilters,
-    );
+  const {
+    filteredTrips: itemScopeTrips,
+    filteredFueling: itemScopeFueling,
+    filteredDailyParts: itemScopeDailyParts,
+  } = useFilteredData(
+    obraScopedTripRows,
+    obraScopedFuelRows,
+    obraScopedDailyPartRows,
+    itemScopeFilters,
+  );
   const productiveTrips = useMemo(
     () => filteredTrips.filter((trip) => isRcoProductiveTrip(trip)),
     [filteredTrips],
@@ -2654,13 +2687,13 @@ function ProducaoConsumoRefactored() {
   );
   const distinctEquipment = useMemo(() => {
     const labels = new Map<string, string>();
-    const pdeFleetKeys = buildPdeFleetKeys(filteredDailyParts);
-    filteredFueling.forEach((fuel) => {
+    const pdeFleetKeys = buildPdeFleetKeys(itemScopeDailyParts);
+    itemScopeFueling.forEach((fuel) => {
       const context = fuelingEquipmentContext(fuel);
       const key = equipmentKeyByPdeRule(equipmentRaw(fuel), pdeFleetKeys, context);
       if (key && key.startsWith("FROTA:")) labels.set(key, equipmentLabelFromKey(key));
     });
-    filteredDailyParts.forEach((part) => {
+    itemScopeDailyParts.forEach((part) => {
       if (!hasRealPdeEvidence(part)) return;
       const key = equipmentKeyByPdeRule(part.fleet || part.fleetLabel, pdeFleetKeys, "dailyPart");
       if (key && key.startsWith("FROTA:")) {
@@ -2668,7 +2701,7 @@ function ProducaoConsumoRefactored() {
       }
     });
     return sortEquipmentLabels([...labels.values()]);
-  }, [filteredDailyParts, filteredFueling]);
+  }, [itemScopeDailyParts, itemScopeFueling]);
   const distinctAggregates = useMemo(() => {
     const labels = new Map<string, string>();
     const pdeFleetKeys = buildPdeFleetKeys(filteredDailyParts);
@@ -2710,9 +2743,12 @@ function ProducaoConsumoRefactored() {
         return false;
       }
       if (
-        filters.equipment !== "all" &&
-        !equipmentMatches(row.fleet, filters.equipment, "fuelAllocation") &&
-        !equipmentMatches(row.equipmentId, filters.equipment, "fuelAllocation")
+        filters.equipment.length > 0 &&
+        !filters.equipment.some(
+          (selected) =>
+            equipmentMatches(row.fleet, selected, "fuelAllocation") ||
+            equipmentMatches(row.equipmentId, selected, "fuelAllocation"),
+        )
       ) {
         return false;
       }
@@ -2739,9 +2775,12 @@ function ProducaoConsumoRefactored() {
         return false;
       }
       if (
-        filters.equipment !== "all" &&
-        !equipmentMatches(row.fleet, filters.equipment, "fuelAttribution") &&
-        !equipmentMatches(row.fleetLabel, filters.equipment, "fuelAttribution")
+        filters.equipment.length > 0 &&
+        !filters.equipment.some(
+          (selected) =>
+            equipmentMatches(row.fleet, selected, "fuelAttribution") ||
+            equipmentMatches(row.fleetLabel, selected, "fuelAttribution"),
+        )
       ) {
         return false;
       }
@@ -2767,9 +2806,7 @@ function ProducaoConsumoRefactored() {
   const dieselSourceNotice =
     dieselSource === "fuel_attribution"
       ? "Rateio oficial por horimetro indisponivel nesta selecao; usando fuel_attribution como fallback."
-      : dieselSource === "fueling"
-        ? "Sem rateio em cache nesta selecao; indicadores de diesel usam CMB bruto."
-        : "";
+      : "";
   const absentWorksiteAuditRows = useMemo<AbsentWorksiteAuditRow[]>(() => {
     if (!showTechnicalAudit && !debugProductionAudit && !debugDieselIntegration) return [];
     const fuelRowsAudit = filteredFueling
@@ -3391,7 +3428,10 @@ function ProducaoConsumoRefactored() {
       ) {
         return "obra filtrada";
       }
-      if (filters.equipment !== "all" && !filterEquipmentMatches(key, filters.equipment)) {
+      if (
+        filters.equipment.length > 0 &&
+        !filters.equipment.some((selected) => filterEquipmentMatches(key, selected))
+      ) {
         return "equipamento filtrado";
       }
       if (filters.aggregate !== "all" && !filterEquipmentMatches(key, filters.aggregate)) {
@@ -3416,9 +3456,12 @@ function ProducaoConsumoRefactored() {
         return "obra filtrada";
       }
       if (
-        filters.equipment !== "all" &&
-        !equipmentMatches(row.fleet, filters.equipment, "fuelAllocation") &&
-        !equipmentMatches(row.equipmentId, filters.equipment, "fuelAllocation")
+        filters.equipment.length > 0 &&
+        !filters.equipment.some(
+          (selected) =>
+            equipmentMatches(row.fleet, selected, "fuelAllocation") ||
+            equipmentMatches(row.equipmentId, selected, "fuelAllocation"),
+        )
       ) {
         return "equipamento filtrado";
       }
@@ -3895,9 +3938,12 @@ function ProducaoConsumoRefactored() {
       context: EquipmentContext,
     ) => {
       if (
-        filters.equipment !== "all" &&
-        !equipmentMatches(equipmentKey, filters.equipment, context) &&
-        !equipmentMatches(label, filters.equipment, context)
+        filters.equipment.length > 0 &&
+        !filters.equipment.some(
+          (selected) =>
+            equipmentMatches(equipmentKey, selected, context) ||
+            equipmentMatches(label, selected, context),
+        )
       ) {
         return false;
       }
@@ -7602,6 +7648,139 @@ function ProducaoConsumoRefactored() {
     }
   }
 
+  const activeTabLabel =
+    visibleTabs.find((tab) => tab.id === activeTab)?.label ?? "Produção × Consumo";
+  const dashboardExportFilters = useMemo<Array<[string, string]>>(() => {
+    const range =
+      filters.dateFrom || filters.dateTo
+        ? `${filters.dateFrom || "Início"} até ${filters.dateTo || "Fim"}`
+        : "Todo o período";
+    const rows: Array<[string, string]> = [
+      ["Análises", analysisSelection.label],
+      ["Período", range],
+      ["Obra", filters.obra === "all" ? "Todas as obras" : filters.obra],
+      ["Material", filters.material === "all" ? "Todos materiais" : filters.material],
+      [
+        "Equipamentos",
+        filters.equipment.length > 0 ? filters.equipment.join(" | ") : "Todos equipamentos",
+      ],
+      ["Agregado", filters.aggregate === "all" ? "Todos agregados" : filters.aggregate],
+    ];
+
+    if (activeTab === "dieselM3") {
+      const selectedEquipment =
+        dieselM3EquipmentOptions.find(([key]) => key === dieselM3Filters.equipment)?.[1] ??
+        dieselM3Filters.equipment;
+      rows.push(
+        [
+          "Período da aba",
+          dieselM3Filters.dateFrom || dieselM3Filters.dateTo
+            ? `${dieselM3Filters.dateFrom || "Início"} até ${dieselM3Filters.dateTo || "Fim"}`
+            : "Todo o período",
+        ],
+        [
+          "Obra da aba",
+          dieselM3SelectedObraKey === "all"
+            ? "Todas"
+            : dieselM3ObraOptions.find(([key]) => key === dieselM3SelectedObraKey)?.[1] ||
+              dieselM3SelectedObraKey,
+        ],
+        [
+          "Item",
+          dieselM3Filters.item === "all"
+            ? "Todos"
+            : operationalItemLabel(dieselM3Filters.item as OperationalItem),
+        ],
+        ["Equipamento da aba", selectedEquipment === "all" ? "Todos" : selectedEquipment],
+        ["Origem diesel", dieselM3Filters.origin === "all" ? "Ambos" : dieselM3Filters.origin],
+      );
+    }
+    return rows;
+  }, [
+    activeTab,
+    analysisSelection.label,
+    dieselM3EquipmentOptions,
+    dieselM3Filters,
+    dieselM3ObraOptions,
+    dieselM3SelectedObraKey,
+    filters,
+  ]);
+
+  const activeTabExportSheets = useMemo<DashboardExportSheet[]>(() => {
+    if (activeTab === "dieselM3") {
+      return [
+        {
+          name: "KPIs Diesel x m3",
+          rows: [
+            { Indicador: "m³ compactado total", Valor: dieselM3Kpis.compactedM3Base },
+            { Indicador: "m³ solto total", Valor: dieselM3Kpis.looseM3 },
+            { Indicador: "m³ relacionado", Valor: dieselM3Kpis.relatedM3 },
+            { Indicador: "Diesel total", Valor: dieselM3Kpis.diesel },
+            { Indicador: "m³/L geral", Valor: dieselM3Kpis.m3PerLiter },
+            { Indicador: "L/m³ geral", Valor: dieselM3Kpis.litersPerM3 },
+            { Indicador: "Dias analisados", Valor: dieselM3Kpis.days },
+            { Indicador: "Obras", Valor: dieselM3Kpis.worksites },
+          ],
+        },
+        { name: "Produção x diesel", rows: dashboardExportRows(dieselM3DailyRows) },
+        {
+          name: "Séries por obra",
+          rows: dashboardExportRows(dieselM3MultiObraInfo.pivotData),
+        },
+        { name: "Comparativo por obra", rows: dashboardExportRows(obraComparisonRows) },
+        { name: "Dados por item", rows: dashboardExportRows(dieselM3ItemRows) },
+        {
+          name: "Ranking equipamentos",
+          rows: dashboardExportRows(dieselM3EquipmentRankingData),
+        },
+      ];
+    }
+
+    return [];
+  }, [
+    activeTab,
+    dieselM3DailyRows,
+    dieselM3EquipmentRankingData,
+    dieselM3ItemRows,
+    dieselM3Kpis,
+    dieselM3MultiObraInfo.pivotData,
+    obraComparisonRows,
+  ]);
+
+  const handleExportActiveTab = useCallback(
+    async (format: "pdf" | "excel") => {
+      const element = activeTabExportRef.current;
+      if (!element) {
+        toast.error("A aba ainda não terminou de carregar.");
+        return;
+      }
+
+      setExportingTab(format);
+      try {
+        const options = {
+          element,
+          tabLabel: activeTabLabel,
+          filters: dashboardExportFilters,
+          dataSheets: activeTabExportSheets,
+        };
+        if (format === "pdf") {
+          await exportDashboardTabAsPdf(options);
+          toast.success("PDF exportado com os gráficos da aba.");
+        } else {
+          await exportDashboardTabAsExcel(options);
+          toast.success("Excel exportado com a visualização da aba.");
+        }
+      } catch (error) {
+        toast.error(`Não foi possível exportar ${format === "pdf" ? "o PDF" : "o Excel"}.`, {
+          description: error instanceof Error ? error.message : "Tente novamente.",
+        });
+      } finally {
+        setExportingTab(null);
+      }
+    },
+    [activeTabExportSheets, activeTabLabel, dashboardExportFilters],
+  );
+
   const empty = !analysesQuery.isPending && analyses.length === 0;
   const dashboardError = analysesQuery.error ?? dashboardQuery.error;
   const showDashboardError =
@@ -7718,7 +7897,27 @@ function ProducaoConsumoRefactored() {
               {dieselSourceNotice}
             </div>
           )}
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex flex-wrap justify-end gap-2" data-export-exclude>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              disabled={Boolean(exportingTab) || globalBusy}
+              onClick={() => void handleExportActiveTab("pdf")}
+            >
+              <Icon name="picture_as_pdf" className="text-base mr-1" />
+              {exportingTab === "pdf" ? "Preparando PDF…" : "Exportar PDF"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              disabled={Boolean(exportingTab) || globalBusy}
+              onClick={() => void handleExportActiveTab("excel")}
+            >
+              <Icon name="table_view" className="text-base mr-1" />
+              {exportingTab === "excel" ? "Preparando Excel…" : "Exportar Excel"}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -7730,8 +7929,9 @@ function ProducaoConsumoRefactored() {
             </Button>
           </div>
 
-          {/* KPI strip */}
-          <div className="mb-5 grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div ref={activeTabExportRef} data-export-tab={activeTab}>
+            {/* KPI strip */}
+            <div className="mb-5 grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
             <KpiCardCompact
               label="Produção m³ compactado"
               value={formatM3(kpis.compactedM3)}
@@ -7758,11 +7958,11 @@ function ProducaoConsumoRefactored() {
               tone="success"
               icon="query_stats"
             />
-          </div>
+            </div>
 
-          {/* ───────────────────────── TABS ────────────────────────── */}
+            {/* ───────────────────────── TABS ────────────────────────── */}
 
-          <Suspense fallback={<DashboardLoadingPanel label="Carregando graficos..." />}>
+            <Suspense fallback={<DashboardLoadingPanel label="Carregando graficos..." />}>
             {activeTab === "overview" && (
               <div className="space-y-4">
                 <div className="grid grid-cols-1 min-[390px]:grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
@@ -7921,7 +8121,7 @@ function ProducaoConsumoRefactored() {
                         CB/agregado.
                       </p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2" data-export-exclude>
                       <Button
                         variant="outline"
                         size="sm"
@@ -9552,7 +9752,8 @@ function ProducaoConsumoRefactored() {
                 )}
               </>
             )}
-          </Suspense>
+            </Suspense>
+          </div>
         </>
       ) : null}
 
@@ -9669,6 +9870,8 @@ function PeriodComparisonDialog({
           ? initialScope.equipment
           : "all",
   }));
+  const [exportingComparison, setExportingComparison] = useState<"pdf" | "excel" | null>(null);
+  const comparisonExportRef = useRef<HTMLTableElement>(null);
 
   const metricsA = useMemo(
     () => periodComparisonMetrics(baseData, periodA, scope),
@@ -9730,9 +9933,90 @@ function PeriodComparisonDialog({
     value: string,
   ) => setter((current) => ({ ...current, [key]: value }));
 
+  const selectedObraLabels = scope.obraKeys.map(
+    (key) => obraOptions.find(([optionKey]) => optionKey === key)?.[1] ?? key,
+  );
+  const selectedObrasLabel =
+    selectedObraLabels.length === 0
+      ? "Todas as obras"
+      : selectedObraLabels.join(" | ");
+  const selectedEquipmentLabel =
+    scope.equipment === "all"
+      ? "Todos"
+      : equipmentOptions.find(([key]) => key === scope.equipment)?.[1] ?? scope.equipment;
+  const selectedAggregateLabel =
+    scope.aggregate === "all"
+      ? "Todos"
+      : aggregateOptions.find(([key]) => key === scope.aggregate)?.[1] ?? scope.aggregate;
+  const comparisonExportFilters: Array<[string, string]> = [
+    ["Período A", `${formatDate(periodA.dateFrom)} até ${formatDate(periodA.dateTo)}`],
+    ["Período B", `${formatDate(periodB.dateFrom)} até ${formatDate(periodB.dateTo)}`],
+    ["Obras", selectedObrasLabel],
+    [
+      "Item",
+      scope.item === "all" ? "Todos" : operationalItemLabel(scope.item as OperationalItem),
+    ],
+    ["Equipamento", selectedEquipmentLabel],
+    ["Agregado", selectedAggregateLabel],
+  ];
+  const comparisonExportSheets: DashboardExportSheet[] = [
+    {
+      name: "Comparativo",
+      rows: rows.map((row) => ({
+        Indicador: row.label,
+        "Período A": row.valueA,
+        "Período B": row.valueB,
+        "Diferença absoluta": Math.abs(row.delta),
+        "Diferença percentual (%)": row.percentage,
+      })),
+    },
+  ];
+
+  const handleExportComparison = async (format: "pdf" | "excel") => {
+    if (invalidPeriodA || invalidPeriodB) {
+      toast.error("Corrija as datas dos períodos antes de exportar.");
+      return;
+    }
+    const element = comparisonExportRef.current;
+    if (!element) {
+      toast.error("A comparação ainda não terminou de carregar.");
+      return;
+    }
+
+    setExportingComparison(format);
+    try {
+      const options = {
+        element,
+        tabLabel: "Comparação de períodos",
+        filters: comparisonExportFilters,
+        dataSheets: comparisonExportSheets,
+      };
+      if (format === "pdf") {
+        await exportDashboardTabAsPdf(options);
+        toast.success("Comparação exportada em PDF.");
+      } else {
+        await exportDashboardTabAsExcel(options);
+        toast.success("Comparação exportada em Excel.");
+      }
+    } catch (error) {
+      toast.error(`Não foi possível exportar ${format === "pdf" ? "o PDF" : "o Excel"}.`, {
+        description: error instanceof Error ? error.message : "Tente novamente.",
+      });
+    } finally {
+      setExportingComparison(null);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!exportingComparison) onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent
+        aria-busy={Boolean(exportingComparison)}
+        inert={Boolean(exportingComparison)}
         className="period-comparison-dialog !h-[calc(100dvh-1rem)] !max-h-[calc(100dvh-1rem)] !w-[calc(100vw-1rem)] !max-w-none overflow-hidden border-border-low bg-surface-container p-3 sm:p-4 lg:p-5 [&>.app-dialog-close]:hidden"
         style={{
           width: "calc(100vw - 1rem)",
@@ -9759,6 +10043,30 @@ function PeriodComparisonDialog({
             Compara dados já carregados nas análises. As diferenças consideram o Período B em
             relação ao Período A.
           </DialogDescription>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              disabled={Boolean(exportingComparison) || invalidPeriodA || invalidPeriodB}
+              onClick={() => void handleExportComparison("pdf")}
+            >
+              <Icon name="picture_as_pdf" className="mr-1 text-base" />
+              {exportingComparison === "pdf" ? "Preparando PDF…" : "Exportar PDF"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              disabled={Boolean(exportingComparison) || invalidPeriodA || invalidPeriodB}
+              onClick={() => void handleExportComparison("excel")}
+            >
+              <Icon name="table_view" className="mr-1 text-base" />
+              {exportingComparison === "excel" ? "Preparando Excel…" : "Exportar Excel"}
+            </Button>
+          </div>
         </DialogHeader>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:gap-4">
@@ -9869,7 +10177,10 @@ function PeriodComparisonDialog({
 
           <div className="min-h-0 flex-1 overflow-hidden rounded border border-border-low">
           <div className="h-full overflow-auto">
-            <table className="min-w-[760px] w-full table-fixed text-left text-[11px] lg:text-xs">
+            <table
+              ref={comparisonExportRef}
+              className="min-w-[760px] w-full table-fixed text-left text-[11px] lg:text-xs"
+            >
               <colgroup>
                 <col className="w-[28%]" />
                 <col className="w-[17%]" />

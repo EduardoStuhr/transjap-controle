@@ -39,7 +39,7 @@ export interface DashboardFilterState {
   dateTo: string;
   obra: string;
   material: string;
-  equipment: string;
+  equipment: string[];
   aggregate: string;
   analysisType: "all" | "production-only" | "consumption-only";
 }
