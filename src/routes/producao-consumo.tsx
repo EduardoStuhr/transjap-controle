@@ -751,6 +751,7 @@ type PeriodComparisonMetrics = {
   trips: number;
   m3PerLiter: number;
   litersPerM3: number;
+  litersPerHour: number;
   pdeHours: number;
   m3PerHour: number;
 };
@@ -805,6 +806,7 @@ function periodComparisonMetrics(
     trips,
     m3PerLiter: divide(efficiencyM3, diesel),
     litersPerM3: divide(diesel, efficiencyM3),
+    litersPerHour: divide(diesel, pdeHours),
     pdeHours,
     m3PerHour: divide(efficiencyM3, pdeHours),
   };
@@ -9907,9 +9909,9 @@ function PeriodComparisonDialog({
       format: (value) => `${formatNumber(value, 3)} m³/L`,
     },
     {
-      key: "litersPerM3",
-      label: "L/m³",
-      format: (value) => `${formatNumber(value, 3)} L/m³`,
+      key: "litersPerHour",
+      label: "L/h",
+      format: (value) => `${formatNumber(value, 3)} L/h`,
     },
     { key: "pdeHours", label: "Horas PDE", format: formatHours },
     {
