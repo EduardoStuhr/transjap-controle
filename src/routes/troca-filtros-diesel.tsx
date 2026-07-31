@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useAuthStore } from "@/lib/auth-store";
+import { authActions, useAuthStore } from "@/lib/auth-store";
 import { isEduardoUser } from "@/lib/auth-users";
 import {
   filterDieselFilterChanges,
@@ -128,6 +128,16 @@ function getLatestIdsByFleet(rows: DieselFilterChangeWithHours[]) {
   return new Set(Array.from(latest.values()).map((row) => row.id));
 }
 
+function moduleErrorDescription(error: unknown) {
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (/401|sess[aã]o|unauthorized/i.test(message)) {
+    return "Sua sessão expirou. Entre novamente para consultar e registrar as trocas.";
+  }
+  return message && message !== "HTTPError"
+    ? message
+    : "Verifique sua conexão e tente carregar os registros novamente.";
+}
+
 function TrocaFiltrosDiesel() {
   const navigate = useNavigate();
   const user = useAuthStore((snapshot) => snapshot.user);
@@ -135,7 +145,13 @@ function TrocaFiltrosDiesel() {
   const allowed = isEduardoUser(user);
   const equipments = useEquipmentStore((snapshot) => snapshot.equipments);
   const equipmentOptions = useMemo(() => buildEquipmentOptions(equipments), [equipments]);
-  const { data: rows = [], isLoading, error } = useDieselFilterChanges(allowed);
+  const {
+    data: rows = [],
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  } = useDieselFilterChanges(allowed);
   const actions = useDieselFilterActions();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [editForm, setEditForm] = useState<FormState | null>(null);
@@ -428,8 +444,37 @@ function TrocaFiltrosDiesel() {
         {isLoading ? (
           <div className="p-8 text-center text-sm text-on-surface-variant">Carregando trocas...</div>
         ) : error ? (
-          <div className="p-8 text-center text-sm text-status-error">
-            Não foi possível carregar este módulo.
+          <div className="p-8 text-center">
+            <Icon name="cloud_off" className="text-4xl text-status-error" />
+            <p className="mt-3 text-sm font-black text-status-error">
+              Não foi possível carregar este módulo.
+            </p>
+            <p className="mx-auto mt-2 max-w-lg text-xs text-on-surface-variant">
+              {moduleErrorDescription(error)}
+            </p>
+            <div className="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
+              <Button
+                type="button"
+                onClick={() => void refetch()}
+                isLoading={isFetching}
+                className="gap-2 font-black"
+              >
+                <Icon name="refresh" />
+                Tentar novamente
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  authActions.logout();
+                  void navigate({ to: "/login", search: { redirect: "/troca-filtros-diesel" } });
+                }}
+                className="gap-2 font-black"
+              >
+                <Icon name="login" />
+                Entrar novamente
+              </Button>
+            </div>
           </div>
         ) : visibleRows.length === 0 ? (
           <div className="p-10 text-center">

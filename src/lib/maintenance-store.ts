@@ -12,6 +12,8 @@ import type { AttachedFile } from "@/components/AttachmentUpload";
 export type MaintenanceStatus = "Aberta" | "Em andamento" | "Concluída" | "Atrasada";
 export type MaintenanceStepStatus = "pendente" | "em_andamento" | "concluida";
 
+export const MAINTENANCE_OBRA_OPTIONS = ["Campo Log 05", "RDG - Viana", "Ulihorte"] as const;
+
 export type MaintenanceStepTemplate = {
   id: string;
   label: string;
@@ -70,6 +72,7 @@ export type MaintenanceCostDraft = Pick<
 export type MaintenanceRecord = {
   id: string;
   equipment: string;
+  obra: string;
   type: string;
   technician: string;
   responsible: string;
@@ -98,6 +101,7 @@ export type MaintenanceRecord = {
 export type MaintenanceDraft = Pick<
   MaintenanceRecord,
   | "equipment"
+  | "obra"
   | "type"
   | "status"
   | "item"
@@ -277,6 +281,7 @@ function normalizeRecord(record: Partial<MaintenanceRecord>): MaintenanceRecord 
   return {
     id: record.id || newId(),
     equipment: record.equipment || "",
+    obra: record.obra || "",
     type: record.type || "Preventiva",
     technician: record.technician || "",
     responsible: record.responsible || record.technician || "",
@@ -571,6 +576,7 @@ export function useMaintenanceActions() {
       const record: MaintenanceRecord = {
         id: newId(),
         equipment: draft.equipment.trim(),
+        obra: draft.obra.trim(),
         type: draft.type.trim() || "Preventiva",
         technician: "",
         responsible: "",
@@ -652,6 +658,22 @@ export function useMaintenanceActions() {
         responsible: record.responsible || user,
         steps: nextSteps,
         timeline: [timeline("Etapa iniciada", note, stepId), ...record.timeline],
+      });
+    },
+
+    async updateObra(recordId: string, obra: string) {
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      const nextObra = obra.trim();
+      if (!record || record.obra === nextObra) return record ?? null;
+
+      return updateRecord({
+        ...record,
+        obra: nextObra,
+        timeline: [
+          timeline("Obra atualizada", nextObra || "Obra não informada"),
+          ...record.timeline,
+        ],
       });
     },
 

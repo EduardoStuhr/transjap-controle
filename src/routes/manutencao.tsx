@@ -29,6 +29,7 @@ import {
 import {
   getMaintenanceExternalCost,
   getMaintenanceTotalCost,
+  MAINTENANCE_OBRA_OPTIONS,
   useMaintenanceActions,
   useMaintenanceStore,
   type MaintenanceCostDraft,
@@ -119,6 +120,7 @@ const TYPES: MaintenanceType[] = MAINTENANCE_TYPE_OPTIONS.map((name) => ({
 
 const EMPTY_MAINTENANCE: MaintenanceDraft = {
   equipment: "",
+  obra: "",
   type: "Preventiva",
   status: "Aberta",
   item: "",
@@ -1097,6 +1099,21 @@ function MaintenanceFormDialog({
               </select>
             </label>
             <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant sm:col-span-2">
+              Obra
+              <select
+                value={draft.obra}
+                onChange={(event) => setValue("obra", event.target.value)}
+                className="mt-2 w-full px-3 py-2 bg-surface-highest border border-border-low rounded-lg text-sm text-on-surface outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="">Selecione uma obra</option>
+                {MAINTENANCE_OBRA_OPTIONS.map((obra) => (
+                  <option key={obra} value={obra}>
+                    {obra}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-black uppercase tracking-widest text-on-surface-variant sm:col-span-2">
               Item / Componente afetado
               <input
                 type="text"
@@ -1227,6 +1244,7 @@ function MaintenanceDetailsDialog({
   const [completingRecord, setCompletingRecord] = useState(false);
   const [savingEquipmentStatus, setSavingEquipmentStatus] = useState(false);
   const [equipmentStatusDraft, setEquipmentStatusDraft] = useState<EquipmentStatus | "">("");
+  const [savingObra, setSavingObra] = useState(false);
   const activeStepIndex = record ? getActiveStepIndex(record.steps) : -1;
 
   useEffect(() => {
@@ -1310,6 +1328,23 @@ function MaintenanceDetailsDialog({
       toast.error("Não foi possível atualizar a situação do equipamento.");
     } finally {
       setSavingEquipmentStatus(false);
+    }
+  };
+
+  const updateObra = async (obra: string) => {
+    if (!record || record.obra === obra) return;
+    setSavingObra(true);
+    try {
+      const updatedRecord = await actions.updateObra(record.id, obra);
+      if (updatedRecord) setRecord(updatedRecord);
+      toast.success("Obra da manutenção atualizada.", {
+        description: obra || "Obra não informada",
+      });
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível atualizar a obra.");
+    } finally {
+      setSavingObra(false);
     }
   };
 
@@ -1406,6 +1441,28 @@ function MaintenanceDetailsDialog({
                   })}
                   valueClassName="text-primary"
                 />
+              </div>
+              <div className="rounded-lg border border-border-low bg-surface-highest p-3 sm:p-4">
+                <label
+                  htmlFor="maintenance-obra"
+                  className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-on-surface-variant"
+                >
+                  Obra
+                </label>
+                <select
+                  id="maintenance-obra"
+                  value={record.obra}
+                  disabled={savingObra}
+                  onChange={(event) => void updateObra(event.target.value)}
+                  className="mt-2 w-full rounded border border-border-low bg-surface-container px-3 py-2 text-sm font-bold text-on-surface outline-none focus:ring-2 focus:ring-primary disabled:cursor-wait disabled:opacity-60"
+                >
+                  <option value="">Selecione uma obra</option>
+                  {MAINTENANCE_OBRA_OPTIONS.map((obra) => (
+                    <option key={obra} value={obra}>
+                      {obra}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="rounded-lg border border-border-low bg-surface-highest p-3 sm:p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

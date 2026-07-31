@@ -17,6 +17,8 @@ export async function requireServerAuthUser(): Promise<AuthUser> {
   if (!user) {
     throw new Response("Sessao expirada ou invalida.", { status: 401 });
   }
+  const { writeServerAuthUser } = await import("@/lib/api/auth-session.server");
+  await writeServerAuthUser(user, true);
   return user;
 }
 

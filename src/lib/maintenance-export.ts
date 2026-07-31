@@ -53,6 +53,7 @@ type MaintenanceReportRow = {
   serviceDescription: string;
   submittedBy: string;
   status: string;
+  obra: string;
   createdAt: string;
   daysStopped: number;
 };
@@ -103,6 +104,7 @@ function prepareOpenMaintenanceRows(
       serviceDescription: record.serviceDescription || "—",
       submittedBy: record.submittedBy || "—",
       status: record.status,
+      obra: record.obra || "—",
       createdAt: record.createdAt || "—",
       daysStopped: maintenanceDaysStopped(record.createdAt),
     }))
@@ -118,6 +120,10 @@ function summarizeOpenMaintenance(
     counts[row.status] = (counts[row.status] ?? 0) + 1;
     return counts;
   }, {});
+  const obraCounts = rows.reduce<Record<string, number>>((counts, row) => {
+    counts[row.obra] = (counts[row.obra] ?? 0) + 1;
+    return counts;
+  }, {});
   const operationalStatusCounts = rows.reduce<Record<string, number>>((counts, row) => {
     counts[row.operationalStatus] = (counts[row.operationalStatus] ?? 0) + 1;
     return counts;
@@ -127,6 +133,7 @@ function summarizeOpenMaintenance(
   return {
     equipmentCount,
     statusCounts,
+    obraCounts,
     operationalStatusCounts,
     averageDays: stoppedRows.length > 0 ? totalStoppedDays / stoppedRows.length : 0,
     maximumDays: stoppedRows.reduce((maximum, row) => Math.max(maximum, row.daysStopped), 0),
@@ -260,11 +267,11 @@ export function exportOpenMaintenanceAsPdf(
   const summary = summarizeOpenMaintenance(rows, stoppedRows);
   const generatedAt = new Date().toLocaleString("pt-BR");
   const filterDescription = options.filterDescription || "Todos os tipos";
-  const statusSummaryRows = Object.entries(summary.statusCounts)
+  const obraSummaryRows = Object.entries(summary.obraCounts)
     .sort(([left], [right]) => left.localeCompare(right, "pt-BR"))
     .map(
-      ([status, count]) =>
-        `<tr><td>Status: ${escapeHtml(status)}</td><td class="numeric">${count}</td></tr>`,
+      ([obra, count]) =>
+        `<tr><td>Obra: ${escapeHtml(obra)}</td><td class="numeric">${count}</td></tr>`,
     )
     .join("");
   const operationalStatusSummaryRows = Object.entries(summary.operationalStatusCounts)
@@ -282,7 +289,7 @@ export function exportOpenMaintenanceAsPdf(
         <td>${escapeHtml(row.item)}</td>
         <td class="description-cell">${escapeHtml(row.serviceDescription)}</td>
         <td>${escapeHtml(row.submittedBy)}</td>
-        <td><span class="status-pill">${escapeHtml(row.status)}</span></td>
+        <td><span class="status-pill">${escapeHtml(row.obra)}</span></td>
         <td>${escapeHtml(row.createdAt)}</td>
         <td class="numeric"><strong>${row.daysStopped}</strong></td>
       </tr>`,
@@ -328,7 +335,7 @@ export function exportOpenMaintenanceAsPdf(
         ? `<table class="maintenance-report">
             <thead><tr>
               <th>Equipamento</th><th>Situação</th><th>Item</th><th>Descrição</th>
-              <th>Aberto por</th><th>Status</th><th>Abertura</th><th>Dias do registro</th>
+              <th>Aberto por</th><th>Obra</th><th>Abertura</th><th>Dias do registro</th>
             </tr></thead>
             <tbody>${maintenanceRows}</tbody>
           </table>`
@@ -341,7 +348,7 @@ export function exportOpenMaintenanceAsPdf(
       <tbody>
         <tr><td>Total de equipamentos parados</td><td class="numeric">${summary.equipmentCount}</td></tr>
         <tr><td>Total de manutenções abertas</td><td class="numeric">${rows.length}</td></tr>
-        ${statusSummaryRows}
+        ${obraSummaryRows}
         ${operationalStatusSummaryRows}
       </tbody>
     </table>
@@ -574,7 +581,7 @@ export function exportMaintenanceAsPdf(record: MaintenanceRecord, movements: Sto
     <dl class="pdf-dl">
       <dt>Equipamento</dt><dd>${escapeHtml(record.equipment || "—")}</dd>
       <dt>Tipo</dt><dd>${escapeHtml(record.type || "—")}</dd>
-      <dt>Status</dt><dd>${escapeHtml(record.status)}</dd>
+      <dt>Obra</dt><dd>${escapeHtml(record.obra || "—")}</dd>
       <dt>Item / Componente</dt><dd>${escapeHtml(record.item || "—")}</dd>
       <dt>Aberto por</dt><dd>${escapeHtml(record.submittedBy || "—")}</dd>
       <dt>Peças do estoque</dt><dd>${escapeHtml(brl(inventoryCost))}</dd>

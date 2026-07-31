@@ -173,20 +173,21 @@ function AuthGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const hydrated = useAuthStore((state) => state.hydrated);
+  const serverValidated = useAuthStore((state) => state.serverValidated);
   const user = useAuthStore((state) => state.user);
   const isLogin = pathname === "/login";
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !serverValidated) return;
     if (!user && !isLogin) {
       navigate({ to: "/login", search: { redirect: pathname } });
     }
     if (user && isLogin) {
       navigate({ to: "/" });
     }
-  }, [hydrated, isLogin, navigate, pathname, user]);
+  }, [hydrated, isLogin, navigate, pathname, serverValidated, user]);
 
-  if (!hydrated && !isLogin) {
+  if ((!hydrated || !serverValidated) && !isLogin) {
     return <div className="min-h-screen bg-background" />;
   }
 

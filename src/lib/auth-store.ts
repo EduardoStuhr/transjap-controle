@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { loginServer, logoutServer } from "@/lib/api/auth";
+import { getSessionUserServer, loginServer, logoutServer } from "@/lib/api/auth";
 import { AUTH_USER_OPTIONS, LOCAL_USERS, normalizeRole, type AuthUser } from "@/lib/auth-users";
 
 export type { AuthUser } from "@/lib/auth-users";
@@ -7,6 +7,7 @@ export type { AuthUser } from "@/lib/auth-users";
 type AuthState = {
   user: AuthUser | null;
   hydrated: boolean;
+  serverValidated: boolean;
 };
 
 const STORAGE_KEY = "transjap:fleet-command:auth:v1";
@@ -16,9 +17,11 @@ export { AUTH_USER_OPTIONS };
 let state: AuthState = {
   user: null,
   hydrated: false,
+  serverValidated: false,
 };
 
 const listeners = new Set<() => void>();
+let serverValidationPromise: Promise<void> | null = null;
 
 function isBrowser() {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -62,7 +65,35 @@ function clearSession() {
 
 function ensureHydrated() {
   if (state.hydrated || !isBrowser()) return;
-  state = { user: readSession(), hydrated: true };
+  const user = readSession();
+  state = { user, hydrated: true, serverValidated: !user };
+  if (user) void validateServerSession(user);
+}
+
+async function validateServerSession(localUser: AuthUser) {
+  serverValidationPromise ??= (async () => {
+    try {
+      const serverUser = await getSessionUserServer();
+      if (state.user?.id !== localUser.id) return;
+
+      if (!serverUser || serverUser.id !== localUser.id) {
+        clearSession();
+        state = { user: null, hydrated: true, serverValidated: true };
+      } else {
+        state = { user: serverUser, hydrated: true, serverValidated: true };
+      }
+    } catch {
+      // Falha de rede não deve apagar uma sessão local válida. As consultas
+      // individuais continuam responsáveis por exibir opção de nova tentativa.
+      if (state.user?.id === localUser.id) {
+        state = { ...state, serverValidated: true };
+      }
+    } finally {
+      serverValidationPromise = null;
+      emit();
+    }
+  })();
+  await serverValidationPromise;
 }
 
 export function getCurrentUser() {
@@ -83,14 +114,14 @@ export const authActions = {
     if (!serverUser) return null;
 
     const { password: _password, ...user } = match;
-    state = { user, hydrated: true };
+    state = { user, hydrated: true, serverValidated: true };
     writeSession(user, remember);
     emit();
     return user;
   },
 
   logout() {
-    state = { user: null, hydrated: true };
+    state = { user: null, hydrated: true, serverValidated: true };
     clearSession();
     void logoutServer();
     emit();
@@ -116,12 +147,14 @@ export function useAuthStore<T>(selector: (state: AuthState) => T): T {
       };
     },
     () => selector(state),
-    () => selector({ user: null, hydrated: false }),
+    () => selector({ user: null, hydrated: false, serverValidated: false }),
   );
 }
 
 function handleStorageEvent(event: StorageEvent) {
   if (event.key !== STORAGE_KEY) return;
-  state = { user: readSession(), hydrated: true };
+  const user = readSession();
+  state = { user, hydrated: true, serverValidated: !user };
+  if (user) void validateServerSession(user);
   emit();
 }

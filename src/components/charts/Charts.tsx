@@ -1257,6 +1257,8 @@ export type EquipmentEfficiencyRankingPoint = {
   id: string;
   item?: string;
   equipamento?: string;
+  dieselTotal?: number;
+  horasTotaisValidas?: number;
   litros?: number;
   horas?: number;
   lph?: number;
@@ -1280,17 +1282,15 @@ function productivityColor(index: number, total: number) {
   return C.danger;
 }
 
-export function ChartLphRanking({
-  data,
-  topN = 10,
-}: {
-  data: EquipmentEfficiencyRankingPoint[];
-  topN?: number;
-}) {
+export function ChartLphTotals({ data }: { data: EquipmentEfficiencyRankingPoint[] }) {
   const rows = data
-    .filter((row) => Number.isFinite(row.lph) && Number(row.lph) > 0)
-    .sort((a, b) => Number(b.lph ?? 0) - Number(a.lph ?? 0))
-    .slice(0, topN);
+    .filter(
+      (row) =>
+        Number(row.horasTotaisValidas ?? 0) > 0 &&
+        Number.isFinite(row.lph) &&
+        Number(row.lph) >= 0,
+    )
+    .sort((a, b) => Number(b.lph ?? 0) - Number(a.lph ?? 0));
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -1355,8 +1355,14 @@ export function ChartLphRanking({
                 <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
                   {row.id}
                 </div>
-                <AggregateRankingRow k="Litros" v={`${fmt.dec(Number(row.litros ?? 0), 1)} L`} />
-                <AggregateRankingRow k="Horas" v={`${fmt.dec(Number(row.horas ?? 0), 1)} h`} />
+                <AggregateRankingRow
+                  k="Litros"
+                  v={`${fmt.dec(Number(row.dieselTotal ?? 0), 1)} L`}
+                />
+                <AggregateRankingRow
+                  k="Horas"
+                  v={`${fmt.dec(Number(row.horasTotaisValidas ?? 0), 1)} h`}
+                />
                 <AggregateRankingRow k="L/h" v={`${fmt.dec(lph, 2)} L/h`} />
                 <AggregateRankingRow k="Classificacao" v={tag.label} />
               </div>

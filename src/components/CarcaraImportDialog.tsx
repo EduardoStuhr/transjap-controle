@@ -11,7 +11,13 @@ import {
 } from "@/components/ui/dialog";
 import { Icon } from "@/components/AppLayout";
 import { ManualPdeDialog } from "@/components/ManualPdeDialog";
-import { createAnalysis } from "@/lib/api/production-consumption";
+import {
+  appendAnalysisTrips,
+  createAnalysis,
+  deleteAnalysis,
+  refreshAnalysisSnapshot,
+  type CreateAnalysisResult,
+} from "@/lib/api/production-consumption";
 import { calculateCompactedM3, normalizeObraKey } from "@/lib/production-consumption-utils";
 import {
   normalizeDateKey,
@@ -40,9 +46,13 @@ type FileItem = {
   file: File;
   result: ParsedUploadResult;
   parsing?: boolean;
+  sourceFiles?: File[];
 };
 
 type UploadSlot = "rco" | "cmb" | "pde";
+
+const INITIAL_ANALYSIS_TRIP_ROWS = 4_000;
+const APPEND_ANALYSIS_TRIP_ROWS = 4_000;
 
 type PendingManualFile = {
   file: File;
@@ -88,23 +98,96 @@ type Preview = {
   materials: string[];
 };
 
-type CreateAnalysisResult = {
-  analysisId: string;
-  trips: number;
-  fueling: number;
-  dailyParts: number;
-  compactedM3: number;
-  liters: number;
-  metrics: unknown;
-};
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
 
-function isCreateAnalysisResult(value: unknown): value is CreateAnalysisResult {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { analysisId?: unknown }).analysisId === "string" &&
-    Boolean((value as { analysisId: string }).analysisId.trim())
-  );
+function backendErrorMessage(value: unknown): string {
+  if (value instanceof Error) return value.message.trim();
+  if (typeof value === "string") return value.trim();
+
+  const record = recordValue(value);
+  if (!record) return "";
+  for (const key of ["error", "message", "detail", "description"]) {
+    const message = backendErrorMessage(record[key]);
+    if (message) return message;
+  }
+  return "";
+}
+
+function finiteCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeCreateAnalysisResult(value: unknown): CreateAnalysisResult | null {
+  const queue: unknown[] = [value];
+  const visited = new Set<unknown>();
+
+  while (queue.length > 0) {
+    const candidate = queue.shift();
+    if (visited.has(candidate)) continue;
+    visited.add(candidate);
+
+    const record = recordValue(candidate);
+    if (!record) continue;
+    const rawId = record.analysisId ?? record.id;
+    const analysisId = typeof rawId === "string" ? rawId.trim() : "";
+    if (analysisId) {
+      return {
+        analysisId,
+        trips: finiteCount(record.trips),
+        fueling: finiteCount(record.fueling),
+        dailyParts: finiteCount(record.dailyParts),
+        compactedM3: finiteCount(record.compactedM3),
+        liters: finiteCount(record.liters),
+      };
+    }
+
+    for (const key of ["data", "result", "analysis"]) {
+      if (record[key] !== undefined) queue.push(record[key]);
+    }
+  }
+
+  return null;
+}
+
+function htmlResponseMessage(body: string) {
+  const paragraph = body.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1] ?? "";
+  return paragraph.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function resolveCreateAnalysisResult(value: unknown): Promise<CreateAnalysisResult> {
+  let payload = value;
+
+  if (value instanceof Response) {
+    const body = await value.clone().text();
+    const contentType = value.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json") && body) {
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        payload = body;
+      }
+    } else {
+      payload = contentType.includes("text/html") ? htmlResponseMessage(body) : body;
+    }
+
+    if (!value.ok) {
+      throw new Error(
+        backendErrorMessage(payload) ||
+          `O backend não conseguiu criar a análise (HTTP ${value.status}).`,
+      );
+    }
+  }
+
+  const backendError = backendErrorMessage(payload);
+  if (backendError) throw new Error(backendError);
+
+  const result = normalizeCreateAnalysisResult(payload);
+  if (!result) {
+    throw new Error("A criação da análise não retornou um analysisId válido.");
+  }
+  return result;
 }
 
 function vehicleKey(row: { prefix: string; vehicleId: string; plate: string }) {
@@ -137,6 +220,32 @@ function filePeriod(rows: Array<{ datetime: string }>) {
     .sort();
   if (dates.length === 0) return "—";
   return `${dateOnly(dates[0])} até ${dateOnly(dates[dates.length - 1])}`;
+}
+
+function rcoFileKey(file: File) {
+  return `${file.name}|${file.size}|${file.lastModified}`;
+}
+
+function mergeRcoFile(current: FileItem | null, incoming: FileItem): FileItem {
+  if (incoming.result.type !== "trips") return current ?? incoming;
+  const currentRows = current?.result.type === "trips" ? current.result.rows : [];
+  const rowsByCollection = new Map<string, ParsedTrip>();
+
+  [...currentRows, ...incoming.result.rows].forEach((row) => {
+    const key = row.id.trim().toUpperCase();
+    if (key && !rowsByCollection.has(key)) rowsByCollection.set(key, row);
+  });
+
+  const sourceFiles = [...(current?.sourceFiles ?? (current ? [current.file] : [])), incoming.file];
+  const uniqueFiles = Array.from(
+    new Map(sourceFiles.map((file) => [rcoFileKey(file), file])).values(),
+  );
+
+  return {
+    file: uniqueFiles[0] ?? incoming.file,
+    sourceFiles: uniqueFiles,
+    result: { type: "trips", rows: [...rowsByCollection.values()] },
+  };
 }
 
 export function CarcaraImportDialog({
@@ -281,8 +390,10 @@ export function CarcaraImportDialog({
 
     setDraft((prev) => {
       const next = { ...prev };
-      if (!next.dateStart && dates[0]) next.dateStart = dates[0];
-      if (!next.dateEnd && dates[dates.length - 1]) next.dateEnd = dates[dates.length - 1];
+      // O período da análise deve sempre cobrir todos os RCOs/CMBs carregados.
+      // Isso é especialmente importante quando o RCO vem em blocos de 90 dias.
+      if (dates[0]) next.dateStart = dates[0];
+      if (dates[dates.length - 1]) next.dateEnd = dates[dates.length - 1];
       if (!next.obra.trim() && firstObra) next.obra = firstObra;
       if (!next.material.trim() && firstMaterial) next.material = firstMaterial;
       return next.dateStart !== prev.dateStart ||
@@ -314,11 +425,7 @@ export function CarcaraImportDialog({
 
   function applyParsedFile(item: FileItem, rcoAtual: FileItem | null, cmbAtual: FileItem | null) {
     if (item.result.type === "trips") {
-      if (rcoAtual) {
-        toast.error("Já existe uma planilha RCO carregada");
-        return { rco: rcoAtual, cmb: cmbAtual };
-      }
-      return { rco: item, cmb: cmbAtual };
+      return { rco: mergeRcoFile(rcoAtual, item), cmb: cmbAtual };
     }
     if (item.result.type === "fueling") {
       if (cmbAtual) {
@@ -346,8 +453,8 @@ export function CarcaraImportDialog({
           toast.error("Não foi possível ler viagens RCO neste arquivo.");
           return;
         }
-        setArquivoRCO({ file, result });
-        toast.success("Planilha RCO carregada");
+        setArquivoRCO((current) => mergeRcoFile(current, { file, result }));
+        toast.success(arquivoRCO ? "Planilha RCO adicionada" : "Planilha RCO carregada");
         return;
       }
 
@@ -450,11 +557,6 @@ export function CarcaraImportDialog({
   async function forceType(type: CarcaraFileType | "pde") {
     if (!arquivoPendente) return;
     const file = arquivoPendente.file;
-    if (type === "trips" && arquivoRCO) {
-      toast.error("Já existe uma planilha RCO carregada");
-      setArquivoPendente(null);
-      return;
-    }
     if (type === "fueling" && arquivoCMB) {
       toast.error("Já existe uma planilha CMB carregada");
       setArquivoPendente(null);
@@ -493,7 +595,9 @@ export function CarcaraImportDialog({
         }
       } else {
         const result = await parseCarcaraFile(file, type);
-        if (result.type === "trips") setArquivoRCO({ file, result });
+        if (result.type === "trips") {
+          setArquivoRCO((current) => mergeRcoFile(current, { file, result }));
+        }
         else if (result.type === "fueling") setArquivoCMB({ file, result });
         else toast.error(result.message);
       }
@@ -537,6 +641,8 @@ export function CarcaraImportDialog({
     setCreating(true);
     onCreatingChange?.(true);
     let createResult: unknown;
+    let createdAnalysisId = "";
+    let creationCommitted = false;
     try {
       console.log("[CREATE_ANALYSIS_DEBUG]", {
         variableName: "createAnalysisPayload",
@@ -558,11 +664,12 @@ export function CarcaraImportDialog({
           name: draft.name,
           obra: draft.obra,
           material: draft.material,
+          rcoObras: uniq(rawTrips.map((row) => row.obra)),
           dateStart: draft.dateStart,
           dateEnd: draft.dateEnd,
           swellFactor: factor,
           createdBy: userName,
-          tripsRows: rawTrips,
+          tripsRows: rawTrips.slice(0, INITIAL_ANALYSIS_TRIP_ROWS),
           fuelingRows: rawFueling,
           dailyPartRows: rawPde,
         },
@@ -571,26 +678,44 @@ export function CarcaraImportDialog({
         variableName: "createAnalysisResult",
         value: createResult,
       });
-      if (!isCreateAnalysisResult(createResult)) {
-        console.error("[CREATE_ANALYSIS_ERROR]", {
-          object: "createAnalysisResult",
-          value: createResult,
-          line: "CarcaraImportDialog.handleCreate -> result.analysisId",
-          reason: "createAnalysis retornou sem analysisId valido",
-        });
-        throw new Error("A criação da análise não retornou um analysisId válido.");
+      let result = await resolveCreateAnalysisResult(createResult);
+      createdAnalysisId = result.analysisId;
+
+      if (rawTrips.length > INITIAL_ANALYSIS_TRIP_ROWS) {
+        const batchId = `BATCH-${Date.now()}`;
+        for (
+          let offset = INITIAL_ANALYSIS_TRIP_ROWS;
+          offset < rawTrips.length;
+          offset += APPEND_ANALYSIS_TRIP_ROWS
+        ) {
+          await appendAnalysisTrips({
+            data: {
+              analysisId: result.analysisId,
+              rows: rawTrips.slice(offset, offset + APPEND_ANALYSIS_TRIP_ROWS),
+              batchId,
+              swellFactor: factor,
+            },
+          });
+        }
+        result = await refreshAnalysisSnapshot({ data: { analysisId: result.analysisId } });
       }
-      const result = createResult;
+
       console.log("[CREATE_ANALYSIS_DEBUG]", {
         variableName: "result.analysisId",
         value: result.analysisId,
       });
+      creationCommitted = true;
       await onSuccess(result.analysisId);
       toast.success("Análise criada", {
         description: `${result.trips} viagens, ${result.fueling} abastecimentos e ${result.dailyParts} apontamentos PDE usados.`,
       });
       onClose();
     } catch (err) {
+      if (createdAnalysisId && !creationCommitted) {
+        await deleteAnalysis({ data: { analysisId: createdAnalysisId } }).catch((cleanupError) => {
+          console.error("[CREATE_ANALYSIS_CLEANUP_ERROR]", cleanupError);
+        });
+      }
       console.error("[CREATE_ANALYSIS_ERROR]", {
         object: "handleCreate",
         value: createResult,
@@ -728,7 +853,7 @@ export function CarcaraImportDialog({
                 <Icon name="upload_file" className="text-4xl text-on-surface-variant/50 mb-3" />
                 <p className="text-sm font-black">Arraste RCO, CMB e PDE aqui</p>
                 <p className="text-xs text-on-surface-variant mt-1">
-                  ou clique para selecionar os 3 XLSX
+                  Você pode selecionar dois ou mais RCOs; o sistema combina e remove duplicidades.
                 </p>
                 <input
                   ref={inputRef}
@@ -745,7 +870,7 @@ export function CarcaraImportDialog({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <UploadCard
-                  title="Planilha RCO"
+                  title="Planilhas RCO"
                   loadedLabel="RCO carregado"
                   emptyLabel="Aguardando planilha de viagens/produção"
                   item={arquivoRCO}
@@ -798,7 +923,9 @@ export function CarcaraImportDialog({
 
               <div className="flex flex-wrap gap-3 text-xs">
                 <span className={arquivoRCO ? "text-status-success" : "text-on-surface-variant"}>
-                  {arquivoRCO ? "✓ RCO carregado" : "RCO pendente"}
+                  {arquivoRCO
+                    ? `✓ ${arquivoRCO.sourceFiles?.length ?? 1} RCO(s) carregado(s)`
+                    : "RCO pendente"}
                 </span>
                 <span className={arquivoCMB ? "text-status-success" : "text-on-surface-variant"}>
                   {arquivoCMB ? "✓ CMB carregado" : "CMB pendente"}
@@ -967,7 +1094,7 @@ export function CarcaraImportDialog({
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="outline" onClick={() => forceType("trips")} disabled={!!arquivoRCO}>
+              <Button variant="outline" onClick={() => forceType("trips")}>
                 RCO
               </Button>
               <Button
@@ -1103,6 +1230,12 @@ function UploadCard({
   const obras = uniq(rows.map((row) => row.obra));
   const pdeFrotas = uniq(partes.map((row) => row.fleet));
   const pdeHoras = partes.reduce((sum, row) => sum + row.hours, 0);
+  const sourceFiles =
+    uploadType === "rco" && item
+      ? item.sourceFiles ?? [item.file]
+      : item
+        ? [item.file]
+        : [];
 
   return (
     <div
@@ -1143,7 +1276,11 @@ function UploadCard({
               cardInputRef.current?.click();
             }}
           >
-            {item ? "Enviar novamente" : "Selecionar"}
+            {item && uploadType === "rco"
+              ? "Adicionar RCO"
+              : item
+                ? "Enviar novamente"
+                : "Selecionar"}
           </Button>
           {item && (
             <Button
@@ -1167,12 +1304,21 @@ function UploadCard({
         <div className="mt-4 space-y-2 text-xs">
           <div className="flex items-center gap-2">
             <Icon name={fileIcon(item.result.type)} className="text-on-surface-variant" />
-            <span className="font-bold truncate">{item.file.name}</span>
+            <span className="font-bold truncate">
+              {sourceFiles.length > 1
+                ? `${sourceFiles.length} planilhas combinadas`
+                : item.file.name}
+            </span>
           </div>
           {item.result.type === "trips" && (
             <>
               <p>{rows.length} viagens</p>
               <p>Período: {filePeriod(rows)}</p>
+              {sourceFiles.length > 1 && (
+                <p className="text-on-surface-variant">
+                  Arquivos: {sourceFiles.map((file) => file.name).join(", ")}
+                </p>
+              )}
               <p className="text-on-surface-variant">
                 Obras: {obras.slice(0, 4).join(", ") || "—"}
               </p>

@@ -13,12 +13,13 @@ function Login() {
   });
   const session = useAuthStore((state) => state.user);
   const hydrated = useAuthStore((state) => state.hydrated);
+  const serverValidated = useAuthStore((state) => state.serverValidated);
 
   useEffect(() => {
-    if (hydrated && session) {
+    if (hydrated && serverValidated && session) {
       navigate({ to: search.redirect || "/" });
     }
-  }, [hydrated, navigate, search.redirect, session]);
+  }, [hydrated, navigate, search.redirect, serverValidated, session]);
 
   return <LoginPanel onSuccess={() => navigate({ to: search.redirect || "/" })} />;
 }

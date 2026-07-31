@@ -35,6 +35,7 @@ export type CreateAnalysisInput = {
   name: string;
   obra: string;
   material: string;
+  rcoObras?: string[];
   tipoAnalise?: string;
   dateStart: string;
   dateEnd: string;
@@ -44,6 +45,15 @@ export type CreateAnalysisInput = {
   tripsRows: ParsedTrip[];
   fuelingRows: ParsedFueling[];
   dailyPartRows: ParsedDailyPart[];
+};
+
+export type CreateAnalysisResult = {
+  analysisId: string;
+  trips: number;
+  fueling: number;
+  dailyParts: number;
+  compactedM3: number;
+  liters: number;
 };
 
 // Minimal serializable fields returned as preview sample (both RCO and CMB)
@@ -130,9 +140,33 @@ function createAnalysisId() {
   return `ANL-${Date.now().toString(36).toUpperCase()}-${random.toUpperCase()}`;
 }
 
-async function runD1Batch(d1: D1Database, statements: D1PreparedStatement[]) {
-  for (let i = 0; i < statements.length; i += D1_INSERT_BATCH_SIZE) {
-    await d1.batch(statements.slice(i, i + D1_INSERT_BATCH_SIZE));
+function createAnalysisResult(
+  analysisId: string,
+  tripRows: DbTrip[],
+  fuelRows: DbFueling[],
+  dailyPartRows: DbEquipmentDailyPart[],
+  metrics: { compactedM3: number; liters: number },
+): CreateAnalysisResult {
+  return {
+    analysisId,
+    trips: tripRows.length,
+    fueling: fuelRows.length,
+    dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
+    compactedM3: metrics.compactedM3,
+    liters: metrics.liters,
+  };
+}
+
+async function insertRowsInD1Batches<T>(
+  d1: D1Database,
+  rows: readonly T[],
+  prepareStatement: (row: T) => D1PreparedStatement,
+) {
+  for (let i = 0; i < rows.length; i += D1_INSERT_BATCH_SIZE) {
+    // Materialize only the current batch. Large multi-RCO imports can contain tens of
+    // thousands of rows and preparing every D1 statement at once exhausts Worker memory.
+    const statements = rows.slice(i, i + D1_INSERT_BATCH_SIZE).map((row) => prepareStatement(row));
+    await d1.batch(statements);
   }
 }
 
@@ -233,10 +267,7 @@ function dailyPartInsertStatement(d1: D1Database, row: DbEquipmentDailyPart) {
 
 async function insertAnalysisRows(d1: D1Database, rows: DbTrip[], analysisId: string) {
   try {
-    await runD1Batch(
-      d1,
-      rows.map((row) => tripInsertStatement(d1, row)),
-    );
+    await insertRowsInD1Batches(d1, rows, (row) => tripInsertStatement(d1, row));
   } catch (err) {
     throw createAnalysisFailure(`viagens da analise ${analysisId}`, err);
   }
@@ -244,10 +275,7 @@ async function insertAnalysisRows(d1: D1Database, rows: DbTrip[], analysisId: st
 
 async function insertFuelingRows(d1: D1Database, rows: DbFueling[], analysisId: string) {
   try {
-    await runD1Batch(
-      d1,
-      rows.map((row) => fuelingInsertStatement(d1, row)),
-    );
+    await insertRowsInD1Batches(d1, rows, (row) => fuelingInsertStatement(d1, row));
   } catch (err) {
     throw createAnalysisFailure(`abastecimentos da analise ${analysisId}`, err);
   }
@@ -259,10 +287,7 @@ async function insertDailyPartRows(
   analysisId: string,
 ) {
   try {
-    await runD1Batch(
-      d1,
-      rows.map((row) => dailyPartInsertStatement(d1, row)),
-    );
+    await insertRowsInD1Batches(d1, rows, (row) => dailyPartInsertStatement(d1, row));
   } catch (err) {
     throw createAnalysisFailure(`apontamentos PDE da analise ${analysisId}`, err);
   }
@@ -292,6 +317,7 @@ function collectRcoObras(data: CreateAnalysisInput) {
     const key = normalizeObraKey(obra);
     if (!names.has(key)) names.set(key, label);
   };
+  data.rcoObras?.forEach(add);
   data.tripsRows.forEach((row) => add(row.obra));
   return Array.from(names.values()).sort((left, right) => left.localeCompare(right, "pt-BR"));
 }
@@ -830,7 +856,7 @@ export const previewImport = createServerFn({ method: "POST" })
 
 export const createAnalysis = createServerFn({ method: "POST" })
   .inputValidator((data: CreateAnalysisInput) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data }): Promise<CreateAnalysisResult> => {
     const now = new Date().toISOString();
     const id = createAnalysisId();
     const built = buildAnalysisFromImports(data, id, now);
@@ -842,15 +868,7 @@ export const createAnalysis = createServerFn({ method: "POST" })
       localTrips.push(...tripRows);
       localFueling.push(...fuelRows);
       localDailyParts.push(...dailyPartRows);
-      return {
-        analysisId: id,
-        trips: tripRows.length,
-        fueling: fuelRows.length,
-        dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
-        compactedM3: metrics.compactedM3,
-        liters: metrics.liters,
-        metrics,
-      };
+      return createAnalysisResult(id, tripRows, fuelRows, dailyPartRows, metrics);
     }
 
     const db = getDb(d1);
@@ -893,15 +911,149 @@ export const createAnalysis = createServerFn({ method: "POST" })
       }
     }
 
-    return {
-      analysisId: id,
-      trips: tripRows.length,
-      fueling: fuelRows.length,
-      dailyParts: dailyPartRows.filter((row) => row.usedInAnalysis).length,
-      compactedM3: metrics.compactedM3,
-      liters: metrics.liters,
-      metrics,
-    };
+    return createAnalysisResult(id, tripRows, fuelRows, dailyPartRows, metrics);
+  });
+
+export const appendAnalysisTrips = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { analysisId: string; rows: ParsedTrip[]; batchId: string; swellFactor: number }) =>
+      data,
+  )
+  .handler(async ({ data }): Promise<{ inserted: number }> => {
+    const analysisId = data.analysisId.trim();
+    if (!analysisId) throw new Error("Informe a analise que recebera as viagens.");
+
+    const factor = Number.isFinite(data.swellFactor) ? data.swellFactor : 0.3;
+    const now = new Date().toISOString();
+    const rows = data.rows.map((row) => makeTripRow(row, analysisId, data.batchId, now, factor));
+    const d1 = getOptionalD1();
+
+    if (!d1) {
+      if (!localAnalyses.some((analysis) => analysis.id === analysisId)) {
+        throw new Error("Analise nao encontrada para receber as viagens.");
+      }
+      localTrips.push(...rows);
+      return { inserted: rows.length };
+    }
+
+    const db = getDb(d1);
+    const analysisExists = await db
+      .select({ id: productionAnalyses.id })
+      .from(productionAnalyses)
+      .where(eq(productionAnalyses.id, analysisId))
+      .get();
+    if (!analysisExists) throw new Error("Analise nao encontrada para receber as viagens.");
+
+    await insertAnalysisRows(d1, rows, analysisId);
+    return { inserted: rows.length };
+  });
+
+function analysisWithRefreshedSnapshot(
+  analysis: DbProductionAnalysis,
+  tripRows: DbTrip[],
+  fuelRows: DbFueling[],
+  dailyPartRows: DbEquipmentDailyPart[],
+) {
+  const snapshot = buildAnalysisSnapshot({
+    analysis,
+    trips: tripRows,
+    fueling: fuelRows,
+    dailyParts: dailyPartRows,
+  });
+  return {
+    analysis: {
+      ...analysis,
+      metrics: snapshot.metrics as unknown as JsonObject,
+      aggregateMetrics: snapshot.aggregateMetrics as unknown as JsonObject[],
+      machineMetrics: snapshot.machineMetrics as unknown as JsonObject[],
+      charts: snapshot.charts as unknown as JsonObject,
+      audit: snapshot.audit as unknown as JsonObject[],
+      context: {
+        ...(snapshot.context as unknown as JsonObject),
+        ...(analysis.context as unknown as JsonObject),
+      },
+    },
+    metrics: snapshot.metrics,
+  };
+}
+
+export const refreshAnalysisSnapshot = createServerFn({ method: "POST" })
+  .inputValidator((data: { analysisId: string }) => data)
+  .handler(async ({ data }): Promise<CreateAnalysisResult> => {
+    const analysisId = data.analysisId.trim();
+    if (!analysisId) throw new Error("Informe a analise que sera atualizada.");
+
+    const d1 = getOptionalD1();
+    if (!d1) {
+      const index = localAnalyses.findIndex((analysis) => analysis.id === analysisId);
+      if (index < 0) throw new Error("Analise nao encontrada para atualizacao.");
+      const tripRows = localTrips.filter((row) => row.analysisId === analysisId);
+      const fuelRows = localFueling.filter((row) => row.analysisId === analysisId);
+      const dailyPartRows = localDailyParts.filter((row) => row.analysisId === analysisId);
+      const refreshed = analysisWithRefreshedSnapshot(
+        localAnalyses[index],
+        tripRows,
+        fuelRows,
+        dailyPartRows,
+      );
+      localAnalyses[index] = refreshed.analysis;
+      return createAnalysisResult(analysisId, tripRows, fuelRows, dailyPartRows, refreshed.metrics);
+    }
+
+    const db = getDb(d1);
+    const analysis = await db
+      .select()
+      .from(productionAnalyses)
+      .where(eq(productionAnalyses.id, analysisId))
+      .get();
+    if (!analysis) throw new Error("Analise nao encontrada para atualizacao.");
+
+    const [tripRows, fuelRows, dailyPartRows] = await Promise.all([
+      paginatedSelect<DbTrip>((limit, offset) =>
+        db
+          .select()
+          .from(trips)
+          .where(eq(trips.analysisId, analysisId))
+          .orderBy(asc(trips.id))
+          .limit(limit)
+          .offset(offset)
+          .all(),
+      ),
+      paginatedSelect<DbFueling>((limit, offset) =>
+        db
+          .select()
+          .from(fueling)
+          .where(eq(fueling.analysisId, analysisId))
+          .orderBy(asc(fueling.id))
+          .limit(limit)
+          .offset(offset)
+          .all(),
+      ),
+      paginatedSelect<DbEquipmentDailyPart>((limit, offset) =>
+        db
+          .select()
+          .from(equipmentDailyParts)
+          .where(eq(equipmentDailyParts.analysisId, analysisId))
+          .orderBy(asc(equipmentDailyParts.id))
+          .limit(limit)
+          .offset(offset)
+          .all(),
+      ),
+    ]);
+    const refreshed = analysisWithRefreshedSnapshot(analysis, tripRows, fuelRows, dailyPartRows);
+    await db
+      .update(productionAnalyses)
+      .set({
+        metrics: refreshed.analysis.metrics,
+        aggregateMetrics: refreshed.analysis.aggregateMetrics,
+        machineMetrics: refreshed.analysis.machineMetrics,
+        charts: refreshed.analysis.charts,
+        audit: refreshed.analysis.audit,
+        context: refreshed.analysis.context,
+      })
+      .where(eq(productionAnalyses.id, analysisId));
+
+    return createAnalysisResult(analysisId, tripRows, fuelRows, dailyPartRows, refreshed.metrics);
   });
 
 export const deleteAnalysis = createServerFn({ method: "POST" })
