@@ -1242,6 +1242,7 @@ function MaintenanceDetailsDialog({
   const [removingCost, setRemovingCost] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
   const [completingRecord, setCompletingRecord] = useState(false);
+  const [restoringRecord, setRestoringRecord] = useState(false);
   const [savingEquipmentStatus, setSavingEquipmentStatus] = useState(false);
   const [equipmentStatusDraft, setEquipmentStatusDraft] = useState<EquipmentStatus | "">("");
   const [savingObra, setSavingObra] = useState(false);
@@ -1310,6 +1311,38 @@ function MaintenanceDetailsDialog({
       toast.error("Não foi possível concluir a manutenção.");
     } finally {
       setCompletingRecord(false);
+    }
+  };
+
+  const restoreMaintenance = async () => {
+    if (!record || record.status !== "Concluída") return;
+    setRestoringRecord(true);
+
+    try {
+      const updatedRecord = await actions.restoreRecord(record.id);
+      if (updatedRecord) setRecord(updatedRecord);
+
+      let equipmentRestored = true;
+      if (equipment && equipment.status !== "Manutenção") {
+        try {
+          await onEquipmentStatusChange(equipment.id, "Manutenção");
+          setEquipmentStatusDraft("Manutenção");
+        } catch (error) {
+          equipmentRestored = false;
+          console.error(error);
+        }
+      }
+
+      toast.success("Manutenção restaurada.", {
+        description: equipmentRestored
+          ? `A contagem continua desde ${formatBrDate(record.createdAt)}.`
+          : `A contagem foi mantida, mas não foi possível alterar a situação do equipamento.`,
+      });
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível restaurar a manutenção.");
+    } finally {
+      setRestoringRecord(false);
     }
   };
 
@@ -1394,6 +1427,20 @@ function MaintenanceDetailsDialog({
                   >
                     <Icon name="table_view" />
                   </Button>
+                  {record.status === "Concluída" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-9 border-status-warning/40 px-2 text-status-warning hover:bg-status-warning/10 sm:px-3"
+                      onClick={() => void restoreMaintenance()}
+                      isLoading={restoringRecord}
+                      aria-label="Restaurar manutenção"
+                    >
+                      <Icon name="restore" />
+                      <span>Restaurar</span>
+                    </Button>
+                  )}
                   {canDelete && (
                     <Button
                       size="sm"

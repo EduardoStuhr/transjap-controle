@@ -242,6 +242,43 @@ function completeAllSteps(steps: MaintenanceStep[], timestamp: string, user: str
   );
 }
 
+function restoreCompletedSteps(record: MaintenanceRecord, timestamp: string, user: string) {
+  const completedWithRecord = record.steps
+    .map((step, index) => (step.completedAt === record.finishedAt ? index : -1))
+    .filter((index) => index >= 0);
+  const currentStepIndex = record.steps.findIndex((step) => step.id === record.currentStepId);
+  const reopenIndex =
+    completedWithRecord[0] ?? (currentStepIndex >= 0 ? currentStepIndex : record.steps.length - 1);
+
+  return record.steps.map((step, index) => {
+    if (index < reopenIndex) return step;
+
+    if (index === reopenIndex) {
+      return {
+        ...step,
+        status: "em_andamento" as const,
+        startedAt: step.startedAt || record.startedAt || timestamp,
+        startedBy: step.startedBy || user,
+        completedAt: "",
+        completedBy: "",
+        completionComment: "",
+        durationMinutes: 0,
+      };
+    }
+
+    return {
+      ...step,
+      status: "pendente" as const,
+      startedAt: "",
+      startedBy: "",
+      completedAt: "",
+      completedBy: "",
+      completionComment: "",
+      durationMinutes: 0,
+    };
+  });
+}
+
 function normalizeStep(step: Partial<MaintenanceStep> & MaintenanceStepTemplate): MaintenanceStep {
   return {
     ...step,
@@ -821,6 +858,32 @@ export function useMaintenanceActions() {
         steps,
         timeline: [
           timeline("Manutenção registrada como concluída", completionNote),
+          ...record.timeline,
+        ],
+      });
+    },
+
+    async restoreRecord(recordId: string) {
+      const current = getCachedState(queryClient);
+      const record = current.records.find((candidate) => candidate.id === recordId);
+      if (!record || record.status !== "Concluída") return record ?? null;
+
+      const timestamp = nowIso();
+      const user = currentUserName();
+      const steps = restoreCompletedSteps(record, timestamp, user);
+      const currentStepId = steps.find((step) => step.status === "em_andamento")?.id;
+
+      return updateRecord({
+        ...record,
+        status: "Em andamento",
+        currentStepId: currentStepId || nextOpenStep(steps),
+        finishedAt: "",
+        steps,
+        timeline: [
+          timeline(
+            "Manutenção restaurada",
+            `Registro reaberto; contagem de dias mantida desde ${record.createdAt}.`,
+          ),
           ...record.timeline,
         ],
       });

@@ -751,11 +751,7 @@ type PeriodComparisonMetrics = {
   trips: number;
   m3PerLiter: number;
   litersPerM3: number;
-<<<<<<< HEAD
   litersPerHour: number;
-=======
-  litersPerHour: number;   // ← ADICIONAR ESTA LINHA
->>>>>>> eb66a00 (change)
   pdeHours: number;
   m3PerHour: number;
 };
@@ -804,7 +800,6 @@ function periodComparisonMetrics(
   const efficiencyM3 = equipmentScope ? relatedM3 : compactedM3;
 
   return {
-<<<<<<< HEAD
     compactedM3,
     looseM3,
     diesel,
@@ -815,18 +810,6 @@ function periodComparisonMetrics(
     pdeHours,
     m3PerHour: divide(efficiencyM3, pdeHours),
   };
-=======
-  compactedM3,
-  looseM3,
-  diesel,
-  trips,
-  m3PerLiter: divide(efficiencyM3, diesel),
-  litersPerM3: divide(diesel, efficiencyM3),
-  litersPerHour: divide(diesel, pdeHours),   // ← ADICIONAR ESTA LINHA
-  pdeHours,
-  m3PerHour: divide(efficiencyM3, pdeHours),
-};
->>>>>>> eb66a00 (change)
 }
 
 function dieselAuditSourceForFuel(fuel: DbFueling): AuditSource {
@@ -9867,7 +9850,6 @@ function PeriodComparisonDialog({
   );
 
   const metricDefinitions: Array<{
-<<<<<<< HEAD
     key: keyof PeriodComparisonMetrics;
     label: string;
     format: (value: number) => string;
@@ -9897,37 +9879,6 @@ function PeriodComparisonDialog({
       format: (value) => `${formatNumber(value, 2)} m³/h`,
     },
   ];
-=======
-  key: keyof PeriodComparisonMetrics;
-  label: string;
-  format: (value: number) => string;
-}> = [
-  { key: "compactedM3", label: "Produção m³ compactado", format: formatM3 },
-  { key: "looseM3", label: "Produção m³ solto", format: formatM3 },
-  { key: "diesel", label: "Diesel total", format: formatLiters },
-  {
-    key: "trips",
-    label: "Viagens",
-    format: (value) => formatNumber(value, 0),
-  },
-  {
-    key: "m3PerLiter",
-    label: "m³/L",
-    format: (value) => `${formatNumber(value, 3)} m³/L`,
-  },
-  {
-    key: "litersPerHour",
-    label: "L/h",
-    format: (value) => `${formatNumber(value, 3)} L/h`,
-  },
-  { key: "pdeHours", label: "Horas PDE", format: formatHours },
-  {
-    key: "m3PerHour",
-    label: "m³/h",
-    format: (value) => `${formatNumber(value, 2)} m³/h`,
-  },
-];
->>>>>>> eb66a00 (change)
 
   const rows = metricDefinitions.map((metric) => {
     const valueA = metricsA[metric.key];
