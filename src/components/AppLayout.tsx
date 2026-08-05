@@ -1,4 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { isMobileOrCapacitor } from "@/lib/capacitor-shell";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ const NAV = [
   { to: "/calendario", label: "Calendário", icon: "calendar_today" },
   { to: "/manutencao", label: "Manutenção", icon: "build" },
   { to: "/equipamentos", label: "Equipamentos", icon: "construction" },
+  { to: "/horometros", label: "Horômetros & QR Code", icon: "speed" },
   { to: "/localizacao-frotas", label: "Localização de Frotas", icon: "location_on" },
   { to: "/producao-consumo", label: "Produção × Consumo", icon: "query_stats" },
   {
@@ -140,7 +142,15 @@ export function Icon({
   );
 }
 
-export function AppLayout({ children, title }: { children: ReactNode; title?: string }) {
+export function AppLayout({
+  children,
+  title,
+  currentTab,
+}: {
+  children: ReactNode;
+  title?: string;
+  currentTab?: string;
+}) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -151,6 +161,20 @@ export function AppLayout({ children, title }: { children: ReactNode; title?: st
   const user = useAuthStore((snapshot) => snapshot.user);
   const visibleNav = useMemo(() => NAV.filter((item) => canShowNavItem(item, user)), [user]);
   const [viewedAlertKeys, setViewedAlertKeys] = useState<Set<string>>(() => new Set());
+
+  // SAFETY: If this layout is ever mounted on native Capacitor / mobile, redirect to /operador immediately
+  const isMobile = isMobileOrCapacitor();
+  useEffect(() => {
+    if (isMobile) {
+      navigate({ to: "/operador", replace: true });
+    }
+  }, [isMobile, navigate]);
+
+  // Render nothing while redirect is pending on mobile
+  if (isMobile) {
+    return <div className="min-h-screen bg-background" />;
+  }
+
 
   useEffect(() => {
     setViewedAlertKeys(readAlertKeys(user?.id));

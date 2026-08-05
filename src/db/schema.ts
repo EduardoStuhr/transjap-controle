@@ -485,3 +485,36 @@ export const dieselFilterChanges = sqliteTable(
 
 export type DbDieselFilterChange = typeof dieselFilterChanges.$inferSelect;
 export type DbDieselFilterChangeInsert = typeof dieselFilterChanges.$inferInsert;
+
+export const horometroLogs = sqliteTable(
+  "horometro_logs",
+  {
+    id: text("id").primaryKey(),
+    fleet: text("fleet").notNull(),
+    fleetLabel: text("fleet_label").notNull().default(""),
+    obra: text("obra").notNull().default(""),
+    horometroValue: real("horometro_value").notNull(),
+    type: text("type", { enum: ["inicial", "final", "leitura"] }).notNull().default("leitura"),
+    photoUrl: text("photo_url"),
+    ocrConfidence: real("ocr_confidence").default(1.0),
+    operatorName: text("operator_name").notNull().default("Operador"),
+    operatorId: text("operator_id"),
+    status: text("status", { enum: ["aprovado", "pendente_revisao", "rejeitado"] })
+      .notNull()
+      .default("aprovado"),
+    rawOcrText: text("raw_ocr_text"),
+    notes: text("notes"),
+    date: text("date").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    idxHorometroLogsFleetDate: index("idx_horometro_logs_fleet_date").on(table.fleet, table.date),
+    idxHorometroLogsDate: index("idx_horometro_logs_date").on(table.date),
+    idxHorometroLogsObra: index("idx_horometro_logs_obra").on(table.obra),
+  }),
+);
+
+export type DbHorometroLog = typeof horometroLogs.$inferSelect;
+export type DbHorometroLogInsert = typeof horometroLogs.$inferInsert;
+

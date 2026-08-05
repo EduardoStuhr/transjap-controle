@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +101,10 @@ def write_xml(path: Path, content: str) -> None:
 
 
 def main() -> None:
+    if not HAS_PIL:
+        print("[AVISO] Módulo 'PIL' (Pillow) não instalado no Python do sistema. Mantendo ícones existentes do Android.")
+        return
+
     symbol = extract_symbol()
     save_png(contain(symbol, 512, 0.0, (0, 0, 0, 0)), PUBLIC_FOREGROUND)
 

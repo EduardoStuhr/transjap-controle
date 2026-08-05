@@ -87,3 +87,46 @@ export async function configureCapacitorShell() {
     setRootCssVar("--android-safe-area-right", ZERO_PX);
   }
 }
+
+export function isMobileOrCapacitor(): boolean {
+  if (typeof window === "undefined") return false;
+  if (_isNativeCapacitorCached !== undefined) return _isNativeCapacitorCached || _isMobileCached;
+  return isNativeCapacitor() || _isMobileCached;
+}
+
+let _isNativeCapacitorCached: boolean | undefined;
+let _isMobileCached = false;
+
+/**
+ * Strict check: true only when running inside a Capacitor native shell.
+ * Result is cached after first evaluation so subsequent calls are free.
+ */
+export function isNativeCapacitor(): boolean {
+  if (_isNativeCapacitorCached !== undefined) return _isNativeCapacitorCached;
+  if (typeof window === "undefined") return false;
+
+  const win = window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } };
+  const result =
+    Boolean(win.Capacitor?.isNativePlatform?.()) ||
+    document.documentElement.classList.contains("capacitor-native") ||
+    document.documentElement.classList.contains("capacitor-android") ||
+    document.documentElement.classList.contains("capacitor-ios") ||
+    /TransJapManager/i.test(navigator.userAgent);
+
+  _isNativeCapacitorCached = result;
+
+  // Also cache mobile UA check while we're here
+  _isMobileCached =
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+    window.innerWidth <= 768;
+
+  return result;
+}
+
+/** Routes that belong to the operator-only mobile experience */
+const OPERATOR_ROUTES = new Set(["/operador", "/login"]);
+
+/** Returns true if the given pathname should be allowed in the native app */
+export function isOperadorRoute(pathname: string): boolean {
+  return OPERATOR_ROUTES.has(pathname);
+}

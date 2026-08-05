@@ -15,7 +15,11 @@ import appCss from "../styles.css?url";
 import { LoginPanel } from "@/components/LoginPanel";
 import { Toaster } from "@/components/ui/sonner";
 import { useAuthStore } from "@/lib/auth-store";
-import { configureCapacitorShell, installMobileViewportGuards } from "@/lib/capacitor-shell";
+import {
+  configureCapacitorShell,
+  installMobileViewportGuards,
+  isMobileOrCapacitor,
+} from "@/lib/capacitor-shell";
 import { refreshNativePushRegistrationIfActive } from "@/lib/native-push";
 
 function NotFoundComponent() {
@@ -176,25 +180,45 @@ function AuthGate({ children }: { children: ReactNode }) {
   const serverValidated = useAuthStore((state) => state.serverValidated);
   const user = useAuthStore((state) => state.user);
   const isLogin = pathname === "/login";
+  const isOperador = pathname === "/operador";
+  const native = isMobileOrCapacitor();
 
+  // --- MOBILE GATE: force /operador for any non-allowed route ---
+  useEffect(() => {
+    if (!native) return;
+    if (!isOperador && !isLogin) {
+      navigate({ to: "/operador", replace: true });
+    }
+  }, [native, isOperador, isLogin, navigate]);
+
+  // --- AUTH GATE ---
   useEffect(() => {
     if (!hydrated || !serverValidated) return;
     if (!user && !isLogin) {
-      navigate({ to: "/login", search: { redirect: pathname } });
+      navigate({ to: "/login", search: { redirect: native ? "/operador" : pathname } });
     }
     if (user && isLogin) {
-      navigate({ to: "/" });
+      navigate({ to: native ? "/operador" : "/", replace: true });
     }
-  }, [hydrated, isLogin, navigate, pathname, serverValidated, user]);
+  }, [hydrated, isLogin, navigate, native, pathname, serverValidated, user]);
 
+  // Show blank screen while auth hydrates (prevents admin layout flash)
   if ((!hydrated || !serverValidated) && !isLogin) {
     return <div className="min-h-screen bg-background" />;
   }
 
+  // Not logged in → show login panel
   if (!user && !isLogin) {
-    const safeRedirect = pathname && pathname !== "/login" ? pathname : "/";
-    return <LoginPanel onSuccess={() => navigate({ to: safeRedirect })} />;
+    const defaultTarget = native ? "/operador" : "/";
+    const safeRedirect = pathname && pathname !== "/login" ? pathname : defaultTarget;
+    return <LoginPanel onSuccess={() => navigate({ to: native ? "/operador" : safeRedirect })} />;
+  }
+
+  // On native + not on /operador → render nothing while redirect runs
+  if (native && !isOperador && !isLogin) {
+    return <div className="min-h-screen bg-background" />;
   }
 
   return children;
 }
+

@@ -13,9 +13,11 @@ import { Route as TrocaFiltrosDieselRouteImport } from './routes/troca-filtros-d
 import { Route as RelatoriosRouteImport } from './routes/relatorios'
 import { Route as ProducaoConsumoRouteImport } from './routes/producao-consumo'
 import { Route as PerfilRouteImport } from './routes/perfil'
+import { Route as OperadorRouteImport } from './routes/operador'
 import { Route as ManutencaoRouteImport } from './routes/manutencao'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LocalizacaoFrotasRouteImport } from './routes/localizacao-frotas'
+import { Route as HorometrosRouteImport } from './routes/horometros'
 import { Route as EstoqueRouteImport } from './routes/estoque'
 import { Route as EquipamentosRouteImport } from './routes/equipamentos'
 import { Route as CalendarioRouteImport } from './routes/calendario'
@@ -42,6 +44,11 @@ const PerfilRoute = PerfilRouteImport.update({
   path: '/perfil',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OperadorRoute = OperadorRouteImport.update({
+  id: '/operador',
+  path: '/operador',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ManutencaoRoute = ManutencaoRouteImport.update({
   id: '/manutencao',
   path: '/manutencao',
@@ -55,6 +62,11 @@ const LoginRoute = LoginRouteImport.update({
 const LocalizacaoFrotasRoute = LocalizacaoFrotasRouteImport.update({
   id: '/localizacao-frotas',
   path: '/localizacao-frotas',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HorometrosRoute = HorometrosRouteImport.update({
+  id: '/horometros',
+  path: '/horometros',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EstoqueRoute = EstoqueRouteImport.update({
@@ -89,9 +101,11 @@ export interface FileRoutesByFullPath {
   '/calendario': typeof CalendarioRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/horometros': typeof HorometrosRoute
   '/localizacao-frotas': typeof LocalizacaoFrotasRoute
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
+  '/operador': typeof OperadorRoute
   '/perfil': typeof PerfilRoute
   '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
@@ -103,9 +117,11 @@ export interface FileRoutesByTo {
   '/calendario': typeof CalendarioRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/horometros': typeof HorometrosRoute
   '/localizacao-frotas': typeof LocalizacaoFrotasRoute
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
+  '/operador': typeof OperadorRoute
   '/perfil': typeof PerfilRoute
   '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
@@ -118,9 +134,11 @@ export interface FileRoutesById {
   '/calendario': typeof CalendarioRoute
   '/equipamentos': typeof EquipamentosRoute
   '/estoque': typeof EstoqueRoute
+  '/horometros': typeof HorometrosRoute
   '/localizacao-frotas': typeof LocalizacaoFrotasRoute
   '/login': typeof LoginRoute
   '/manutencao': typeof ManutencaoRoute
+  '/operador': typeof OperadorRoute
   '/perfil': typeof PerfilRoute
   '/producao-consumo': typeof ProducaoConsumoRoute
   '/relatorios': typeof RelatoriosRoute
@@ -134,9 +152,11 @@ export interface FileRouteTypes {
     | '/calendario'
     | '/equipamentos'
     | '/estoque'
+    | '/horometros'
     | '/localizacao-frotas'
     | '/login'
     | '/manutencao'
+    | '/operador'
     | '/perfil'
     | '/producao-consumo'
     | '/relatorios'
@@ -148,9 +168,11 @@ export interface FileRouteTypes {
     | '/calendario'
     | '/equipamentos'
     | '/estoque'
+    | '/horometros'
     | '/localizacao-frotas'
     | '/login'
     | '/manutencao'
+    | '/operador'
     | '/perfil'
     | '/producao-consumo'
     | '/relatorios'
@@ -162,9 +184,11 @@ export interface FileRouteTypes {
     | '/calendario'
     | '/equipamentos'
     | '/estoque'
+    | '/horometros'
     | '/localizacao-frotas'
     | '/login'
     | '/manutencao'
+    | '/operador'
     | '/perfil'
     | '/producao-consumo'
     | '/relatorios'
@@ -177,9 +201,11 @@ export interface RootRouteChildren {
   CalendarioRoute: typeof CalendarioRoute
   EquipamentosRoute: typeof EquipamentosRoute
   EstoqueRoute: typeof EstoqueRoute
+  HorometrosRoute: typeof HorometrosRoute
   LocalizacaoFrotasRoute: typeof LocalizacaoFrotasRoute
   LoginRoute: typeof LoginRoute
   ManutencaoRoute: typeof ManutencaoRoute
+  OperadorRoute: typeof OperadorRoute
   PerfilRoute: typeof PerfilRoute
   ProducaoConsumoRoute: typeof ProducaoConsumoRoute
   RelatoriosRoute: typeof RelatoriosRoute
@@ -216,6 +242,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PerfilRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/operador': {
+      id: '/operador'
+      path: '/operador'
+      fullPath: '/operador'
+      preLoaderRoute: typeof OperadorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/manutencao': {
       id: '/manutencao'
       path: '/manutencao'
@@ -235,6 +268,13 @@ declare module '@tanstack/react-router' {
       path: '/localizacao-frotas'
       fullPath: '/localizacao-frotas'
       preLoaderRoute: typeof LocalizacaoFrotasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/horometros': {
+      id: '/horometros'
+      path: '/horometros'
+      fullPath: '/horometros'
+      preLoaderRoute: typeof HorometrosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/estoque': {
@@ -281,9 +321,11 @@ const rootRouteChildren: RootRouteChildren = {
   CalendarioRoute: CalendarioRoute,
   EquipamentosRoute: EquipamentosRoute,
   EstoqueRoute: EstoqueRoute,
+  HorometrosRoute: HorometrosRoute,
   LocalizacaoFrotasRoute: LocalizacaoFrotasRoute,
   LoginRoute: LoginRoute,
   ManutencaoRoute: ManutencaoRoute,
+  OperadorRoute: OperadorRoute,
   PerfilRoute: PerfilRoute,
   ProducaoConsumoRoute: ProducaoConsumoRoute,
   RelatoriosRoute: RelatoriosRoute,
