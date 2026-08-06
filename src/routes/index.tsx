@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useEffect } from "react";
+import { useMemo } from "react";
 import { AppLayout, Icon } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
@@ -12,7 +12,6 @@ import { useMaintenanceStore } from "@/lib/maintenance-store";
 import { useInventoryStore } from "@/lib/inventory-store";
 import { useEquipmentStore } from "@/lib/equipment-store";
 import { formatEquipmentReference } from "@/lib/operational-options";
-import { isMobileOrCapacitor } from "@/lib/capacitor-shell";
 
 export const Route = createFileRoute("/")({ component: Dashboard });
 
@@ -24,18 +23,6 @@ function parseBrDate(str: string): number {
 
 function Dashboard() {
   const navigate = useNavigate();
-  const isMobile = isMobileOrCapacitor();
-
-  useEffect(() => {
-    if (isMobile) {
-      navigate({ to: "/operador", replace: true });
-    }
-  }, [isMobile, navigate]);
-
-  // Block rendering of admin dashboard on mobile — show blank screen until redirect completes
-  if (isMobile) {
-    return <div className="min-h-screen bg-background" />;
-  }
 
   const user = useAuthStore((snapshot) => snapshot.user);
   const tasks = useTaskStore((snapshot) => snapshot.tasks);

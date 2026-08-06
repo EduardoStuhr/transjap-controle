@@ -5,7 +5,7 @@ import WebKit
 @objc(AppViewController)
 final class AppViewController: CAPBridgeViewController {
     private let officialHost = "sistema-transjap.com.br"
-    private let startURL = URL(string: "https://sistema-transjap.com.br")!
+    private let startURL = URL(string: "https://sistema-transjap.com.br/operador")!
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
     private var loadingObservation: NSKeyValueObservation?
 

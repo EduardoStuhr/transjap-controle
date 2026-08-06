@@ -48,5 +48,13 @@ export function getOptionalEnvString(name: string): string | undefined {
   if (typeof envValue === "string" && envValue.trim()) return envValue.trim();
 
   const processValue = typeof process !== "undefined" ? process.env[name] : undefined;
-  return processValue && processValue.trim() ? processValue.trim() : undefined;
+  if (processValue && processValue.trim()) return processValue.trim();
+
+  const metaEnvValue =
+    typeof import.meta !== "undefined" && import.meta.env
+      ? (import.meta.env[name] as string | undefined)
+      : undefined;
+  if (typeof metaEnvValue === "string" && metaEnvValue.trim()) return metaEnvValue.trim();
+
+  return undefined;
 }

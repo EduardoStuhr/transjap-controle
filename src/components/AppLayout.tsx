@@ -1,5 +1,4 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { isMobileOrCapacitor } from "@/lib/capacitor-shell";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -161,20 +160,6 @@ export function AppLayout({
   const user = useAuthStore((snapshot) => snapshot.user);
   const visibleNav = useMemo(() => NAV.filter((item) => canShowNavItem(item, user)), [user]);
   const [viewedAlertKeys, setViewedAlertKeys] = useState<Set<string>>(() => new Set());
-
-  // SAFETY: If this layout is ever mounted on native Capacitor / mobile, redirect to /operador immediately
-  const isMobile = isMobileOrCapacitor();
-  useEffect(() => {
-    if (isMobile) {
-      navigate({ to: "/operador", replace: true });
-    }
-  }, [isMobile, navigate]);
-
-  // Render nothing while redirect is pending on mobile
-  if (isMobile) {
-    return <div className="min-h-screen bg-background" />;
-  }
-
 
   useEffect(() => {
     setViewedAlertKeys(readAlertKeys(user?.id));

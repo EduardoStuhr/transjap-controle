@@ -1,3 +1,5 @@
+import { Capacitor } from "@capacitor/core";
+
 const APP_CHROME_COLOR = "#05070c";
 const ZERO_PX = "0px";
 
@@ -12,14 +14,12 @@ function isNativeAndroidShell() {
 function setViewportHeightVar() {
   if (typeof window === "undefined") return;
   const visualViewport = window.visualViewport;
-  const viewportHeight = visualViewport?.height && visualViewport.height > 0
-    ? visualViewport.height
-    : window.innerHeight;
+  const viewportHeight =
+    visualViewport?.height && visualViewport.height > 0
+      ? visualViewport.height
+      : window.innerHeight;
   const viewportOffsetTop = visualViewport?.offsetTop ?? 0;
-  const viewportBottomInset = Math.max(
-    0,
-    window.innerHeight - viewportHeight - viewportOffsetTop,
-  );
+  const viewportBottomInset = Math.max(0, window.innerHeight - viewportHeight - viewportOffsetTop);
 
   setRootCssVar("--app-viewport-height", `${Math.round(viewportHeight)}px`);
 
@@ -73,9 +73,8 @@ export async function configureCapacitorShell() {
     }
 
     const info = await StatusBar.getInfo().catch(() => null);
-    const statusBarHeight = info?.height && info.height > 0
-      ? `${Math.round(info.height)}px`
-      : ZERO_PX;
+    const statusBarHeight =
+      info?.height && info.height > 0 ? `${Math.round(info.height)}px` : ZERO_PX;
     setRootCssVar("--capacitor-status-bar-height", statusBarHeight);
     setViewportHeightVar();
   } catch {
@@ -88,43 +87,16 @@ export async function configureCapacitorShell() {
   }
 }
 
-export function isMobileOrCapacitor(): boolean {
-  if (typeof window === "undefined") return false;
-  if (_isNativeCapacitorCached !== undefined) return _isNativeCapacitorCached || _isMobileCached;
-  return isNativeCapacitor() || _isMobileCached;
-}
-
-let _isNativeCapacitorCached: boolean | undefined;
-let _isMobileCached = false;
-
 /**
  * Strict check: true only when running inside a Capacitor native shell.
- * Result is cached after first evaluation so subsequent calls are free.
  */
 export function isNativeCapacitor(): boolean {
-  if (_isNativeCapacitorCached !== undefined) return _isNativeCapacitorCached;
   if (typeof window === "undefined") return false;
-
-  const win = window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } };
-  const result =
-    Boolean(win.Capacitor?.isNativePlatform?.()) ||
-    document.documentElement.classList.contains("capacitor-native") ||
-    document.documentElement.classList.contains("capacitor-android") ||
-    document.documentElement.classList.contains("capacitor-ios") ||
-    /TransJapManager/i.test(navigator.userAgent);
-
-  _isNativeCapacitorCached = result;
-
-  // Also cache mobile UA check while we're here
-  _isMobileCached =
-    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-    window.innerWidth <= 768;
-
-  return result;
+  return Capacitor.isNativePlatform();
 }
 
 /** Routes that belong to the operator-only mobile experience */
-const OPERATOR_ROUTES = new Set(["/operador", "/login"]);
+const OPERATOR_ROUTES = new Set(["/operador"]);
 
 /** Returns true if the given pathname should be allowed in the native app */
 export function isOperadorRoute(pathname: string): boolean {

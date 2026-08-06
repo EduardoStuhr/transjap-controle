@@ -17,7 +17,7 @@ Este projeto ja esta preparado para iPhone, iPad, TestFlight e App Store usando 
 
 - Plataforma iOS em `ios/`
 - `@capacitor/ios` instalado
-- App abre direto em `https://sistema-transjap.com.br`
+- App abre direto em `https://sistema-transjap.com.br/operador`
 - Cleartext/HTTP bloqueado
 - ATS com excecao apenas para `sistema-transjap.com.br` via HTTPS/TLS
 - `WKAppBoundDomains` e `limitsNavigationsToAppBoundDomains`
@@ -25,7 +25,7 @@ Este projeto ja esta preparado para iPhone, iPad, TestFlight e App Store usando 
 - Cookies persistentes via `WKWebsiteDataStore` padrao do WKWebView
 - Splash screen e AppIcon iOS gerados a partir do logo oficial
 - Privacy manifest em `ios/App/App/PrivacyInfo.xcprivacy`
-- Camera usage string para scanner QR/barcode web
+- Camera usage string para scanner QR da máquina e foto do horômetro
 - Pull to refresh nativo
 - Swipe back/forward no WKWebView
 - Tela offline local com reconexao automatica
@@ -47,6 +47,7 @@ xcodebuild -version
 App Store Connect aceita uploads de iOS com Xcode suportado pela Apple. Em 2026, use Xcode 16 ou superior para builds iOS destinados a distribuicao.
 
 Referencias Apple:
+
 - Upload de builds: https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/
 - Screenshot specs: https://developer.apple.com/help/app-store-connect/reference/screenshot-specifications
 - Privacy manifest: https://developer.apple.com/documentation/bundleresources/privacy-manifest-files

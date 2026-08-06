@@ -24,6 +24,10 @@ export type OCRProcessResult = {
   horometroValue?: number;
   confidence: number;
   rawText?: string;
+  legivel?: boolean;
+  tipo_leitura?: string;
+  texto_visivel?: string;
+  motivo_duvida?: string;
   error?: string;
 };
 
@@ -130,6 +134,37 @@ export const createHorometroLog = createServerFn({ method: "POST" })
     const fleetNum = fleetId.replace(/\D/g, "") || fleetId;
     const fleetLabel = `Frota ${fleetNum}`;
 
+    let status: "aprovado" | "pendente_revisao" =
+      (input.ocrConfidence ?? 1.0) < 0.75 ? "pendente_revisao" : "aprovado";
+    let extraNotes = input.notes?.trim() || "";
+
+    const d1 = getHorometroD1();
+
+    // Check fleet history for hours validation
+    try {
+      if (d1) {
+        const db = getDb(d1);
+        const existingEquip = await db
+          .select()
+          .from(equipmentTable)
+          .where(eq(equipmentTable.id, fleetId))
+          .get();
+
+        if (existingEquip) {
+          const prevHours = existingEquip.hours || 0;
+          if (input.horometroValue < prevHours) {
+            status = "pendente_revisao";
+            extraNotes += ` [ALERTA HISTÓRICO: Valor lido (${input.horometroValue}h) é menor que o registrado anteriormente (${prevHours}h)]`;
+          } else if (input.horometroValue > prevHours + 200) {
+            status = "pendente_revisao";
+            extraNotes += ` [ALERTA HISTÓRICO: Salto significativo de horômetro (+${(input.horometroValue - prevHours).toFixed(1)}h)]`;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Erro ao validar histórico da frota:", e);
+    }
+
     const newLog: DbHorometroLog = {
       id: logId,
       fleet: fleetId,
@@ -141,15 +176,13 @@ export const createHorometroLog = createServerFn({ method: "POST" })
       ocrConfidence: input.ocrConfidence ?? 1.0,
       operatorName: input.operatorName?.trim() || "Operador",
       operatorId: input.operatorId || null,
-      status: (input.ocrConfidence ?? 1.0) < 0.7 ? "pendente_revisao" : "aprovado",
+      status,
       rawOcrText: null,
-      notes: input.notes?.trim() || null,
+      notes: extraNotes.trim() || null,
       date: today,
       createdAt: now,
       updatedAt: now,
     };
-
-    const d1 = getHorometroD1();
 
     if (!d1) {
       localHorometroLogs.unshift(newLog);
@@ -185,74 +218,121 @@ export const createHorometroLog = createServerFn({ method: "POST" })
   });
 
 export const processHorometroOCR = createServerFn({ method: "POST" })
-  .inputValidator((args: { imageBase64: string }) => args)
+  .inputValidator((args: { imageBase64: string; fullImageBase64?: string }) => args)
   .handler(async ({ data: { imageBase64 } }): Promise<OCRProcessResult> => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+      const apiKey =
+        getOptionalEnvString("VITE_GEMINI_API_KEY") ||
+        getOptionalEnvString("GEMINI_API_KEY") ||
+        (typeof import.meta !== "undefined" && import.meta.env
+          ? (import.meta.env.VITE_GEMINI_API_KEY as string)
+          : undefined) ||
+        (typeof process !== "undefined"
+          ? process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY
+          : undefined);
 
-      if (apiKey) {
-        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+      if (!apiKey) {
+        return {
+          success: false,
+          confidence: 0,
+          legivel: false,
+          error:
+            "Chave da API Gemini (VITE_GEMINI_API_KEY) não configurada no arquivo .env. Configure VITE_GEMINI_API_KEY no servidor.",
+        };
+      }
 
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: "Você é um especialista em visão computacional para equipamentos pesados. Analise a foto deste painel/horômetro de máquina agrícola ou pesada (escavadeira, trator, caminhão, etc). Extraia o número total do horômetro (acumulado de horas de funcionamento). Responda EXATAMENTE em formato JSON assim: {\"horometroValue\": 1234.5, \"confidence\": 0.95, \"rawText\": \"1234.5 h\"}. Se a foto estiver ilegível, coloque confidence baixo (ex: 0.3) ou horometroValue null.",
+      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `Você é um especialista em visão computacional para equipamentos pesados. Analise a foto cortada do visor do horômetro de uma máquina agrícola ou pesada (escavadeira, trator, caminhão, etc). Extraia com máxima precisão o número total do horômetro (acumulado de horas de funcionamento).
+
+Responda EXATAMENTE em formato JSON estrito com o seguinte esquema:
+{
+  "valor": 4258.5,
+  "tipo_leitura": "horometro_total",
+  "confianca": 0.94,
+  "legivel": true,
+  "texto_visivel": "04258.5 h",
+  "motivo_duvida": null
+}
+
+Regras estritas:
+1. Se a foto estiver ilegível, desfocada, escura ou o visor não for visível com clareza, defina "legivel": false, "valor": null, "confianca": 0.3, "texto_visivel": null e forneça o "motivo_duvida" explicando o problema.
+2. NUNCA invente, adivinhe ou chute números. Se houver dúvida em qualquer dígito, marque "legivel": false.
+3. Extraia o valor numérico com casas decimais se visível (ex: 4258.5).`,
+                  },
+                  {
+                    inlineData: {
+                      mimeType: "image/jpeg",
+                      data: cleanBase64,
                     },
-                    {
-                      inlineData: {
-                        mimeType: "image/jpeg",
-                        data: cleanBase64,
-                      },
-                    },
-                  ],
-                },
-              ],
-              generationConfig: {
-                responseMimeType: "application/json",
-                temperature: 0.1,
+                  },
+                ],
               },
-            }),
-          },
-        );
+            ],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.0,
+            },
+          }),
+        },
+      );
 
-        if (response.ok) {
-          const resData = (await response.json()) as any;
-          const candidateText =
-            resData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          if (candidateText) {
+      if (response.ok) {
+        const resData = (await response.json()) as any;
+        const candidateText =
+          resData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (candidateText) {
+          try {
             const parsed = JSON.parse(candidateText);
+            const isLegible = Boolean(parsed.legivel !== false && parsed.valor !== null && typeof parsed.valor === "number" && !isNaN(parsed.valor));
+            const confidence = typeof parsed.confianca === "number" ? parsed.confianca : (isLegible ? 0.9 : 0.2);
+
             return {
-              success: true,
-              horometroValue: parsed.horometroValue ?? undefined,
-              confidence: parsed.confidence ?? 0.9,
-              rawText: parsed.rawText || candidateText,
+              success: isLegible,
+              horometroValue: isLegible ? parsed.valor : undefined,
+              confidence,
+              legivel: isLegible,
+              tipo_leitura: parsed.tipo_leitura || "horometro_total",
+              texto_visivel: parsed.texto_visivel || candidateText,
+              motivo_duvida: parsed.motivo_duvida || undefined,
+              rawText: candidateText,
+              error: isLegible ? undefined : (parsed.motivo_duvida || "Leitura do visor ilegível ou incerta pela IA."),
+            };
+          } catch {
+            return {
+              success: false,
+              confidence: 0,
+              legivel: false,
+              rawText: candidateText,
+              error: "Falha ao interpretar resposta estruturada da IA.",
             };
           }
         }
       }
 
-      // Smart fallback OCR heuristics if Gemini key is missing
-      // Simulate reading digits from visual pattern
-      const mockValue = Math.round(1000 + Math.random() * 5000) / 10;
       return {
-        success: true,
-        horometroValue: mockValue,
-        confidence: 0.92,
-        rawText: `HOROMETRO DETECTADO: ${mockValue}h`,
+        success: false,
+        confidence: 0,
+        legivel: false,
+        error: `Serviço de IA Gemini retornou erro (status ${response.status}).`,
       };
     } catch (error) {
       console.error("Erro na leitura OCR:", error);
       return {
         success: false,
         confidence: 0,
-        error: "Não foi possível extrair o horômetro automaticamente da imagem.",
+        legivel: false,
+        error: "Não foi possível conectar ao serviço de visão computacional.",
       };
     }
   });

@@ -67,7 +67,7 @@
 		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Permite ler QR codes e codigos de barras operacionais do estoque TransJap.</string>
+	<string>Permite ler o QR Code da máquina e fotografar o horômetro.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

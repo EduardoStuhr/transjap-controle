@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
   appendUserAgent: " TransJapManager/1.0",
   loggingBehavior: "production",
   server: {
-    url: "https://sistema-transjap.com.br",
+    url: "https://sistema-transjap.com.br/operador",
     cleartext: false,
     androidScheme: "https",
     allowNavigation: ["sistema-transjap.com.br"],

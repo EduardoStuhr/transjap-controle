@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Outlet,
   Link,
@@ -18,9 +18,8 @@ import { useAuthStore } from "@/lib/auth-store";
 import {
   configureCapacitorShell,
   installMobileViewportGuards,
-  isMobileOrCapacitor,
+  isNativeCapacitor,
 } from "@/lib/capacitor-shell";
-import { refreshNativePushRegistrationIfActive } from "@/lib/native-push";
 
 function NotFoundComponent() {
   return (
@@ -85,7 +84,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       {
         name: "viewport",
-        content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover",
+        content:
+          "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover",
       },
       { name: "theme-color", content: "#05070c" },
       { name: "color-scheme", content: "dark" },
@@ -145,11 +145,12 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-  const user = useAuthStore((state) => state.user);
+  const [clientReady, setClientReady] = useState(false);
 
   useEffect(() => {
     const cleanupViewport = installMobileViewportGuards();
     void configureCapacitorShell();
+    setClientReady(true);
     return cleanupViewport;
   }, []);
 
@@ -158,49 +159,64 @@ function RootComponent() {
     navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    void refreshNativePushRegistrationIfActive();
-  }, [user]);
-
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthGate>
-        <Outlet />
-      </AuthGate>
+      {clientReady ? (
+        <AccessGate>
+          <Outlet />
+        </AccessGate>
+      ) : (
+        <div className="min-h-screen bg-background" />
+      )}
       <Toaster position="top-right" theme="dark" richColors />
     </QueryClientProvider>
   );
 }
 
-function AuthGate({ children }: { children: ReactNode }) {
+function AccessGate({ children }: { children: ReactNode }) {
+  if (isNativeCapacitor()) {
+    return <NativeOperatorGate>{children}</NativeOperatorGate>;
+  }
+
+  return <WebAuthGate>{children}</WebAuthGate>;
+}
+
+function NativeOperatorGate({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const isOperador = pathname === "/operador";
+
+  useEffect(() => {
+    if (!isOperador) {
+      navigate({ to: "/operador", replace: true });
+    }
+  }, [isOperador, navigate]);
+
+  if (!isOperador) {
+    return <div className="min-h-screen bg-background" />;
+  }
+
+  return children;
+}
+
+function WebAuthGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const hydrated = useAuthStore((state) => state.hydrated);
   const serverValidated = useAuthStore((state) => state.serverValidated);
   const user = useAuthStore((state) => state.user);
   const isLogin = pathname === "/login";
-  const isOperador = pathname === "/operador";
-  const native = isMobileOrCapacitor();
-
-  // --- MOBILE GATE: force /operador for any non-allowed route ---
-  useEffect(() => {
-    if (!native) return;
-    if (!isOperador && !isLogin) {
-      navigate({ to: "/operador", replace: true });
-    }
-  }, [native, isOperador, isLogin, navigate]);
 
   // --- AUTH GATE ---
   useEffect(() => {
     if (!hydrated || !serverValidated) return;
     if (!user && !isLogin) {
-      navigate({ to: "/login", search: { redirect: native ? "/operador" : pathname } });
+      navigate({ to: "/login", search: { redirect: pathname } });
     }
     if (user && isLogin) {
-      navigate({ to: native ? "/operador" : "/", replace: true });
+      navigate({ to: "/", replace: true });
     }
-  }, [hydrated, isLogin, navigate, native, pathname, serverValidated, user]);
+  }, [hydrated, isLogin, navigate, pathname, serverValidated, user]);
 
   // Show blank screen while auth hydrates (prevents admin layout flash)
   if ((!hydrated || !serverValidated) && !isLogin) {
@@ -209,16 +225,9 @@ function AuthGate({ children }: { children: ReactNode }) {
 
   // Not logged in → show login panel
   if (!user && !isLogin) {
-    const defaultTarget = native ? "/operador" : "/";
-    const safeRedirect = pathname && pathname !== "/login" ? pathname : defaultTarget;
-    return <LoginPanel onSuccess={() => navigate({ to: native ? "/operador" : safeRedirect })} />;
-  }
-
-  // On native + not on /operador → render nothing while redirect runs
-  if (native && !isOperador && !isLogin) {
-    return <div className="min-h-screen bg-background" />;
+    const safeRedirect = pathname && pathname !== "/login" ? pathname : "/";
+    return <LoginPanel onSuccess={() => navigate({ to: safeRedirect })} />;
   }
 
   return children;
 }
-

@@ -1,6 +1,6 @@
 # Transjap Sistema Android
 
-Aplicativo Android Capacitor para abrir `https://sistema-transjap.com.br` com package ID `br.com.transjap.manager`.
+Aplicativo Android Capacitor para abrir `https://sistema-transjap.com.br/operador` com package ID `br.com.transjap.manager`.
 
 ## Requisitos locais
 
