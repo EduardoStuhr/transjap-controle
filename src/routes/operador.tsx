@@ -3,7 +3,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   QrCode,
   Camera,
-  CheckCircle2,
   AlertTriangle,
   RotateCcw,
   Sparkles,
@@ -18,7 +17,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { normalizeFleetId, formatFleetCode } from "@/lib/operational-options";
-import { createHorometroLog, processHorometroOCR } from "@/lib/api/horometro";
+import { processHorometroOCR } from "@/lib/api/horometro";
+import {
+  FIELD_OPERATOR_NAME,
+  OperatorHorometroApiError,
+  submitOperatorHorometro,
+} from "@/lib/api/operator-horometro";
 import { listEquipment } from "@/lib/api/equipment";
 import { isNativeCapacitor } from "@/lib/capacitor-shell";
 
@@ -26,10 +30,9 @@ export const Route = createFileRoute("/operador")({
   component: OperadorMobilePage,
 });
 
-const FIELD_OPERATOR_NAME = "Operador de Campo";
-
 // Fixed framing reticle coordinates for automatic visor region extraction
 const AUTOMATIC_VISOR_FRAME = { x: 10, y: 25, width: 80, height: 45 };
+const MAX_UPLOAD_PHOTO_DATA_URL_LENGTH = 1_500_000;
 
 type SelectedFleet = {
   id: string;
@@ -213,8 +216,34 @@ function autoCropVisorRegion(
   }
 }
 
+function prepareOperatorPhoto(imgElement: HTMLImageElement): string {
+  const sourceWidth = imgElement.naturalWidth || imgElement.width || 1600;
+  const sourceHeight = imgElement.naturalHeight || imgElement.height || 1200;
+  let maxDimension = 1600;
+  let quality = 0.82;
+  let result = imgElement.src;
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return result;
+
+    context.drawImage(imgElement, 0, 0, canvas.width, canvas.height);
+    result = canvas.toDataURL("image/jpeg", quality);
+    if (result.length <= MAX_UPLOAD_PHOTO_DATA_URL_LENGTH) return result;
+
+    maxDimension = Math.max(640, Math.round(maxDimension * 0.8));
+    quality = Math.max(0.58, quality - 0.06);
+  }
+
+  return result;
+}
+
 function OperadorMobilePage() {
-  const [step, setStep] = useState<"fleet" | "photo" | "review" | "success">("fleet");
+  const [step, setStep] = useState<"fleet" | "photo" | "review">("fleet");
   const [fleetInput, setFleetInput] = useState("");
   const [selectedFleet, setSelectedFleet] = useState<SelectedFleet | null>(null);
 
@@ -451,7 +480,6 @@ function OperadorMobilePage() {
     const reader = new FileReader();
     reader.onload = async (event) => {
       const base64 = event.target?.result as string;
-      setPhotoBase64(base64);
       setQualityWarning(null);
 
       const img = new Image();
@@ -468,13 +496,15 @@ function OperadorMobilePage() {
 
         // Invisible automatic crop based on the camera framing reticle box
         const autoCropped = autoCropVisorRegion(img);
+        const uploadPhoto = prepareOperatorPhoto(img);
+        setPhotoBase64(uploadPhoto);
         setCroppedPhotoBase64(autoCropped);
 
         // Advance straight to review step (no manual crop screen!)
         setStep("review");
 
         // Immediately trigger Gemini Vision AI OCR on the auto-cropped visor
-        runOcrProcess(autoCropped, base64);
+        runOcrProcess(autoCropped, uploadPhoto);
       };
       img.src = base64;
     };
@@ -485,6 +515,7 @@ function OperadorMobilePage() {
   const runOcrProcess = async (visorBase64: string, fullBase64: string) => {
     setIsProcessingOcr(true);
     setOcrConfidence(1.0);
+    setOcrRawText("");
     setOcrErrorMsg(null);
 
     // CRITICAL RULE: NEVER preset or invent random fallback values! Keep input empty if OCR fails!
@@ -527,6 +558,10 @@ function OperadorMobilePage() {
   // Submit horometro log with Fleet History Validation
   const handleSubmitLog = async () => {
     if (!selectedFleet) return;
+    if (!photoBase64) {
+      toast.error("Tire a foto do horometro antes de confirmar.");
+      return;
+    }
     const val = parseFloat(horometroValue);
     if (isNaN(val) || val <= 0) {
       toast.error("Informe um valor numérico válido de horômetro!");
@@ -535,23 +570,28 @@ function OperadorMobilePage() {
 
     setIsSubmitting(true);
     try {
-      await createHorometroLog({
-        data: {
-          fleet: selectedFleet.id,
-          obra: selectedFleet.location || undefined,
-          horometroValue: val,
-          type: "leitura",
-          photoUrl: photoBase64 || undefined,
-          ocrConfidence: ocrConfidence,
-          operatorName: FIELD_OPERATOR_NAME,
-        },
+      await submitOperatorHorometro({
+        fleet: selectedFleet.id,
+        horometroValue: val,
+        photoUrl: photoBase64,
+        ocrConfidence,
+        rawOcrText: ocrRawText,
+        operatorName: FIELD_OPERATOR_NAME,
       });
 
-      setStep("success");
-      toast.success("Registro de horômetro salvo com sucesso!");
+      resetFlow();
+      toast.success("Horômetro registrado. Pronto para a próxima máquina.");
     } catch (error) {
-      console.error(error);
-      toast.error("Falha ao salvar registro de horômetro. Tente novamente.");
+      if (error instanceof OperatorHorometroApiError) {
+        console.error("Falha técnica ao registrar horômetro do operador", {
+          kind: error.kind,
+          code: error.code,
+          status: error.status,
+        });
+      } else {
+        console.error("Falha técnica inesperada ao registrar horômetro do operador", error);
+      }
+      toast.error("Não foi possível registrar. Tente novamente.");
     } finally {
       setIsSubmitting(false);
     }
@@ -564,8 +604,12 @@ function OperadorMobilePage() {
     setPhotoBase64(null);
     setCroppedPhotoBase64(null);
     setHorometroValue("");
+    setOcrConfidence(1.0);
+    setOcrRawText("");
     setQualityWarning(null);
     setOcrErrorMsg(null);
+    setIsProcessingOcr(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     stopQrCamera();
   };
 
@@ -617,7 +661,7 @@ function OperadorMobilePage() {
           <div className="h-[1px] flex-1 bg-slate-800 mx-3" />
           <div
             className={`flex items-center gap-1.5 text-xs font-medium ${
-              step === "review" || step === "success"
+              step === "review"
                 ? "text-amber-400 font-bold"
                 : "text-slate-400"
             }`}
@@ -963,29 +1007,6 @@ function OperadorMobilePage() {
           </div>
         )}
 
-        {/* STEP 4: SUCCESS */}
-        {step === "success" && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl text-center space-y-4 animate-in fade-in zoom-in-95 duration-200">
-            <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-full flex items-center justify-center mx-auto">
-              <CheckCircle2 className="w-10 h-10" />
-            </div>
-            <div className="space-y-1">
-              <h2 className="text-xl font-bold text-slate-100">Horômetro Registrado!</h2>
-              <p className="text-xs text-slate-400">
-                Os dados e fotos da{" "}
-                <strong className="text-amber-400">{selectedFleet?.label}</strong> foram registrados e validados no sistema TRANSJAP.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={resetFlow}
-              className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-sm shadow-md transition-all"
-            >
-              Registrar Outra Máquina
-            </button>
-          </div>
-        )}
       </main>
 
       {/* Footer Info */}

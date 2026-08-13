@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { eq, desc, and } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { horometroLogs, equipment as equipmentTable } from "@/db/schema";
-import { getOptionalD1 } from "@/lib/cf-env";
+import { getOptionalD1, getOptionalEnvString } from "@/lib/cf-env";
 import { normalizeFleetId } from "@/lib/operational-options";
 import type { DbHorometroLog, DbHorometroLogInsert } from "@/db/schema";
 
@@ -15,6 +15,7 @@ export type HorometroLogCreate = {
   ocrConfidence?: number;
   operatorName?: string;
   operatorId?: string;
+  rawOcrText?: string;
   notes?: string;
   date?: string;
 };
@@ -177,7 +178,7 @@ export const createHorometroLog = createServerFn({ method: "POST" })
       operatorName: input.operatorName?.trim() || "Operador",
       operatorId: input.operatorId || null,
       status,
-      rawOcrText: null,
+      rawOcrText: input.rawOcrText?.trim() || null,
       notes: extraNotes.trim() || null,
       date: today,
       createdAt: now,
