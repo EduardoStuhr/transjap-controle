@@ -12,7 +12,13 @@ import type { AttachedFile } from "@/components/AttachmentUpload";
 export type MaintenanceStatus = "Aberta" | "Em andamento" | "Concluída" | "Atrasada";
 export type MaintenanceStepStatus = "pendente" | "em_andamento" | "concluida";
 
-export const MAINTENANCE_OBRA_OPTIONS = ["Campo Log 05", "RDG - Viana", "Ulihorte"] as const;
+export const MAINTENANCE_OBRA_OPTIONS = [
+  "Campo Log 05",
+  "RDG - Contorno",
+  "RDG - Viana",
+  "Roama",
+  "Ulihorte",
+] as const;
 
 export type MaintenanceStepTemplate = {
   id: string;
